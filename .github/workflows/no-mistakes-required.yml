@@ -50,9 +50,9 @@ jobs:
           # them. Identify them by what release-please itself produces: a branch
           # under its own reserved prefix, pushed to THIS repository, carrying the
           # generated Release Please footer in the body. Requiring all three keeps
-          # a hand-written PR from claiming the exemption with a borrowed branch
-          # name or a copied body, because only a writer to this repository can
-          # create the branch here and only release-please writes that body.
+          # an untrusted fork from claiming the exemption with a borrowed branch
+          # name or copied body, while avoiding a blanket exemption for the human
+          # identity whose token release-please uses.
           release_please_branch=no
           case "${PR_HEAD_REF:-}" in
             release-please--* | release-please/*) release_please_branch=yes ;;
