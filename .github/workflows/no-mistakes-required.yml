@@ -19,21 +19,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every exemption lives in the step script below, never in a job-level `if`,
+  # so the whole decision is one executable contract that tests can run.
   check:
     name: PR must be raised via no-mistakes
     runs-on: ubuntu-latest
-    if: >-
-      github.event.pull_request.user.login != 'github-actions[bot]' &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
       - name: Verify no-mistakes signature in PR body
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set -eu
           marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
+          release_please_marker='This PR was generated with [Release Please](https://github.com/googleapis/release-please)'
+
+          case "${PR_AUTHOR:-}" in
+            'github-actions[bot]' | 'dependabot[bot]')
+              echo "PR #${PR_NUMBER} was raised by ${PR_AUTHOR}; automation is exempt."
+              exit 0
+              ;;
+          esac
+
+          # release-please release PRs are automation even when a personal access
+          # token makes them look human-authored, so author login cannot identify
+          # them. Identify them by what release-please itself produces: a branch
+          # under its own reserved prefix, pushed to THIS repository, carrying the
+          # generated Release Please footer in the body. Requiring all three keeps
+          # a hand-written PR from claiming the exemption with a borrowed branch
+          # name or a copied body, because only a writer to this repository can
+          # create the branch here and only release-please writes that body.
+          release_please_branch=no
+          case "${PR_HEAD_REF:-}" in
+            release-please--* | release-please/*) release_please_branch=yes ;;
+          esac
+          if [ "$release_please_branch" = yes ] &&
+            [ -n "${BASE_REPO:-}" ] &&
+            [ "${PR_HEAD_REPO:-}" = "${BASE_REPO:-}" ] &&
+            printf '%s' "${PR_BODY:-}" | grep -qF -- "$release_please_marker"; then
+            echo "PR #${PR_NUMBER} is a release-please release PR (${PR_HEAD_REF}); release automation is exempt."
+            exit 0
+          fi
+
           if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
             echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
             exit 0
