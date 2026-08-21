@@ -82,8 +82,8 @@ The submit acknowledgement and away-mode supervisor-pane busy guard below still 
 The supervisor guard selects only the detected primary harness's signature rather than a global union of vendor patterns.
 
 `bin/fm-tmux-lib.sh` owns exact type-and-submit mechanics.
-It types a message once and retries Enter only until the composer clears.
-Only a proven empty composer is a positive delivery acknowledgement.
+It refuses a gated modal before typing, types a message once, requires the shared classifier to find the payload's own tail in the selected composer before Enter, and then retries Enter only until submission is confirmed.
+A proven empty composer is the normal positive delivery acknowledgement; the bounded turn-start exceptions below require their own independent busy proof.
 Text left in established structure remains `pending`, text in ambiguous structure remains unproven, and unreadable or unsafe state remains unknown.
 `fm-send.sh` never retypes or assumes a confirmed submit for an unconfirmed verdict; its header owns the distinct delivered-unconfirmed exit status and operator response.
 

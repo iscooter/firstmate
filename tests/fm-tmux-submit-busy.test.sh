@@ -212,11 +212,9 @@ test_failed_baseline_capture_keeps_busy_unknown_unconfirmed() {
     FM_FAKE_CAPTURE_COUNT="$dir/captures" FM_FAKE_FAIL_FIRST_CAPTURE=1 \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_FAKE_APPEND_BUSY=1 \
     fm_tmux_submit_core "win" "fix" 3 0.05 0.05 > "$vfile" 2>/dev/null
-  [ "$(cat "$vfile")" = unknown ] \
-    || fail "a failed idle-baseline capture must not let a later busy footer confirm delivery, got '$(cat "$vfile")'"
-  grep -q 'Working' "$composer" \
-    || fail "failed-baseline regression did not render the post-Enter busy footer"
-  pass "fm_tmux_submit_core: failed baseline capture disables busy unknown conversion"
+  [ "$(cat "$vfile")" = not-accepted ] \
+    || fail "a failed idle-baseline capture plus an unproven payload must refuse before Enter, got '$(cat "$vfile")'"
+  pass "fm_tmux_submit_core: failed baseline plus absent payload proof refuses before any footer can confirm"
 }
 
 test_busy_pane_ambiguous_pending_retries_without_conversion() {

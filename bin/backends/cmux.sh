@@ -562,8 +562,8 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,
 # unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
 # loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
-# shared composer verdict. Echoes empty|pending|unknown|send-failed, a subset
-# of the proof-carrying submit vocabulary.
+# shared composer verdict. Echoes empty|pending|unknown|send-failed|gated|
+# not-accepted, a subset of the proof-carrying submit vocabulary.
 fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after verdict
   fm_backend_cmux_parse_target "$target" || { printf 'unknown'; return 0; }

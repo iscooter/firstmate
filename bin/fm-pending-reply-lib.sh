@@ -79,6 +79,7 @@
 #
 # Tunables (env):
 #   FM_PENDING_REPLY_GRACE_SECS   default 120
+#   FM_PENDING_REPLY_MAX_BYTES    default 1048576; max retained request body
 #   FM_PENDING_REPLY_DIR_OVERRIDE override the pending-replies directory (tests)
 #   FM_PENDING_REPLY_SEND_HOOK    optional command template for recovery delivery
 #                                 (tests); receives task_id and full message as args

@@ -43,6 +43,7 @@ RESP="${FM_HERDR_RESPONSES:?}"
 COUNT_FILE="$RESP/.count"
 SEND_FILE="$RESP/.last-send"
 ENTER_FILE="$RESP/.entered"
+IDENTITY_FILE="$RESP/.identity-read"
 {
   printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
   for a in "$@"; do printf '\x1f%s' "$a"; done
@@ -54,9 +55,19 @@ if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS
 fi
 if [ "${1:-}" = pane ] && [ "${2:-}" = send-text ]; then
   printf '%s' "${4:-}" > "$SEND_FILE"
+  rm -f "$IDENTITY_FILE"
 fi
 if [ "${1:-}" = pane ] && [ "${2:-}" = send-keys ]; then
   case "${4:-}" in enter|Enter) : > "$ENTER_FILE" ;; esac
+fi
+# The new post-type composer identity probe is an additional agent-get call;
+# synthesize it without consuming the historical numbered native-status
+# sequence. The immediately following agent-get remains the scripted baseline.
+if [ "${1:-}" = agent ] && [ "${2:-}" = get ] \
+   && [ -f "$SEND_FILE" ] && [ ! -f "$ENTER_FILE" ] && [ ! -f "$IDENTITY_FILE" ]; then
+  : > "$IDENTITY_FILE"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n'
+  exit 0
 fi
 # Pre-Enter accept-check pane reads must not consume the numbered agent-get
 # sequence. After the first Enter, numbered pane-read fixtures resume so
@@ -3609,7 +3620,8 @@ test_send_text_submit_idle_baseline_does_not_confirm_failed_enter() {
   [ "$out" = send-failed ] || fail "a failed Enter must not borrow a later native transition as delivery proof, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should attempt the configured number of Enters, made $enter_count attempt(s)"
-  [ "$(grep -c $'\x1f''agent'$'\x1f''get' "$log")" -eq 1 ] || fail "a failed Enter must not run native delivery confirmation"
+  [ "$(grep -c $'\x1f''agent'$'\x1f''get' "$log")" -eq 2 ] \
+    || fail "a failed Enter may perform only the pre-Enter identity and baseline reads, never post-Enter delivery confirmation"
   pass "fm_backend_herdr_send_text_submit: a failed Enter cannot borrow a later native transition as delivery proof"
 }
 

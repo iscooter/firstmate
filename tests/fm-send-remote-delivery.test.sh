@@ -90,12 +90,18 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
     if [ "${FM_FAKE_TMUX_PENDING:-0}" = 1 ]; then
-      # A well-formed short pending box plus the typed payload below it: the
-      # box classifies pending, and the payload line supplies the tail-anchor.
-      printf '╭────────────╮\n│ > steer    │\n╰────────────╯\n'
-      if [ -f "${FM_SEND_LOG}.typed" ]; then
-        cat "${FM_SEND_LOG}.typed"
-        printf '\n'
+      # Before typing, expose an empty composer. Afterwards keep the exact
+      # typed payload inside that same composer even after Enter, reproducing
+      # a submit whose read-back remains pending without defeating the
+      # identity-bound pre-Enter proof.
+      if [ -f "${FM_SEND_LOG}.entered" ]; then
+        # Model a harness that has accepted Enter but still renders a proven
+        # queued draft while its current turn is idle.
+        write_composer "steer"
+      elif [ -f "${FM_SEND_LOG}.typed" ]; then
+        write_composer "$(cat "${FM_SEND_LOG}.typed")"
+      else
+        write_composer ""
       fi
     elif [ -f "${FM_SEND_LOG}.typed" ] && [ ! -f "${FM_SEND_LOG}.entered" ]; then
       write_composer "$(cat "${FM_SEND_LOG}.typed")"
@@ -273,8 +279,8 @@ test_local_secondmate_pending_keeps_expectation_armed() {
   : > "$log"
   env PATH="$fb:$PATH" FM_FAKE_TMUX_PENDING=1 \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" lsm "audit the ledger" >/dev/null 2>&1; rc=$?
-  expect_code 3 "$rc" "an unconfirmed local secondmate submit must exit delivered-unconfirmed"
+    "$SEND" lsm "audit the ledger" >/dev/null 2>"$dir/err"; rc=$?
+  [ "$rc" = 3 ] || fail "an unconfirmed local secondmate submit must exit delivered-unconfirmed (rc=$rc): $(cat "$dir/err")"
   rec=$(pending_record "$home")
   [ -n "$rec" ] \
     || fail "the pending-reply expectation must survive an unconfirmed local secondmate send"

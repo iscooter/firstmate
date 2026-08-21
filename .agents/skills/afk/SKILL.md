@@ -116,11 +116,9 @@ So a guard false-positive becomes a visible stall, never an unbounded silent no-
 
 ## Submit model
 
-The digest is typed **once** (`send-keys -l` on tmux, `pane send-text` on
-herdr - both literal, non-submitting sends), then submitted with Enter and
-**verified** through the selected backend's submit primitive.
-Enter is retried (Enter only, never a retype) until the backend confirms the
-submit landed.
+The digest is typed **once** (`send-keys -l` on tmux, `pane send-text` on herdr - both literal, non-submitting sends), then the shared composer owner must prove the payload's own tail is present in the selected composer before Enter is sent.
+A gated modal or missing tail refuses without Enter.
+Enter is retried (Enter only, never a retype) until the backend confirms the submit landed.
 For tmux that confirmation is normally a proven cleared composer from the shared classifier; an idle baseline transitioning to busy across this submit's own Enter also confirms that the turn started when a working harness hides its composer.
 Without that baseline, busy state never converts an `unknown` composer into confirmation.
 For herdr, idle-baseline submits first seek native agent-state showing a real turn started, then use the shared classifier when native state remains idle: a cleared composer confirms delivery, while pending text retries Enter and reaches the shared busy-queue verdict only after the retry budget.
@@ -187,13 +185,8 @@ the operational prefix lets firstmate distinguish it from a real captain message
   applicable, and a backend-independent active alert. A
   composer false-positive surfaces as a visible stall, never an unbounded silent
   no-op.
-- **Verified type-once submit model** - the digest is typed once (`send-keys -l`
-  on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
-  Enter is retried, Enter only and never a retype, until the backend submit
-  primitive reports `empty` as its caller-facing success verdict.
-  For tmux that verdict normally means the shared classifier proved the composer cleared; a baseline-gated idle-to-busy transition may instead prove this Enter started the turn.
-  For herdr's idle-baseline path it means native agent-state observed a turn start, the shared classifier proved the composer cleared, or the shared queued-Enter verdict proved delivery while busy.
-  This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
+- **Verified type-once submit model** - apply [Submit model](#submit-model), including its pre-Enter payload proof and backend-specific confirmation signals.
+  The daemon clears its buffered digest only after that submit primitive succeeds.
 - **Marker strip** - `strip_injection_marker` removes the current operational
   prefix or legacy bare marker before classification or relay, so the digest
   text firstmate sees is clean.

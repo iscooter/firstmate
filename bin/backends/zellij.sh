@@ -559,17 +559,17 @@ fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expe
   expected=$before$text
   [ "$after" = "$expected" ] && return 0
   # Typing often replaces a placeholder rather than appending to it. The
-  # selected composer still has to carry the payload tail, which is the same
-  # proof pre-Enter already required of the full screen, scoped to composer
-  # content so a clock tick plus furniture cannot confirm delivery.
+  # selected composer still has to carry the payload tail, matching the shared
+  # pre-Enter proof's composer-content scope so a clock tick plus furniture
+  # cannot confirm delivery.
   fm_composer_screen_has_payload_tail "$after" "$text"
 }
 
 # fm_backend_zellij_send_text_submit: type <text> into <target> once (raw,
 # unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
 # loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
-# real composer verdict above. Echoes empty|pending|unknown|send-failed, a
-# subset of the proof-carrying submit vocabulary. Only a positively classified
+# real composer verdict above. Echoes empty|pending|unknown|send-failed|gated|
+# not-accepted, a subset of the proof-carrying submit vocabulary. Only a positively classified
 # empty composer confirms delivery - a pane that merely CHANGED does not, so
 # the old heuristic's false "delivery confirmed" cannot recur.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
