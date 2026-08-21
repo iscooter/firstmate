@@ -573,8 +573,9 @@ fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expe
 # empty composer confirms delivery - a pane that merely CHANGED does not, so
 # the old heuristic's false "delivery confirmed" cannot recur.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after screen verdict
-  screen=$(fm_backend_zellij_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after screen verdict caps
+  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+  screen=$(fm_backend_zellij_composer_capture "$target" "$expected_label") \
     || {
       fm_backend_zellij_target_ready "$target" "$expected_label" || { printf 'send-failed'; return 0; }
       printf 'unknown'
@@ -587,9 +588,9 @@ fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep
     || { printf 'send-failed'; return 0; }
   fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  after=$(fm_backend_zellij_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
+  after=$(fm_backend_zellij_composer_capture "$target" "$expected_label") \
     || { printf 'unknown'; return 0; }
-  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$screen"); then
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$screen" "$caps"); then
     printf '%s' "$verdict"
     return 0
   fi

@@ -720,7 +720,7 @@ test_pre_enter_accepts_payload_tail_and_wrapped_anchor() {
   local payload after wrapped boxed out
   payload="hello captain END-OF-PAYLOAD-MARKER"
   after=$'transcript\n❯ hello captain END-OF-PAYLOAD-MARKER\n'
-  out=$(fm_composer_pre_enter_verdict "$after" "$payload" $'❯ \n') \
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" $'❯ \n' "$CAPS_STYLED") \
     || fail "pre-enter should accept a composer that shows the payload tail, got '$out'"
   [ "$out" = accepted ] || fail "expected accepted, got '$out'"
   # Wrap the tail across rows the way a long composer render does.
@@ -728,11 +728,11 @@ test_pre_enter_accepts_payload_tail_and_wrapped_anchor() {
   wrapped=$'❯ filler-160 TAILTOK\nEN-7Q4Z\n'
   fm_composer_screen_has_payload_tail "$wrapped" "$payload" \
     || fail "wrapped tail token must still match after row-join + whitespace collapse"
-  out=$(fm_composer_pre_enter_verdict "$wrapped" "$payload" $'❯ \n') \
+  out=$(fm_composer_pre_enter_verdict "$wrapped" "$payload" $'❯ \n' "$CAPS_STYLED") \
     || fail "pre-enter should accept a wrapped tail, got '$out'"
   [ "$out" = accepted ] || fail "wrapped tail should be accepted, got '$out'"
   boxed=$'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯'
-  out=$(fm_composer_pre_enter_verdict "$boxed" "hello captain" $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯') \
+  out=$(fm_composer_pre_enter_verdict "$boxed" "hello captain" $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯' "$CAPS_STYLED") \
     || fail "pre-enter should accept a box-wrapped payload, got '$out'"
   [ "$out" = accepted ] || fail "box-wrapped payload should be accepted, got '$out'"
   pass "fm_composer_pre_enter_verdict: tail-anchor proof survives wrap and refuses a missing tail"
@@ -752,10 +752,21 @@ test_pre_enter_ignores_transcript_tail_and_footer_changes() {
   payload='please handle item 2 TAILTOKEN-7Q4Z'
   before=$'please handle item 2 TAILTOKEN-7Q4Z\n\n❯ \n\nstatus: idle'
   after=$'please handle item 2 TAILTOKEN-7Q4Z\n\n❯ \n\nstatus: checking'
-  out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before") || true
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before" "$CAPS_STYLED") || true
   [ "$out" = not-accepted ] \
     || fail "a transcript tail plus unrelated footer change must not prove composer acceptance, got '$out'"
   pass "fm_composer_pre_enter_verdict: transcript tails and footer changes cannot prove acceptance"
+}
+
+test_pre_enter_refuses_rotating_ghost_equal_to_payload() {
+  local before after out payload
+  payload='please handle item 2'
+  before=$'❯ '"${ESC}[2mTry another task${ESC}[0m"
+  after=$'❯ '"${ESC}[2mplease handle item 2${ESC}[0m"
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before" "$CAPS_STYLED") || true
+  [ "$out" = not-accepted ] \
+    || fail "a rotating dim suggestion equal to the payload must not prove acceptance, got '$out'"
+  pass "fm_composer_pre_enter_verdict: styled ghost text cannot prove payload acceptance"
 }
 
 test_queued_enter_verdict_does_not_convert_gated
@@ -764,3 +775,4 @@ test_pre_enter_refuses_unchanged_dialog_screen
 test_pre_enter_accepts_payload_tail_and_wrapped_anchor
 test_pre_enter_refuses_missing_tail
 test_pre_enter_ignores_transcript_tail_and_footer_changes
+test_pre_enter_refuses_rotating_ghost_equal_to_payload

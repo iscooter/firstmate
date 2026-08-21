@@ -71,9 +71,9 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
     if [ -f "${FM_SEND_LOG}.typed" ] && [ ! -f "${FM_SEND_LOG}.entered" ]; then
-      printf '╭────────────╮\n│ > %s │\n╰────────────╯\n' "$(cat "${FM_SEND_LOG}.typed")"
+      printf '╭────────────────────────────────────────────────────────────────────────────────╮\n│ > %-76s │\n╰────────────────────────────────────────────────────────────────────────────────╯\n' "$(cat "${FM_SEND_LOG}.typed")"
     else
-      printf '╭────╮\n│    │\n╰────╯\n'
+      printf '╭────────────────────────────────────────────────────────────────────────────────╮\n│                                                                                │\n╰────────────────────────────────────────────────────────────────────────────────╯\n'
     fi
     exit 0 ;;
   list-windows) exit 0 ;;
@@ -111,11 +111,13 @@ phase_of() {  # <state> <corr>
 # --- tests ------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once() {
-  local home state corr status rec
+  local home state corr status rec body_path
   home=$(setup_parent resolve-once)
   state="$home/state"
   export FM_PENDING_REPLY_NOW=1000
   corr=$(fm_pending_reply_create "$home" "$state" "hibit" "audit the ledger")
+  body_path=$(fm_pending_reply_request_path "$state" "$corr")
+  [ -f "$body_path" ] || fail "pending request body should exist before resolution"
   fm_pending_reply_mark_delivered "$state" "$corr"
   status="$state/hibit.status"
   if fm_pending_reply_try_resolve "$state" "$corr"; then
@@ -130,6 +132,7 @@ test_normal_correlated_reply_resolves_once() {
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ "$(fm_pending_reply_get "$rec" resolved_via)" = status ] \
     || fail "resolved_via should be status"
+  [ ! -e "$body_path" ] || fail "resolved request body should be removed"
   pass "normal correlated reply resolves once (idempotent)"
 }
 

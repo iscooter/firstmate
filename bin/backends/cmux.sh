@@ -577,7 +577,7 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   sleep "$settle"
   after=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
     || { printf 'unknown'; return 0; }
-  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before" "$(fm_backend_cmux_composer_caps)"); then
     printf '%s' "$verdict"
     return 0
   fi

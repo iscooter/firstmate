@@ -2785,18 +2785,31 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
 
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after caps identity
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
-  before=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES") \
-    || { printf 'unknown'; return 0; }
+  if before=$(fm_backend_herdr_capture_ansi "$target" "$FM_COMPOSER_ACCEPT_LINES" 2>/dev/null); then
+    caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  elif before=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES"); then
+    caps=$(printf 'styled=0\ncursor=0\nidentity=1\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  else
+    printf 'unknown'
+    return 0
+  fi
   if ! fm_composer_pre_type_ok "$before"; then
     return 0
   fi
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  after=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES") \
-    || { printf 'unknown'; return 0; }
-  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+  case "$caps" in
+    styled=1*) after=$(fm_backend_herdr_capture_ansi "$target" "$FM_COMPOSER_ACCEPT_LINES" 2>/dev/null) \
+      || { printf 'unknown'; return 0; } ;;
+    *) after=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES") \
+      || { printf 'unknown'; return 0; } ;;
+  esac
+  if ! identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null); then
+    identity=probe-absent
+  fi
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before" "$caps" '' "$identity"); then
     printf '%s' "$verdict"
     return 0
   fi

@@ -1273,8 +1273,9 @@ fm_composer_pre_type_ok() {  # <screen>
 # changed. Prints gated or not-accepted and returns 1 otherwise. Callers must
 # not send Enter on a nonzero return: a modal that swallowed the keystrokes
 # treats Enter as "confirm", which is the false-delivery hole this proof closes.
-fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
-  local after=$1 text=$2 before=${3:-} after_content before_content after_norm before_norm caps
+fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen] [caps] [cursor-row] [identity]
+  local after=$1 text=$2 before=${3:-} caps=${4:-} cy=${5:-} identity=${6:-}
+  local after_content before_content after_norm before_norm state
   if fm_composer_screen_is_gated "$after"; then
     printf 'gated'
     return 1
@@ -1283,7 +1284,15 @@ fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
     printf 'not-accepted'
     return 1
   fi
-  caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  [ -n "$caps" ] || caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  state=$(fm_composer_classify_screen "$caps" "$after" "$cy" "$identity")
+  case "$state" in
+    pending|pending-unproven) ;;
+    *)
+      printf 'not-accepted'
+      return 1
+      ;;
+  esac
   after_content=$(fm_composer_extract_selected_content "$caps" "$after") || {
     printf 'not-accepted'
     return 1

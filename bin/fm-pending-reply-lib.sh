@@ -565,6 +565,7 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   if [ "$phase" = resolved ]; then
+    rm -f -- "$(fm_pending_reply_request_path "$state" "$corr")" 2>/dev/null || true
     _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
     return 0
   fi
@@ -599,6 +600,7 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   fi
   fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
   fm_pending_reply_set "$rec" resolved_via "$via" || return 1
+  rm -f -- "$(fm_pending_reply_request_path "$state" "$corr")" || return 1
   # The record is resolved either way; a failed close stays retryable from the
   # watcher tick rather than turning a settled request back into a failure.
   _fm_pending_reply_close_escalation_locked "$state" "$corr" || true

@@ -287,7 +287,7 @@ fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sl
   sleep "$settle"
   after=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_ACCEPT_LINES") \
     || { printf 'unknown'; return 0; }
-  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before" "$(fm_backend_orca_composer_caps)"); then
     printf '%s' "$verdict"
     return 0
   fi
