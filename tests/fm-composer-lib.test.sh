@@ -735,7 +735,14 @@ test_pre_enter_accepts_payload_tail_and_wrapped_anchor() {
   out=$(fm_composer_pre_enter_verdict "$boxed" "hello captain" $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯' "$CAPS_STYLED") \
     || fail "pre-enter should accept a box-wrapped payload, got '$out'"
   [ "$out" = accepted ] || fail "box-wrapped payload should be accepted, got '$out'"
-  pass "fm_composer_pre_enter_verdict: tail-anchor proof survives wrap and refuses a missing tail"
+  before=$'╭────────────────────╮\n│ >                  │\n╰────────────────────╯'
+  after=$'╭────────────────────╮\n│ > hello captain    │\n╰────────────────────╯'
+  fm_composer_pre_type_ok "$before" "$CAPS_PLAIN" \
+    || fail "an empty plain composer must be safe to type into"
+  out=$(fm_composer_pre_enter_verdict "$after" "hello captain" "$before" "$CAPS_PLAIN") \
+    || fail "plain pre-enter should accept a landed payload from an empty composer, got '$out'"
+  [ "$out" = accepted ] || fail "plain landed payload should be accepted, got '$out'"
+  pass "fm_composer_pre_enter_verdict: tail-anchor proof survives wrap and plain captures"
 }
 
 test_pre_enter_refuses_missing_tail() {
@@ -768,6 +775,9 @@ test_pre_enter_refuses_rotating_ghost_equal_to_payload() {
     || fail "a rotating dim suggestion equal to the payload must not prove acceptance, got '$out'"
   before='❯ Try another task'
   after='❯ please handle item 2'
+  out=$(fm_composer_pre_type_ok "$before" "$CAPS_PLAIN") || true
+  [ "$out" = not-accepted ] \
+    || fail "a plain capture with a possible suggestion must refuse before typing, got '$out'"
   out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before" "$CAPS_PLAIN") || true
   [ "$out" = not-accepted ] \
     || fail "a plain capture that cannot distinguish a rotating suggestion must fail closed, got '$out'"

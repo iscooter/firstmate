@@ -1257,12 +1257,27 @@ fm_composer_screen_is_gated() {  # <screen>
   [ "$score" -ge 2 ]
 }
 
-# fm_composer_pre_type_ok: refuse before typing when the screen is gated.
-# Prints `gated` and returns 1; returns 0 with no output when typing may proceed.
-fm_composer_pre_type_ok() {  # <screen>
-  if fm_composer_screen_is_gated "$1"; then
+# fm_composer_pre_type_ok: refuse before typing when the screen is gated, or
+# when a plain capture cannot prove that the selected composer is empty.
+# Prints `gated` or `not-accepted` and returns 1; returns 0 with no output when
+# typing may proceed.
+fm_composer_pre_type_ok() {  # <screen> [caps] [cursor-row] [identity]
+  local screen=$1 caps=${2:-} cy=${3:-} identity=${4:-} kv styled=0 state
+  if fm_composer_screen_is_gated "$screen"; then
     printf 'gated'
     return 1
+  fi
+  while IFS= read -r kv; do
+    [ "$kv" = styled=1 ] && styled=1
+  done <<EOF
+$caps
+EOF
+  if [ -n "$caps" ] && [ "$styled" != 1 ]; then
+    state=$(fm_composer_classify_screen "$caps" "$screen" "$cy" "$identity")
+    if [ "$state" != empty ]; then
+      printf 'not-accepted'
+      return 1
+    fi
   fi
   return 0
 }
@@ -1290,18 +1305,22 @@ fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen] [caps
   done <<EOF
 $caps
 EOF
-  if [ "$styled" != 1 ]; then
-    printf 'not-accepted'
-    return 1
-  fi
-  state=$(fm_composer_classify_screen "$caps" "$after" "$cy" "$identity")
-  case "$state" in
-    pending|pending-unproven) ;;
-    *)
+  if [ "$styled" = 1 ]; then
+    state=$(fm_composer_classify_screen "$caps" "$after" "$cy" "$identity")
+    case "$state" in
+      pending|pending-unproven) ;;
+      *)
+        printf 'not-accepted'
+        return 1
+        ;;
+    esac
+  else
+    state=$(fm_composer_classify_screen "$caps" "$before" "$cy" "$identity")
+    if [ -z "$before" ] || [ "$state" != empty ]; then
       printf 'not-accepted'
       return 1
-      ;;
-  esac
+    fi
+  fi
   after_content=$(fm_composer_extract_selected_content "$caps" "$after") || {
     printf 'not-accepted'
     return 1

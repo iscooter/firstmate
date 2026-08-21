@@ -280,7 +280,7 @@ fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sl
   fm_backend_orca_tool_check || { printf 'send-failed'; return 0; }
   before=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_ACCEPT_LINES") \
     || { printf 'unknown'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
+  if ! fm_composer_pre_type_ok "$before" "$(fm_backend_orca_composer_caps)"; then
     return 0
   fi
   fm_backend_orca_send_literal "$terminal" "$text" || { printf 'send-failed'; return 0; }

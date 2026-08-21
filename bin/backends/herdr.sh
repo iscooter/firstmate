@@ -2785,7 +2785,7 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
 
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after caps identity
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after caps identity=''
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   if before=$(fm_backend_herdr_capture_ansi "$target" "$FM_COMPOSER_ACCEPT_LINES" 2>/dev/null); then
     caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
@@ -2795,7 +2795,14 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     printf 'unknown'
     return 0
   fi
-  if ! fm_composer_pre_type_ok "$before"; then
+  case "$caps" in
+    styled=0*)
+      if ! identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null); then
+        identity=probe-absent
+      fi
+      ;;
+  esac
+  if ! fm_composer_pre_type_ok "$before" "$caps" '' "$identity"; then
     return 0
   fi
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }

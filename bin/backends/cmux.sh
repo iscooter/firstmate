@@ -570,7 +570,7 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   fm_backend_cmux_target_ready "$target" "$expected_label" || { printf 'send-failed'; return 0; }
   before=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
     || { printf 'unknown'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
+  if ! fm_composer_pre_type_ok "$before" "$(fm_backend_cmux_composer_caps)"; then
     return 0
   fi
   fm_backend_cmux_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
