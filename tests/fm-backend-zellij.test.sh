@@ -72,6 +72,13 @@ zellij_pane_response() {
   printf '[{"id":%s,"tab_id":%s,"is_plugin":false}]\n' "$pane" "$tab" > "$dir/responses/$n.out"
 }
 
+# list-panes at <n> plus dump-screen body at <n+1>. send_text_submit's
+# pre-Enter captures use this pair twice (accept-check then composer content).
+zellij_screen_pair() {  # <dir> <n> <text>
+  zellij_pane_response "$1" "$2" 7 3
+  printf '%s' "$3" > "$1/responses/$(($2 + 1)).out"
+}
+
 zellij_tab_response() {
   local dir=$1 n=$2 tab=${3:-3} name=${4:-fm-task}
   printf '[{"tab_id":%s,"name":"%s"}]\n' "$tab" "$name" > "$dir/responses/$n.out"
@@ -915,20 +922,21 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
 # tests pin its replacement: the shared composer classifier read through
 # `dump-screen --ansi` (styled=1), where only a positively classified empty
 # composer confirms delivery.
-# Call numbering per attempt: list-panes + paste, then per Enter attempt
-# list-panes + send-keys followed by list-panes + dump-screen --ansi.
+# Call numbering for send_text_submit:
+#   1-2 pre-type dump --full, 3-4 composer_content --ansi, 5-6 paste,
+#   7-8 post-type dump --full, 9-10 observed_append --ansi, then per Enter
+#   list-panes + send-keys followed by list-panes + dump-screen --ansi.
 
 test_send_text_submit_detects_landed_send() {
   local dir fb out
   dir="$TMP_ROOT/submit-ok"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'❯ '
+  zellij_screen_pair "$dir" 3 $'❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'hello captain\n❯ ' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'❯ hello captain'
+  zellij_screen_pair "$dir" 9 $'❯ hello captain'
+  zellij_pane_response "$dir" 11 7 3
+  zellij_screen_pair "$dir" 13 $'hello captain\n❯ '
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
@@ -947,17 +955,15 @@ test_send_text_submit_detects_landed_send() {
 test_send_text_submit_detects_swallowed_enter() {
   local dir fb out
   dir="$TMP_ROOT/submit-swallow"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'❯ '
+  zellij_screen_pair "$dir" 3 $'❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'❯ hello captain'
+  zellij_screen_pair "$dir" 9 $'❯ hello captain'
   zellij_pane_response "$dir" 11 7 3
-  zellij_pane_response "$dir" 13 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/14.out"
+  zellij_screen_pair "$dir" 13 $'❯ hello captain'
+  zellij_pane_response "$dir" 15 7 3
+  zellij_screen_pair "$dir" 17 $'❯ hello captain'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
@@ -977,17 +983,15 @@ test_send_text_submit_unrelated_change_is_not_delivery() {
   # --resolve-key decision records for a message the crew never received.
   local dir fb out
   dir="$TMP_ROOT/submit-false-positive"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'clock 11:59:59\n❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'clock 11:59:59\n❯ '
+  zellij_screen_pair "$dir" 3 $'clock 11:59:59\n❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'clock 12:00:00\n❯ hello captain' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'clock 12:00:01\n❯ hello captain' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'clock 12:00:00\n❯ hello captain'
+  zellij_screen_pair "$dir" 9 $'clock 12:00:00\n❯ hello captain'
   zellij_pane_response "$dir" 11 7 3
-  zellij_pane_response "$dir" 13 7 3
-  printf '%s' $'clock 12:00:02\n❯ hello captain' > "$dir/responses/14.out"
+  zellij_screen_pair "$dir" 13 $'clock 12:00:01\n❯ hello captain'
+  zellij_pane_response "$dir" 15 7 3
+  zellij_screen_pair "$dir" 17 $'clock 12:00:02\n❯ hello captain'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
@@ -1000,16 +1004,15 @@ test_send_text_submit_unrelated_change_is_not_delivery() {
 test_send_text_submit_rejects_unobserved_paste() {
   local dir fb out
   dir="$TMP_ROOT/submit-unobserved"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'transcript line\n❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'transcript line\n❯ '
+  zellij_screen_pair "$dir" 3 $'transcript line\n❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'transcript line\n❯ ' > "$dir/responses/6.out"
+  zellij_screen_pair "$dir" 7 $'transcript line\n❯ '
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "an unobserved paste should report send-failed, got '$out'"
+  [ "$out" = not-accepted ] || fail "an unobserved paste should report not-accepted, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when the pasted text was not observed"
   pass "fm_backend_zellij_send_text_submit: refuses confirmation when paste exits successfully without typing"
@@ -1018,16 +1021,15 @@ test_send_text_submit_rejects_unobserved_paste() {
 test_send_text_submit_rejects_transcript_echo_with_unrelated_draft() {
   local dir fb out
   dir="$TMP_ROOT/submit-transcript-echo"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'hello captain\n❯ unrelated draft' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'hello captain\n❯ unrelated draft'
+  zellij_screen_pair "$dir" 3 $'hello captain\n❯ unrelated draft'
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'hello captain\n❯ unrelated draft' > "$dir/responses/6.out"
+  zellij_screen_pair "$dir" 7 $'hello captain\n❯ unrelated draft'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "a transcript echo outside an unrelated draft should report send-failed, got '$out'"
+  [ "$out" = not-accepted ] || fail "a transcript echo outside an unrelated draft should report not-accepted, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when only a transcript echo matches the intended text"
   pass "fm_backend_zellij_send_text_submit: transcript echoes outside the selected composer cannot prove typing"
@@ -1036,16 +1038,15 @@ test_send_text_submit_rejects_transcript_echo_with_unrelated_draft() {
 test_send_text_submit_rejects_existing_intended_text_after_noop_paste() {
   local dir fb out
   dir="$TMP_ROOT/submit-existing-text-noop"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'❯ hello captain'
+  zellij_screen_pair "$dir" 3 $'❯ hello captain'
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
+  zellij_screen_pair "$dir" 7 $'❯ hello captain'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "pre-existing intended text after a no-op paste should report send-failed, got '$out'"
+  [ "$out" = not-accepted ] || fail "pre-existing intended text after a no-op paste should report not-accepted, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter without an observed composer delta"
   pass "fm_backend_zellij_send_text_submit: pre-existing text cannot prove a no-op paste landed"
@@ -1054,16 +1055,15 @@ test_send_text_submit_rejects_existing_intended_text_after_noop_paste() {
 test_send_text_submit_rejects_furniture_match_after_noop_paste() {
   local dir fb out
   dir="$TMP_ROOT/submit-furniture-noop"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'┃ unrelated draft\n┃ Build · GPT-5.5 Fast OpenAI · high' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'┃ unrelated draft\n┃ Build · GPT-5.5 Fast OpenAI · high'
+  zellij_screen_pair "$dir" 3 $'┃ unrelated draft\n┃ Build · GPT-5.5 Fast OpenAI · high'
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'┃ unrelated draft\n┃ Build · GPT-5.5 Fast OpenAI · high' > "$dir/responses/6.out"
+  zellij_screen_pair "$dir" 7 $'┃ unrelated draft\n┃ Build · GPT-5.5 Fast OpenAI · high'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "high" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "footer furniture matching a short steer should report send-failed, got '$out'"
+  [ "$out" = not-accepted ] || fail "footer furniture matching a short steer should report not-accepted, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when only furniture matches the steer"
   pass "fm_backend_zellij_send_text_submit: unrelated drafts and furniture cannot prove typing"
@@ -1072,14 +1072,13 @@ test_send_text_submit_rejects_furniture_match_after_noop_paste() {
 test_send_text_submit_accepts_wrapped_boxed_text() {
   local dir fb out
   dir="$TMP_ROOT/submit-wrapped-box"; mkdir -p "$dir/responses"
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯'
+  zellij_screen_pair "$dir" 3 $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯'
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'╭────────────────────╮\n│ ❯                  │\n╰────────────────────╯' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯'
+  zellij_screen_pair "$dir" 9 $'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯'
+  zellij_pane_response "$dir" 11 7 3
+  zellij_screen_pair "$dir" 13 $'╭────────────────────╮\n│ ❯                  │\n╰────────────────────╯'
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
@@ -1094,14 +1093,13 @@ test_send_text_submit_accepts_wrapped_bare_text() {
   local dir fb out text
   dir="$TMP_ROOT/submit-wrapped-bare"; mkdir -p "$dir/responses"
   text='this deliberately long steer wraps across a bare continuation row'
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'❯ '
+  zellij_screen_pair "$dir" 3 $'❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ this deliberately long steer\nwraps across a bare continuation row' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'this deliberately long steer wraps across a bare continuation row\n❯ ' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'❯ this deliberately long steer\nwraps across a bare continuation row'
+  zellij_screen_pair "$dir" 9 $'❯ this deliberately long steer\nwraps across a bare continuation row'
+  zellij_pane_response "$dir" 11 7 3
+  zellij_screen_pair "$dir" 13 $'this deliberately long steer wraps across a bare continuation row\n❯ '
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
@@ -1116,14 +1114,13 @@ test_send_text_submit_preserves_agent_glyph_within_wrapped_content() {
   local dir fb out text
   dir="$TMP_ROOT/submit-wrapped-agent-glyph"; mkdir -p "$dir/responses"
   text='hello ❯ captain'
-  zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ ' > "$dir/responses/2.out"
-  zellij_pane_response "$dir" 3 7 3
+  zellij_screen_pair "$dir" 1 $'❯ '
+  zellij_screen_pair "$dir" 3 $'❯ '
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello ❯\ncaptain' > "$dir/responses/6.out"
-  zellij_pane_response "$dir" 7 7 3
-  zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'hello ❯ captain\n❯ ' > "$dir/responses/10.out"
+  zellij_screen_pair "$dir" 7 $'❯ hello ❯\ncaptain'
+  zellij_screen_pair "$dir" 9 $'❯ hello ❯\ncaptain'
+  zellij_pane_response "$dir" 11 7 3
+  zellij_screen_pair "$dir" 13 $'hello ❯ captain\n❯ '
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \

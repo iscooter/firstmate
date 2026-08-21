@@ -10,18 +10,22 @@
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
 #
-# Text submission is verified: the line is typed ONCE, then Enter is sent and
-# retried (Enter only, never retyped) until the target backend confirms a
-# submit or reports an inconclusive send. If a swallowed Enter is positively
-# confirmed, fm-send exits NON-ZERO so the caller knows the steer did not land
-# instead of silently leaving an unsubmitted instruction.
+# Text submission is verified: the line is typed ONCE only after the pane is
+# not a gated modal, then the composer's own copy of the payload tail must be
+# present BEFORE Enter is sent. Enter is retried (Enter only, never retyped)
+# until the target backend confirms a submit or reports an inconclusive send.
+# If the payload never appears in the composer, or a swallowed Enter is
+# positively confirmed, fm-send exits NON-ZERO so the caller knows the steer
+# did not land instead of silently leaving an unsubmitted instruction.
 # Exit status contract: 0 = submit confirmed (or, for a remote secondmate
 # target, delivered with confirmation pending - see the remote paragraph);
 # 3 = the text was typed into the live endpoint and Enter was sent, but the
 # submit read-back stayed unconfirmed (verify the pane before any resend, and
 # never re-type blindly; a marked request's pending-reply expectation stays
 # armed because this outcome is not a proven failure); any other nonzero = the
-# send failed and nothing may be assumed delivered.
+# send failed and nothing may be assumed delivered. Verdicts `gated` and
+# `not-accepted` are pre-Enter refusals: the pane was a modal dialog or the
+# payload tail was absent after typing, so Enter was never sent.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
@@ -640,6 +644,20 @@ else
       # (bin/fm-pending-reply-lib.sh).
       echo "fm-send: text delivered to $T but submission is unconfirmed (verdict=pending; tried $RESOLUTION_TRIED); do not retype or blindly resend - verify with fm-peek.sh, then re-send '--key Enter' only if the composer still holds the text" >&2
       exit 3
+      ;;
+    gated)
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      fi
+      echo "error: text not sent to $T: pane is a gated modal dialog, not an accepting composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Inspect with fm-peek.sh; a workspace-trust or similar confirm prompt must be cleared before any steer." >&2
+      exit 1
+      ;;
+    not-accepted)
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      fi
+      echo "error: text not accepted into the composer at $T (payload tail absent after typing; harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). The pane did not take the steer. No Enter was sent. Inspect with fm-peek.sh." >&2
+      exit 1
       ;;
     *)
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then

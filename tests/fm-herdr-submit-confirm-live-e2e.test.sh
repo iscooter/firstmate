@@ -5,8 +5,10 @@
 # a busy-queued Enter can keep proven pending text visible. A stub cannot prove
 # either signal. This guard launches real Claude Code in an isolated Herdr lab
 # and requires fm_backend_herdr_send_text_submit to report empty for a landed
-# idle steer. It fails naming the harness and version rather than degrading
-# quietly.
+# idle steer. It also launches Claude without --dangerously-skip-permissions in
+# a never-before-seen directory and requires the same submit path to refuse a
+# workspace-trust dialog (gated or not-accepted), never confirm empty. It fails
+# naming the harness and version rather than degrading quietly.
 #
 # Run explicitly with FM_HERDR_SUBMIT_CONFIRM_LIVE=1 after a Herdr or Claude
 # upgrade, and before trusting a refreshed docs/verification/runtime-backends.md
@@ -121,5 +123,42 @@ done
 [ "$landed" = 1 ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: submit reported '$verdict' but the expected reply never rendered"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER reports empty and renders the requested reply in isolated session $SESSION"
+
+# Negative case: a never-before-seen directory parks Claude on the workspace-trust
+# dialog. An 1800-character steer must be refused, never confirmed empty.
+TRUST_DIR=$(mktemp -d "$TMP_ROOT/untrusted.XXXXXX")
+TRUST_JSON=$(lab workspace create --cwd "$TRUST_DIR" --label fm-submitlive-trust --no-focus) \
+  || fail "could not create the isolated untrusted workspace"
+TRUST_PANE=$(printf '%s' "$TRUST_JSON" | jq -er '.result.root_pane.pane_id') \
+  || fail "untrusted workspace create did not return a pane id"
+lab pane run "$TRUST_PANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude" >/dev/null \
+  || fail "could not launch Claude Code ($VERSION) without skip-permissions in the untrusted pane"
+
+gated=0
+i=0
+trust_screen=''
+while [ "$i" -lt 45 ]; do
+  trust_screen=$(lab pane read "$TRUST_PANE" --source recent --lines 80 2>/dev/null || true)
+  if printf '%s\n' "$trust_screen" | grep -qiE 'trust this folder|do you trust|quick safety check'; then
+    gated=1
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+[ "$gated" = 1 ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER never presented a workspace-trust dialog in a fresh directory"
+
+LONG=$(printf '%*s' 1800 '' | tr ' ' 'X')
+LONG="${LONG}TAILTOKEN-7Q4Z"
+refuse=$(fm_backend_herdr_send_text_submit "$SESSION:$TRUST_PANE" "$LONG" 3 0.4 0.4) \
+  || fail "send_text_submit failed to run against the trust-dialog pane ($VERSION) on $HERDR_VER"
+case "$refuse" in
+  gated|not-accepted) ;;
+  empty) fail "Claude Code ($VERSION) on $HERDR_VER: a trust-dialog steer must not confirm empty" ;;
+  *) fail "Claude Code ($VERSION) on $HERDR_VER: a trust-dialog steer must refuse gated or not-accepted, got '$refuse'" ;;
+esac
+pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER refuses an 1800-character steer into a workspace-trust dialog ($refuse)"
+CHECKED=$((CHECKED + 1))
 
 [ "$CHECKED" -gt 0 ] || fail "FM_HERDR_SUBMIT_CONFIRM_LIVE=1 checked no harness"

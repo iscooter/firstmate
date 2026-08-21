@@ -212,6 +212,8 @@ Enter, Escape, and Ctrl-C are supported.
 Slash and dollar-prefixed input uses the shared harness-aware settle before the first Enter so a completion popup cannot consume it.
 Text is typed once; only Enter is retried.
 
+Before Enter is treated as submission, `bin/fm-composer-lib.sh` proves the payload's own tail is present in the composer and refuses when the pane is a gated modal (Claude Code's workspace-trust dialog is the incident case).
+A missing tail or gated screen is `not-accepted` or `gated`: no Enter is sent, and `fm-send` fails loudly rather than reporting delivery from an idle-to-busy transition that a confirm dialog can fake.
 On an idle or done native baseline, submit confirmation first waits for `working` or `blocked` across a bounded polling window.
 If native status stays idle, the shared composer verdict is the next positive signal: a cleared composer is delivery, and proven pending text retries Enter.
 After the retry budget, `fm_composer_queued_enter_verdict` treats proven pending text plus a generating busy signal as a queued delivered Enter, and keeps an idle pending composer as a genuine swallow.

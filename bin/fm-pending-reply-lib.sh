@@ -19,6 +19,9 @@
 #
 # Record location (parent FM_HOME):
 #   state/pending-replies/<corr_id>
+#   state/pending-replies/<corr_id>.request  full request body for lossless
+#                                            recovery (bounded like the remote
+#                                            job/outbox at 1 MiB)
 # One more durable input, owned by bin/fm-procevent-remote-reply.sh and read
 # here: state/remote-replies/<task_id>.caught-up, the remote reply mirror's
 # watermark (see the remote reply-channel freshness section below).
@@ -30,6 +33,8 @@
 #   parent_status=          absolute path of parent state/<task_id>.status
 #   parent_status_scan_signature=
 #   request_summary=        short sanitized summary (no secrets by design)
+#   request_bytes=          byte length of the sibling full-body file
+#   request_sha256=         sha256 of that sibling file
 #   created_epoch=          when the expectation was created
 #   delivered_epoch=        when the marked request was confirmed delivered
 #                           (empty until delivery; delivery never resolves)
@@ -93,6 +98,7 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
+FM_PENDING_REPLY_MAX_BYTES=${FM_PENDING_REPLY_MAX_BYTES:-1048576}
 
 fm_pending_reply_now() {
   if [ -n "${FM_PENDING_REPLY_NOW:-}" ]; then
@@ -122,6 +128,11 @@ fm_pending_reply_dir() {  # <state-dir>
 
 fm_pending_reply_path() {  # <state-dir> <corr_id>
   printf '%s/%s' "$(fm_pending_reply_dir "$1")" "$2"
+}
+
+# Sibling file holding the full request body for lossless recovery.
+fm_pending_reply_request_path() {  # <state-dir> <corr_id>
+  printf '%s/%s.request' "$(fm_pending_reply_dir "$1")" "$2"
 }
 
 # Privacy-safe correlation id: 16 lowercase hex chars (64 bits of entropy).
@@ -169,6 +180,21 @@ fm_pending_reply_summarize() {  # <text>
     cleaned="${cleaned:0:117}..."
   fi
   printf '%s' "$cleaned"
+}
+
+# Full request body for recovery. Prefers the sibling file; falls back to the
+# 117-character summary for records created before that file existed.
+fm_pending_reply_request_body() {  # <record-path>
+  local rec=$1 dir base body_path
+  [ -f "$rec" ] || return 1
+  dir=$(dirname "$rec")
+  base=$(basename "$rec")
+  body_path="$dir/${base}.request"
+  if [ -f "$body_path" ]; then
+    cat "$body_path"
+    return 0
+  fi
+  fm_pending_reply_get "$rec" request_summary
 }
 
 fm_pending_reply_get() {  # <record-path> <key>
@@ -235,7 +261,7 @@ fm_pending_reply_embed_corr() {  # <message> <corr_id> <result-var>
 # Does not deliver anything. Fails if parent paths cannot be prepared.
 fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text>
   local parent_home=$1 state=$2 task_id=$3 request_text=$4
-  local dir rec corr now summary status_path tmp
+  local dir rec corr now summary status_path tmp body_path body_tmp body_bytes body_hash
   [ -n "$parent_home" ] && [ -n "$state" ] && [ -n "$task_id" ] || return 2
   dir=$(fm_pending_reply_dir "$state")
   mkdir -p "$dir" || return 1
@@ -261,6 +287,19 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
     /*) ;;
     *) parent_home=$(cd "$parent_home" 2>/dev/null && pwd) || parent_home=$1 ;;
   esac
+  body_path=$(fm_pending_reply_request_path "$state" "$corr")
+  body_tmp="$dir/.${corr}.request.tmp.$$"
+  printf '%s' "$request_text" > "$body_tmp" || { rm -f "$body_tmp"; return 1; }
+  body_bytes=$(wc -c < "$body_tmp" | tr -d ' ')
+  case "$body_bytes" in ''|*[!0-9]*) rm -f "$body_tmp"; return 1 ;; esac
+  if [ "$body_bytes" -gt "$FM_PENDING_REPLY_MAX_BYTES" ]; then
+    rm -f "$body_tmp"
+    return 1
+  fi
+  body_hash=$(shasum -a 256 < "$body_tmp" | awk '{print $1}')
+  [ -n "$body_hash" ] || { rm -f "$body_tmp"; return 1; }
+  chmod 600 "$body_tmp" 2>/dev/null || true
+  mv -f "$body_tmp" "$body_path" || { rm -f "$body_tmp"; return 1; }
   tmp="$dir/.${corr}.tmp.$$"
   cat > "$tmp" <<EOF
 schema=$FM_PENDING_REPLY_SCHEMA
@@ -270,6 +309,8 @@ parent_home=$parent_home
 parent_status=$status_path
 parent_status_scan_signature=
 request_summary=$summary
+request_bytes=$body_bytes
+request_sha256=$body_hash
 created_epoch=$now
 delivered_epoch=
 phase=awaiting_report
@@ -291,7 +332,10 @@ wrong_home_scan_signature=
 grace_secs=$(fm_pending_reply_grace_secs)
 EOF
   chmod 600 "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "$rec" || return 1
+  if ! mv -f "$tmp" "$rec"; then
+    rm -f "$body_path" "$tmp"
+    return 1
+  fi
   printf '%s' "$corr"
 }
 
@@ -415,13 +459,14 @@ fm_pending_reply_reconcile_delivery() {  # <state-dir> <corr_id>
 # Drop an undelivered expectation after a failed send so transport failure does
 # not masquerade as a missed report later.
 fm_pending_reply_discard_undelivered() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec delivered marker
+  local state=$1 corr=$2 rec delivered marker body_path
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 0
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
   [ -z "$delivered" ] || return 1
   marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
-  rm -f "$marker" 2>/dev/null || true
+  body_path=$(fm_pending_reply_request_path "$state" "$corr")
+  rm -f "$marker" "$body_path" 2>/dev/null || true
   rm -f "$rec"
 }
 
@@ -771,11 +816,13 @@ fm_pending_reply_missing_report_is_evidence() {  # <state-dir> <task_id> <since-
 
 # Build the one automatic recovery message for a pending record.
 fm_pending_reply_recovery_message() {  # <record-path>
-  local rec=$1 corr summary token msg
+  local rec=$1 corr summary body token msg
   corr=$(fm_pending_reply_get "$rec" corr_id)
   summary=$(fm_pending_reply_get "$rec" request_summary)
+  body=$(fm_pending_reply_request_body "$rec")
+  [ -n "$body" ] || body=$summary
   token=$(fm_pending_reply_corr_token "$corr")
-  msg="REPOST REQUIRED: previous marked request had no correlated parent report. Reply on the parent status channel including ${token}. Original request: ${summary}"
+  msg="REPOST REQUIRED: previous marked request had no correlated parent report. Reply on the parent status channel including ${token}. Original request: ${body}"
   fm_pending_reply_embed_corr "$msg" "$corr" msg
   printf '%s' "$msg"
 }

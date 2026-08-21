@@ -280,12 +280,24 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
 
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state
+  local before after verdict
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
   baseline_state=$(fm_pane_busy_state "$target")
   [ "$baseline_state" = idle ] && baseline_idle=1
+  before=$(tmux capture-pane -p -t "$target" -S -"$FM_COMPOSER_ACCEPT_LINES" 2>/dev/null) \
+    || { printf 'unknown'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(tmux capture-pane -p -t "$target" -S -"$FM_COMPOSER_ACCEPT_LINES" 2>/dev/null) \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle"
 }

@@ -223,11 +223,24 @@ case "${1:-}" in
       esac
     done
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
+    if [ "$literal" = 1 ]; then
+      printf '%s' "${1:-}" > "${0}.typed"
+      rm -f "${0}.entered"
+    fi
+    if [ "$literal" = 0 ] && [ "${1:-}" = Enter ]; then
+      : > "${0}.entered"
+    fi
     exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf '%%1\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    if [ -f "${0}.typed" ] && [ ! -f "${0}.entered" ]; then
+      printf '╭────────────╮\n│ > %s │\n╰────────────╯\n' "$(cat "${0}.typed")"
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
+    fi
+    exit 0 ;;
 esac
 exit 0
 SH

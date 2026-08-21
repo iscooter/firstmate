@@ -35,6 +35,10 @@ SEND="$ROOT/bin/fm-send.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-send-remote-delivery)
+# Physicalize macOS's TMPDIR trailing slash (/var/folders/.../T/) so registry
+# root/home paths never contain an empty `//` component.
+mkdir -p "$TMP_ROOT"
+TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 
 # Stub tmux for the local legs: logs literal typed text to FM_SEND_LOG. The
 # default composer reads empty (clean submit); FM_FAKE_TMUX_PENDING=1 keeps a
@@ -49,6 +53,18 @@ make_stubs() {  # <dir> -> echoes fakebin dir
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+write_composer() {
+  text=$1
+  width=$((${#text} + 4))
+  [ "$width" -ge 6 ] || width=6
+  border=
+  i=0
+  while [ "$i" -lt "$width" ]; do
+    border="${border}─"
+    i=$((i + 1))
+  done
+  printf '╭%s╮\n│ > %s │\n╰%s╯\n' "$border" "$text" "$border"
+}
 case "${1:-}" in
   send-keys)
     shift
@@ -62,6 +78,11 @@ case "${1:-}" in
     done
     if [ "$literal" = 1 ]; then
       printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+      printf '%s' "${1:-}" > "${FM_SEND_LOG}.typed"
+      rm -f "${FM_SEND_LOG}.entered"
+    fi
+    if [ "$literal" = 0 ] && [ "${1:-}" = Enter ]; then
+      : > "${FM_SEND_LOG}.entered"
     fi
     exit 0 ;;
   display-message)
@@ -69,9 +90,17 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
     if [ "${FM_FAKE_TMUX_PENDING:-0}" = 1 ]; then
+      # A well-formed short pending box plus the typed payload below it: the
+      # box classifies pending, and the payload line supplies the tail-anchor.
       printf '╭────────────╮\n│ > steer    │\n╰────────────╯\n'
+      if [ -f "${FM_SEND_LOG}.typed" ]; then
+        cat "${FM_SEND_LOG}.typed"
+        printf '\n'
+      fi
+    elif [ -f "${FM_SEND_LOG}.typed" ] && [ ! -f "${FM_SEND_LOG}.entered" ]; then
+      write_composer "$(cat "${FM_SEND_LOG}.typed")"
     else
-      printf '╭────╮\n│    │\n╰────╯\n'
+      write_composer ""
     fi
     exit 0 ;;
   list-windows) exit 0 ;;
@@ -127,7 +156,7 @@ EOF
 
 # The single non-dot pending-reply record in <home>, or empty.
 pending_record() {  # <home>
-  find "$1/state/pending-replies" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | head -1
+  find "$1/state/pending-replies" -maxdepth 1 -type f ! -name '.*' ! -name '*.request' 2>/dev/null | head -1
 }
 
 drain_out() {  # <home>
@@ -303,6 +332,67 @@ test_local_pending_does_not_close_resolve_key() {
   pass "fm-send local: an unconfirmed submit still never closes a --resolve-key decision"
 }
 
+test_remote_1800_char_argument_survives_job_worker() {
+  local dir remote_root remote_home local_home fakebin payload expected actual rc
+  dir="$TMP_ROOT/remote-1800"
+  remote_root="$dir/remote-root"
+  remote_home="$dir/remote-home"
+  local_home="$dir/local-home"
+  mkdir -p "$remote_root/bin" "$remote_home" "$local_home/data"
+  cp "$ROOT/bin/fm-remote-entrypoint.sh" "$ROOT/bin/fm-remote-job-lib.sh" \
+    "$ROOT/bin/fm-remote-job-worker.sh" "$remote_root/bin/"
+  cat > "$remote_root/bin/fm-probe-argv.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s' "$1" > "$2"
+SH
+  chmod +x "$remote_root/bin"/*.sh
+  printf 'fixture\n' > "$remote_root/AGENTS.md"
+  git -C "$remote_root" init -q -b main
+  git -C "$remote_root" -c user.email=test@example.com -c user.name=Test add AGENTS.md bin
+  git -C "$remote_root" -c user.email=test@example.com -c user.name=Test commit -qm fixture
+  cat > "$local_home/data/secondmates.md" <<EOF
+- ios - iOS delivery (host: remote-mac; root: $remote_root; home: $remote_home; scope: iOS work; projects: alpha; added 2026-08-21)
+EOF
+  fakebin="$dir/fakebin"; mkdir -p "$fakebin"
+  cat > "$fakebin/fake-ssh" <<'SH'
+#!/usr/bin/env bash
+set -u
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    --) shift; break ;;
+    *) exit 90 ;;
+  esac
+done
+host=$1
+entry=$2
+shift 2
+[ "$host" = remote-mac ] || exit 91
+[ "$entry" = fm-remote-entrypoint.sh ] || exit 92
+exec "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"
+SH
+  chmod +x "$fakebin/fake-ssh"
+  payload=$(printf '%*s' 1800 '' | tr ' ' 'A')
+  payload="${payload}TAILTOKEN-7Q4Z"
+  expected="$dir/expected.bin"
+  actual="$remote_home/argv.bin"
+  printf '%s' "$payload" > "$expected"
+  FM_HOME="$local_home" \
+    FM_ROOT_OVERRIDE="$remote_root" \
+    FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_FAKE_REMOTE_ENTRYPOINT="$remote_root/bin/fm-remote-entrypoint.sh" \
+    FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+    FM_REMOTE_JOB_STATE_ROOT="$dir/remote-jobs" \
+    "$ROOT/bin/fm-on.sh" ios fm-probe-argv.sh "$payload" "$actual"
+  rc=$?
+  expect_code 0 "$rc" "the 1800-character remote argument must execute"
+  [ -f "$actual" ] || fail "the remote probe did not write the received argument"
+  cmp -s "$expected" "$actual" \
+    || fail "an 1800-character argument must survive fm-on -> entrypoint -> job worker byte-exact (got $(wc -c < "$actual" | tr -d ' ') bytes, expected $(wc -c < "$expected" | tr -d ' '))"
+  pass "fm-on remote: an 1800-character argument survives entrypoint and job worker byte-exact"
+}
+
 test_remote_delivered_unconfirmed_is_not_failure
 test_remote_real_failure_still_fails
 test_remote_transport_unknown_preserves_expectation
@@ -310,5 +400,6 @@ test_remote_delivered_unconfirmed_closes_resolve_key
 test_local_pending_reports_delivered_unconfirmed
 test_local_pending_does_not_close_resolve_key
 test_local_secondmate_pending_keeps_expectation_armed
+test_remote_1800_char_argument_survives_job_worker
 
 echo "all fm-send-remote-delivery tests passed"

@@ -190,7 +190,8 @@ The shared symptom is a healthy-looking pane with no work in progress, so each a
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
 
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
-After every spawn, peek the pane within about 20 seconds.
+`bin/fm-spawn.sh` refuses a Claude launch that is still parked on that dialog, and `bin/fm-send.sh` refuses a steer into a gated pane rather than treating Enter as delivery.
+After every spawn, peek the pane if the launch-readiness gate is not available for that adapter.
 If such a dialog is showing, accept it from an active firstmate session using `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Enter`, or the choice the dialog requires, unless `FM_HOME` is already set to the active firstmate home; verify the brief started processing.
 
 Claude renders a predicted-next-prompt suggestion as dim/faint text inside an otherwise-empty composer after a turn completes.

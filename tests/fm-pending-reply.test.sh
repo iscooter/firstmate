@@ -59,12 +59,23 @@ case "${1:-}" in
     done
     if [ "$literal" = 1 ]; then
       printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+      printf '%s' "${1:-}" > "${FM_SEND_LOG}.typed"
+      rm -f "${FM_SEND_LOG}.entered"
+    fi
+    if [ "$literal" = 0 ] && [ "${1:-}" = Enter ]; then
+      : > "${FM_SEND_LOG}.entered"
     fi
     exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    if [ -f "${FM_SEND_LOG}.typed" ] && [ ! -f "${FM_SEND_LOG}.entered" ]; then
+      printf '╭────────────╮\n│ > %s │\n╰────────────╯\n' "$(cat "${FM_SEND_LOG}.typed")"
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
+    fi
+    exit 0 ;;
   list-windows) exit 0 ;;
 esac
 exit 0
@@ -1038,6 +1049,7 @@ test_tick_end_to_end_missed_then_escalate() {
   mkdir -p "$sm_home/state"
   hook_log="$TMP_ROOT/tick-hook.log"
   : > "$hook_log"
+  # shellcheck disable=SC2329
   recovery_hook() { printf 'recovered\n' >> "$hook_log"; }
   export -f recovery_hook
   # Reset hook and clock fixtures after isolated subshell tests.
@@ -1180,6 +1192,48 @@ test_failed_send_discards_undelivered_expectation() {
   pass "failed transport discards undelivered expectation only"
 }
 
+test_full_request_body_is_stored_and_recovered_whole() {
+  local home state corr rec body_path recovered hook_log summary payload
+  home=$(setup_parent full-body)
+  state="$home/state"
+  hook_log="$TMP_ROOT/full-body-recovery.log"
+  : > "$hook_log"
+  payload=$(printf '%*s' 1800 '' | tr ' ' 'A')
+  payload="${payload}TAILTOKEN-7Q4Z"
+  export FM_PENDING_REPLY_NOW=4000
+  # shellcheck disable=SC2329
+  recovery_hook() {
+    printf '%s\t%s\n' "$1" "$2" >> "$hook_log"
+  }
+  export -f recovery_hook
+  export FM_PENDING_REPLY_SEND_HOOK='recovery_hook'
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "$payload")
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  body_path=$(fm_pending_reply_request_path "$state" "$corr")
+  [ -f "$body_path" ] || fail "create must write the sibling full-body file"
+  [ "$(cat "$body_path")" = "$payload" ] || fail "stored body must match the original payload byte-for-byte"
+  summary=$(fm_pending_reply_get "$rec" request_summary)
+  case "$summary" in
+    *TAILTOKEN-7Q4Z*) fail "the display excerpt must not be the whole 1800-char body" ;;
+  esac
+  [ "$(fm_pending_reply_request_body "$rec")" = "$payload" ] \
+    || fail "request_body must return the full payload, not the excerpt"
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_observe_busy "$state" "$corr" busy
+  fm_pending_reply_observe_busy "$state" "$corr" idle
+  fm_pending_reply_send_recovery "$state" "$corr" \
+    || fail "recovery should send after completed turn + grace"
+  recovered=$(cut -f2- "$hook_log")
+  case "$recovered" in
+    *"$payload"*) : ;;
+    *) fail "recovery must resend the complete payload, not the excerpt"$'\n'"$recovered" ;;
+  esac
+  case "$recovered" in
+    *"A...TAILTOKEN-7Q4Z"|*"AAAA..."*) fail "recovery resent a truncated excerpt" ;;
+  esac
+  pass "pending-reply stores and recovers the full request body, not the 117-char excerpt"
+}
+
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
@@ -1211,6 +1265,7 @@ test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
+test_full_request_body_is_stored_and_recovered_whole
 test_remote_repost_waits_for_the_reply_channel
 test_mirrored_remote_reply_never_triggers_a_repost
 

@@ -659,3 +659,96 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+test_queued_enter_verdict_does_not_convert_gated() {
+  local out
+  out=$(fm_composer_queued_enter_verdict gated busy)
+  [ "$out" = gated ] || fail "queued-enter must not convert gated, got '$out'"
+  pass "fm_composer_queued_enter_verdict: gated is unchanged"
+}
+
+# Trust-dialog fixture from the remote-send-truncation scout (Claude Code 2.1.238).
+TRUST_DIALOG=$(cat <<'EOF'
+ Accessing workspace:
+
+ /private/tmp/.../fresh-home-D
+
+ Quick safety check: Is this a project you created or
+ one you trust? (Like your own code, a well-known
+ open source project, or work from your team). If
+ not, take a moment to review what's in this folder
+ first.
+
+ Claude Code'll be able to read, edit, and execute
+ files here.
+
+ Security guide
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+EOF
+)
+
+test_trust_dialog_classifies_gated_not_pending() {
+  local out
+  out=$(fm_composer_classify_screen "$CAPS_STYLED" "$TRUST_DIALOG")
+  [ "$out" = gated ] || fail "trust dialog on herdr caps must be gated, got '$out'"
+  out=$(fm_composer_classify_screen "$CAPS_TMUX" "$TRUST_DIALOG" 14)
+  [ "$out" = gated ] || fail "trust dialog on tmux caps must be gated, got '$out'"
+  out=$(fm_composer_classify_screen "$CAPS_PLAIN" "$TRUST_DIALOG")
+  [ "$out" = gated ] || fail "trust dialog on plain caps must be gated, got '$out'"
+  [ "$out" != pending ] || fail "trust dialog must never classify pending"
+  [ "$out" != empty ] || fail "trust dialog must never classify empty"
+  fm_composer_screen_is_gated "$TRUST_DIALOG" \
+    || fail "fm_composer_screen_is_gated must be true for the captured trust dialog"
+  pass "fm_composer_classify_screen: Claude workspace-trust dialog is gated, never pending or empty"
+}
+
+test_pre_enter_refuses_unchanged_dialog_screen() {
+  local out
+  out=$(fm_composer_pre_enter_verdict "$TRUST_DIALOG" "please handle item 2" "$TRUST_DIALOG") || true
+  [ "$out" = gated ] || [ "$out" = not-accepted ] \
+    || fail "pre-enter on an unchanged trust dialog must refuse, got '$out'"
+  if fm_composer_pre_type_ok "$TRUST_DIALOG" >/dev/null; then
+    fail "pre-type must refuse a gated trust dialog"
+  fi
+  pass "fm_composer_pre_enter_verdict: an unchanged trust-dialog screen refuses before Enter"
+}
+
+test_pre_enter_accepts_payload_tail_and_wrapped_anchor() {
+  local payload after wrapped boxed out
+  payload="hello captain END-OF-PAYLOAD-MARKER"
+  after=$'transcript\n❯ hello captain END-OF-PAYLOAD-MARKER\n'
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" $'❯ \n') \
+    || fail "pre-enter should accept a composer that shows the payload tail, got '$out'"
+  [ "$out" = accepted ] || fail "expected accepted, got '$out'"
+  # Wrap the tail across rows the way a long composer render does.
+  payload="filler-160 TAILTOKEN-7Q4Z"
+  wrapped=$'❯ filler-160 TAILTOK\nEN-7Q4Z\n'
+  fm_composer_screen_has_payload_tail "$wrapped" "$payload" \
+    || fail "wrapped tail token must still match after row-join + whitespace collapse"
+  out=$(fm_composer_pre_enter_verdict "$wrapped" "$payload" $'❯ \n') \
+    || fail "pre-enter should accept a wrapped tail, got '$out'"
+  [ "$out" = accepted ] || fail "wrapped tail should be accepted, got '$out'"
+  boxed=$'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯'
+  out=$(fm_composer_pre_enter_verdict "$boxed" "hello captain" $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯') \
+    || fail "pre-enter should accept a box-wrapped payload, got '$out'"
+  [ "$out" = accepted ] || fail "box-wrapped payload should be accepted, got '$out'"
+  pass "fm_composer_pre_enter_verdict: tail-anchor proof survives wrap and refuses a missing tail"
+}
+
+test_pre_enter_refuses_missing_tail() {
+  local out
+  out=$(fm_composer_pre_enter_verdict $'❯ \n' "please handle item 2" $'❯ \n') || true
+  [ "$out" = not-accepted ] || fail "identical empty composer after typing must be not-accepted, got '$out'"
+  out=$(fm_composer_pre_enter_verdict $'❯ unrelated draft\n' "please handle item 2" $'❯ \n') || true
+  [ "$out" = not-accepted ] || fail "a composer without the payload tail must be not-accepted, got '$out'"
+  pass "fm_composer_pre_enter_verdict: missing tail is not-accepted"
+}
+
+test_queued_enter_verdict_does_not_convert_gated
+test_trust_dialog_classifies_gated_not_pending
+test_pre_enter_refuses_unchanged_dialog_screen
+test_pre_enter_accepts_payload_tail_and_wrapped_anchor
+test_pre_enter_refuses_missing_tail

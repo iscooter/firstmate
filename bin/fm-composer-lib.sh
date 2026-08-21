@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # bin/fm-composer-lib.sh - the ONE fleet-wide owner of composer classification:
 # every shape a verified harness draws, every glyph, every container proof, and
-# the empty|pending|pending-unproven|unknown verdict, shared by every
+# the empty|pending|pending-unproven|unknown|gated verdict, shared by every
 # session-provider adapter (tmux via bin/fm-tmux-lib.sh, and
-# bin/backends/{herdr,orca,cmux,zellij}.sh) and by fm-spawn.sh's kimi
-# launch-readiness check.
+# bin/backends/{herdr,orca,cmux,zellij}.sh) and by fm-spawn.sh's kimi and
+# claude launch-readiness checks. Gated is a full-screen modal (a numbered
+# selection list plus a confirm affordance) and is never an accepting composer.
+# Pre-Enter payload proof also lives here: adapters capture a screen, and
+# fm_composer_pre_enter_verdict decides whether Enter may be sent.
 #
 # WHY THIS EXISTS (tasks fm-composer-shellglyph-safety and
 # fm-composer-thin-adapter-refactor-r1): the adapters each carried their own
@@ -382,6 +385,11 @@ FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
 # sufficient and keeps stale scrollback (startup banners, old transcript
 # boxes) from ever competing with the live composer.
 FM_COMPOSER_CAPTURE_LINES=${FM_COMPOSER_CAPTURE_LINES:-20}
+
+# Pre-Enter tail-anchor reads use a deeper tail so a long wrapped payload's
+# last characters remain visible after the head has scrolled out of the
+# classifier's 20-line composer window.
+FM_COMPOSER_ACCEPT_LINES=${FM_COMPOSER_ACCEPT_LINES:-80}
 
 # Pi allows a multi-line composer between its horizontal separators. Bound the
 # structural candidate so two unrelated transcript rules with an arbitrarily
@@ -1183,6 +1191,116 @@ EOF
   printf '%s\n' "$joined" | LC_ALL=C awk '{$1=$1; printf "%s", $0}'
 }
 
+# fm_composer_normalize_anchor_var: collapse a screen or payload to the
+# wrap-safe form used by the pre-Enter tail-anchor proof. ANSI is stripped,
+# Unicode whitespace is mapped, ASCII whitespace is deleted, and box-drawing
+# glyphs are deleted so a wrap that splits a token across bordered composer
+# rows still matches.
+fm_composer_normalize_anchor_var() {  # <varname>
+  local _fm_anchor_s
+  _fm_anchor_s=${!1}
+  _fm_anchor_s=$(printf '%s' "$_fm_anchor_s" | fm_composer_strip_ansi)
+  fm_composer_normalize_spaces_var _fm_anchor_s
+  _fm_anchor_s=${_fm_anchor_s//[$' \t\r\n\v\f']/}
+  _fm_anchor_s=${_fm_anchor_s//[─━│┃╭╮╰╯┌┐└┘├┤┬┴┼╔╗╚╝║═]/}
+  printf -v "$1" '%s' "$_fm_anchor_s"
+}
+
+# fm_composer_payload_tail_anchor: the payload's own tail in anchor form.
+# Short payloads are the whole normalized string; longer ones contribute their
+# last 48 normalized characters so a scrolled composer that dropped the head
+# can still prove the write landed through the final character.
+fm_composer_payload_tail_anchor() {  # <text>
+  local norm=$1
+  fm_composer_normalize_anchor_var norm
+  [ -n "$norm" ] || return 1
+  if [ "${#norm}" -le 48 ]; then
+    printf '%s' "$norm"
+  else
+    printf '%s' "${norm: -48}"
+  fi
+}
+
+# fm_composer_screen_has_payload_tail: 0 when <screen> contains the payload's
+# own tail anchor after wrap-normalizing both sides.
+fm_composer_screen_has_payload_tail() {  # <screen> <text>
+  local screen=$1 text=$2 anchor
+  anchor=$(fm_composer_payload_tail_anchor "$text") || return 1
+  fm_composer_normalize_anchor_var screen
+  [ -n "$screen" ] || return 1
+  case "$screen" in
+    *"$anchor"*) return 0 ;;
+  esac
+  return 1
+}
+
+# fm_composer_screen_is_gated: 0 when <screen> is a modal/gated prompt rather
+# than an accepting composer. A positive verdict needs at least two independent
+# signals so no single vendor string is load-bearing: a numbered selection
+# list, an Enter-to-confirm affordance, a trust/directory prompt, a safety
+# check, or an Esc-to-cancel affordance. Claude Code's workspace-trust dialog
+# trips several of these at once; a bare `❯` composer trips none.
+fm_composer_screen_is_gated() {  # <screen>
+  local plain n=0 confirm=0 trust=0 safety=0 esc=0 score=0
+  plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
+  n=$(printf '%s\n' "$plain" | grep -cE '^[[:space:]]*(❯|›|⟩|→|>)?[[:space:]]*[0-9]+\.[[:space:]]+[^[:space:]]' || true)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$plain" | grep -qiE 'enter to confirm|press enter to (confirm|continue|accept)' && confirm=1
+  printf '%s\n' "$plain" | grep -qiE 'trust this folder|trust the contents of this directory|do you trust' && trust=1
+  printf '%s\n' "$plain" | grep -qiE 'quick safety check|[[:space:]]safety check' && safety=1
+  printf '%s\n' "$plain" | grep -qiE 'esc to cancel' && esc=1
+  [ "$n" -ge 2 ] && score=$((score + 1))
+  [ "$confirm" = 1 ] && score=$((score + 1))
+  [ "$trust" = 1 ] && score=$((score + 1))
+  [ "$safety" = 1 ] && score=$((score + 1))
+  [ "$esc" = 1 ] && score=$((score + 1))
+  [ "$score" -ge 2 ]
+}
+
+# fm_composer_pre_type_ok: refuse before typing when the screen is gated.
+# Prints `gated` and returns 1; returns 0 with no output when typing may proceed.
+fm_composer_pre_type_ok() {  # <screen>
+  if fm_composer_screen_is_gated "$1"; then
+    printf 'gated'
+    return 1
+  fi
+  return 0
+}
+
+# fm_composer_pre_enter_verdict: the ONE pre-Enter delivery proof.
+# Prints accepted (return 0) only when the payload's tail is present in the
+# post-type screen and, when a before-screen is supplied, that screen actually
+# changed. Prints gated or not-accepted and returns 1 otherwise. Callers must
+# not send Enter on a nonzero return: a modal that swallowed the keystrokes
+# treats Enter as "confirm", which is the false-delivery hole this proof closes.
+fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
+  local after=$1 text=$2 before=${3:-} after_norm before_norm
+  if fm_composer_screen_is_gated "$after"; then
+    printf 'gated'
+    return 1
+  fi
+  if [ -z "$text" ]; then
+    printf 'not-accepted'
+    return 1
+  fi
+  if [ -n "$before" ]; then
+    after_norm=$after
+    before_norm=$before
+    fm_composer_normalize_anchor_var after_norm
+    fm_composer_normalize_anchor_var before_norm
+    if [ "$after_norm" = "$before_norm" ]; then
+      printf 'not-accepted'
+      return 1
+    fi
+  fi
+  if fm_composer_screen_has_payload_tail "$after" "$text"; then
+    printf 'accepted'
+    return 0
+  fi
+  printf 'not-accepted'
+  return 1
+}
+
 fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
   local caps=$1 screen=$2 cy=${3:-} identity=${4:-}
   local styled=0 cursor=0 has_identity=0 kv plain
@@ -1200,6 +1318,10 @@ EOF
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
   fi
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  if fm_composer_screen_is_gated "$plain"; then
+    printf 'gated'
+    return 0
+  fi
   _fm_composer_scan_screen "$plain" "$cy"
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.

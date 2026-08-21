@@ -2757,9 +2757,12 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # footer may supply the same generating signal because live Claude never leaves
 # idle. The policy is fm_composer_queued_enter_verdict; this adapter only
 # supplies the busy primitive.
-# Echoes empty|pending|unknown|send-failed, a subset of the proof-carrying
-# submit vocabulary. Empty means confirmed submitted for every backend; how
-# each backend confirms it is an internal decision.
+# Echoes empty|pending|unknown|send-failed|gated|not-accepted, a subset of the
+# proof-carrying submit vocabulary. Empty means confirmed submitted for every
+# backend; how each backend confirms it is an internal decision. gated and
+# not-accepted are pre-Enter refusals from bin/fm-composer-lib.sh: the pane
+# was a modal, or the payload's tail never appeared in the composer, so Enter
+# is not sent.
 #
 # fm_backend_herdr_queued_enter_busy: delivery-busy for the shared queued-Enter
 # conversion. Native agent_status=working is generating; blocked is not (a
@@ -2782,10 +2785,21 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
 
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
+  before=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES") \
+    || { printf 'unknown'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_ACCEPT_LINES") \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   raw_status=$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")
   baseline=$(fm_backend_herdr_classify_submit_agent_status "$raw_status")
   confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")

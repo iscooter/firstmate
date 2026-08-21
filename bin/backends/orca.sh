@@ -276,10 +276,21 @@ fm_backend_orca_send_key() {  # <terminal-id> <key>
 # slash-command popup placeholder fill gets the required second Enter without
 # duplicating text.
 fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sleep> <settle>
-  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
+  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 before after verdict
   fm_backend_orca_tool_check || { printf 'send-failed'; return 0; }
+  before=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_ACCEPT_LINES") \
+    || { printf 'unknown'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   fm_backend_orca_send_literal "$terminal" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_ACCEPT_LINES") \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$before"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   fm_composer_submit_retry_core fm_backend_orca_send_key fm_backend_orca_composer_state \
     "$terminal" "$retries" "$sleep_s"
 }

@@ -42,10 +42,20 @@ case "${1:-}" in
     fi
     cat "$COMPOSER" 2>/dev/null; exit 0 ;;
   send-keys)
-    shift; is_enter=0
+    shift; is_enter=0; lit=0; text=
     while [ "$#" -gt 0 ]; do
-      case "$1" in -t) shift ;; -l) ;; Enter) is_enter=1 ;; esac; shift
+      case "$1" in
+        -t) shift 2; continue ;;
+        -l) lit=1; shift; text=${1:-}; shift; continue ;;
+        Enter) is_enter=1; shift; continue ;;
+        *) shift ;;
+      esac
     done
+    if [ "$lit" = 1 ] && [ -n "$text" ]; then
+      # Keep the unbounded composer shape this file uses for unknown/unsafe
+      # cases; a short box around typed text classifies pending-unproven.
+      printf '│ > %s\n' "$text" > "$COMPOSER"
+    fi
     if [ "$is_enter" = 1 ]; then
       [ -z "${FM_FAKE_SENT:-}" ] || printf 'Enter\n' >> "$FM_FAKE_SENT"
       if [ -n "${FM_FAKE_SWALLOW:-}" ] && [ -f "$FM_FAKE_SWALLOW" ]; then

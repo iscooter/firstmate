@@ -557,7 +557,12 @@ fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expe
   after=${after//[$' \t\r\n\v\f']/}
   [ -n "$text" ] || return 1
   expected=$before$text
-  [ "$after" = "$expected" ]
+  [ "$after" = "$expected" ] && return 0
+  # Typing often replaces a placeholder rather than appending to it. The
+  # selected composer still has to carry the payload tail, which is the same
+  # proof pre-Enter already required of the full screen, scoped to composer
+  # content so a clock tick plus furniture cannot confirm delivery.
+  fm_composer_screen_has_payload_tail "$after" "$text"
 }
 
 # fm_backend_zellij_send_text_submit: type <text> into <target> once (raw,
@@ -568,13 +573,28 @@ fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expe
 # empty composer confirms delivery - a pane that merely CHANGED does not, so
 # the old heuristic's false "delivery confirmed" cannot recur.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after screen verdict
+  screen=$(fm_backend_zellij_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
+    || {
+      fm_backend_zellij_target_ready "$target" "$expected_label" || { printf 'send-failed'; return 0; }
+      printf 'unknown'
+      return 0
+    }
+  if ! fm_composer_pre_type_ok "$screen"; then
+    return 0
+  fi
   before=$(fm_backend_zellij_composer_content "$target" "$expected_label") \
     || { printf 'send-failed'; return 0; }
   fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(fm_backend_zellij_capture "$target" "$FM_COMPOSER_ACCEPT_LINES" "$expected_label") \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_pre_enter_verdict "$after" "$text" "$screen"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   fm_backend_zellij_composer_observed_append "$target" "$before" "$text" "$expected_label" \
-    || { printf 'send-failed'; return 0; }
+    || { printf 'not-accepted'; return 0; }
   fm_composer_submit_retry_core fm_backend_zellij_send_key fm_backend_zellij_composer_state \
     "$target" "$retries" "$sleep_s" "$expected_label"
 }

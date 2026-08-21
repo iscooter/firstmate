@@ -41,7 +41,8 @@ set -u
 LOG="${FM_HERDR_LOG:?}"
 RESP="${FM_HERDR_RESPONSES:?}"
 COUNT_FILE="$RESP/.count"
-next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+SEND_FILE="$RESP/.last-send"
+ENTER_FILE="$RESP/.entered"
 {
   printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
   for a in "$@"; do printf '\x1f%s' "$a"; done
@@ -51,6 +52,31 @@ if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS
   printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
   exit 0
 fi
+if [ "${1:-}" = pane ] && [ "${2:-}" = send-text ]; then
+  printf '%s' "${4:-}" > "$SEND_FILE"
+fi
+if [ "${1:-}" = pane ] && [ "${2:-}" = send-keys ]; then
+  case "${4:-}" in enter|Enter) : > "$ENTER_FILE" ;; esac
+fi
+# Pre-Enter accept-check pane reads must not consume the numbered agent-get
+# sequence. After the first Enter, numbered pane-read fixtures resume so
+# composer_state tests keep their scripted screens. A scripted .exit still
+# consumes the slot so unreadable-pane tests fail closed.
+if [ "${1:-}" = pane ] && [ "${2:-}" = read ] && [ ! -f "$ENTER_FILE" ]; then
+  next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+  if { [ -f "$RESP/$next.out" ] && ! grep -q '^{' "$RESP/$next.out" 2>/dev/null; } \
+     || [ -f "$RESP/$next.exit" ]; then
+    :
+  else
+    if [ -f "$SEND_FILE" ]; then
+      printf '❯ %s\n' "$(cat "$SEND_FILE")"
+    else
+      printf '❯ \n'
+    fi
+    exit 0
+  fi
+fi
+next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 n=$next
 echo "$n" > "$COUNT_FILE"
 if [ -f "$RESP/$n.exit" ]; then
@@ -3040,6 +3066,7 @@ test_composer_state_unknown_on_capture_failure() {
   local dir log resp fb out status
   dir="$TMP_ROOT/composer-capture-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '1\n' > "$resp/1.exit"
+  printf '1\n' > "$resp/2.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
@@ -3425,8 +3452,48 @@ test_send_text_submit_detects_landed_send() {
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''hello captain' "send_text_submit did not type the literal text first"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should not need a second Enter for a plain message with no popup, sent $enter_count Enter(s)"
-  [ "$(grep -c $'\x1f''pane'$'\x1f''read' "$log")" -eq 0 ] || fail "send_text_submit must never read the composer/pane content for confirmation anymore"
-  pass "fm_backend_herdr_send_text_submit: reports 'empty' once agent_status reports working after one Enter, without ever reading the composer"
+  [ "$(grep -c $'\x1f''pane'$'\x1f''read' "$log")" -ge 2 ] || fail "send_text_submit must read the pane for the pre-Enter tail-anchor proof"
+  grep -E $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log" >/dev/null \
+    || fail "a landed send must still submit Enter after the accept check"
+  pass "fm_backend_herdr_send_text_submit: reports 'empty' once agent_status reports working after one Enter, after proving the payload tail is in the composer"
+}
+
+test_send_text_submit_refuses_gated_trust_dialog_without_enter() {
+  local dir log resp fb out enter_count
+  dir="$TMP_ROOT/submit-gated"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  cat > "$resp/1.out" <<'EOF'
+ Accessing workspace:
+ Quick safety check: Is this a project you created or one you trust?
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+ Enter to confirm · Esc to cancel
+EOF
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "please handle item 2" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = gated ] || fail "a trust-dialog pane must refuse with gated, got '$out'"
+  grep $'\x1f''pane'$'\x1f''send-text' "$log" >/dev/null \
+    && fail "a gated pane must not receive typed payload"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log" || true)
+  [ "$enter_count" -eq 0 ] || fail "a gated pane must never receive Enter, sent $enter_count"
+  pass "fm_backend_herdr_send_text_submit: a Claude trust dialog is gated and receives neither payload nor Enter"
+}
+
+test_send_text_submit_refuses_when_payload_tail_absent() {
+  local dir log resp fb out enter_count
+  dir="$TMP_ROOT/submit-not-accepted"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 1: pre-type empty composer. 2: send-text (silent). 3: post-type still empty
+  # so the pane swallowed the payload. Non-JSON so the fakebin consumes them as
+  # pane reads instead of echoing the last send-text.
+  printf '❯ \n' > "$resp/1.out"
+  printf '❯ \n' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "please handle item 2" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = not-accepted ] || fail "a swallowed send must be not-accepted, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log" || true)
+  [ "$enter_count" -eq 0 ] || fail "missing tail must not send Enter, sent $enter_count"
+  pass "fm_backend_herdr_send_text_submit: payload tail absent after typing is not-accepted and sends no Enter"
 }
 
 test_send_text_submit_detects_swallowed_enter() {
@@ -3700,8 +3767,8 @@ test_send_text_submit_confirms_despite_codex_idle_tip_composer() {
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should confirm via agent_status alone even for a harness whose idle composer shows dynamic tip text, got '$out'"
-  [ "$(grep -c $'\x1f''pane'$'\x1f''read' "$log")" -eq 0 ] || fail "send_text_submit must never call 'pane read' - a codex-style dynamic idle-tip composer can never mislead a confirmation path that does not read it"
-  pass "fm_backend_herdr_send_text_submit: confirms submission via native agent-state alone, immune to a codex-style dynamic idle-tip composer that would have misread as 'pending' under the old composer-based confirmation"
+  [ "$(grep -c $'\x1f''pane'$'\x1f''read' "$log")" -ge 2 ] || fail "send_text_submit must read the pane for the tail-anchor proof even when native state confirms delivery"
+  pass "fm_backend_herdr_send_text_submit: confirms submission via native agent-state after the payload tail is proven present, so a codex-style idle tip cannot manufacture a false success"
 }
 
 # Companion regression for the pre-injection empty-box guard itself
@@ -3762,7 +3829,8 @@ test_send_text_submit_slow_transition_within_one_enter_needs_no_extra_enter() {
 test_send_text_submit_send_failed() {
   local dir log resp fb out
   dir="$TMP_ROOT/submit-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '1\n' > "$resp/1.exit"
+  printf '❯ \n' > "$resp/1.out"
+  printf '1\n' > "$resp/2.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
@@ -4542,6 +4610,8 @@ test_wait_for_working_returns_idle_when_never_busy_but_readable
 test_wait_for_working_returns_unknown_when_never_readable
 test_wait_for_working_treats_blocked_as_submit_active
 test_send_text_submit_detects_landed_send
+test_send_text_submit_refuses_gated_trust_dialog_without_enter
+test_send_text_submit_refuses_when_payload_tail_absent
 test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_confirms_blocked_after_enter

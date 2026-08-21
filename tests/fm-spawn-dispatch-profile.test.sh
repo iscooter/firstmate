@@ -43,6 +43,12 @@ case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
+  capture-pane)
+    if [ -n "${FM_FAKE_CAPTURE_FILE:-}" ] && [ -f "$FM_FAKE_CAPTURE_FILE" ]; then
+      cat "$FM_FAKE_CAPTURE_FILE"
+    fi
+    exit 0
+    ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
@@ -826,6 +832,44 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
   pass "active crew-dispatch profile does not block secondmate launches"
 }
 
+test_claude_gated_trust_dialog_fails_spawn_loudly() {
+  local rec id out status dialog
+  id=claude-trust-dialog-z9
+  rec=$(make_spawn_case claude-trust-dialog claude "$id")
+  read_case_record "$rec"
+  dialog="$CASE_DIR/trust-dialog.txt"
+  cat > "$dialog" <<'EOF'
+ Accessing workspace:
+
+ /private/tmp/.../fresh-home-D
+
+ Quick safety check: Is this a project you created or
+ one you trust? (Like your own code, a well-known
+ open source project, or work from your team). If
+ not, take a moment to review what's in this folder
+ first.
+
+ Claude Code'll be able to read, edit, and execute
+ files here.
+
+ Security guide
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+EOF
+  status=0
+  out=$(FM_FAKE_CAPTURE_FILE="$dialog" FM_CLAUDE_READY_POLLS=2 FM_CLAUDE_POLL_INTERVAL=0 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR") || status=$?
+  [ "$status" -ne 0 ] || fail "claude spawn parked on a trust dialog must not succeed"
+  assert_contains "$out" "gated launch dialog" \
+    "claude spawn on a trust dialog must fail loudly naming the gated pane"
+  assert_grep 'failed: claude is parked on a gated launch dialog' "$HOME_DIR/state/$id.status" \
+    "claude spawn on a trust dialog must leave a supervisor-visible failure"
+  pass "fm-spawn: claude parked on a workspace-trust dialog fails the spawn instead of returning a healthy-idle route"
+}
+
 test_no_profile_keeps_claude_profile_defaults
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
@@ -857,5 +901,6 @@ test_claude_forwards_firstmate_config_dir_when_set
 test_claude_omits_config_dir_prefix_when_unset
 test_non_claude_harness_ignores_config_dir
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_claude_gated_trust_dialog_fails_spawn_loudly
 
 echo "# all fm-spawn-dispatch-profile tests passed"
