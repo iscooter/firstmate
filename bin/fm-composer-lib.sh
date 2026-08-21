@@ -1274,7 +1274,7 @@ fm_composer_pre_type_ok() {  # <screen>
 # not send Enter on a nonzero return: a modal that swallowed the keystrokes
 # treats Enter as "confirm", which is the false-delivery hole this proof closes.
 fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
-  local after=$1 text=$2 before=${3:-} after_norm before_norm
+  local after=$1 text=$2 before=${3:-} after_content before_content after_norm before_norm caps
   if fm_composer_screen_is_gated "$after"; then
     printf 'gated'
     return 1
@@ -1283,9 +1283,18 @@ fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
     printf 'not-accepted'
     return 1
   fi
+  caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  after_content=$(fm_composer_extract_selected_content "$caps" "$after") || {
+    printf 'not-accepted'
+    return 1
+  }
   if [ -n "$before" ]; then
-    after_norm=$after
-    before_norm=$before
+    before_content=$(fm_composer_extract_selected_content "$caps" "$before") || {
+      printf 'not-accepted'
+      return 1
+    }
+    after_norm=$after_content
+    before_norm=$before_content
     fm_composer_normalize_anchor_var after_norm
     fm_composer_normalize_anchor_var before_norm
     if [ "$after_norm" = "$before_norm" ]; then
@@ -1293,7 +1302,7 @@ fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen]
       return 1
     fi
   fi
-  if fm_composer_screen_has_payload_tail "$after" "$text"; then
+  if fm_composer_screen_has_payload_tail "$after_content" "$text"; then
     printf 'accepted'
     return 0
   fi

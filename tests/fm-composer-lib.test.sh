@@ -747,8 +747,20 @@ test_pre_enter_refuses_missing_tail() {
   pass "fm_composer_pre_enter_verdict: missing tail is not-accepted"
 }
 
+test_pre_enter_ignores_transcript_tail_and_footer_changes() {
+  local before after out payload
+  payload='please handle item 2 TAILTOKEN-7Q4Z'
+  before=$'please handle item 2 TAILTOKEN-7Q4Z\n\n❯ \n\nstatus: idle'
+  after=$'please handle item 2 TAILTOKEN-7Q4Z\n\n❯ \n\nstatus: checking'
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before") || true
+  [ "$out" = not-accepted ] \
+    || fail "a transcript tail plus unrelated footer change must not prove composer acceptance, got '$out'"
+  pass "fm_composer_pre_enter_verdict: transcript tails and footer changes cannot prove acceptance"
+}
+
 test_queued_enter_verdict_does_not_convert_gated
 test_trust_dialog_classifies_gated_not_pending
 test_pre_enter_refuses_unchanged_dialog_screen
 test_pre_enter_accepts_payload_tail_and_wrapped_anchor
 test_pre_enter_refuses_missing_tail
+test_pre_enter_ignores_transcript_tail_and_footer_changes
