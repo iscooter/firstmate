@@ -1196,7 +1196,7 @@ test_failed_send_discards_undelivered_expectation() {
 }
 
 test_full_request_body_is_stored_and_recovered_whole() {
-  local home state corr rec body_path recovered hook_log summary payload
+  local home state corr rec body_path recovered hook_log summary payload recovery_lock
   home=$(setup_parent full-body)
   state="$home/state"
   hook_log="$TMP_ROOT/full-body-recovery.log"
@@ -1206,11 +1206,13 @@ test_full_request_body_is_stored_and_recovered_whole() {
   export FM_PENDING_REPLY_NOW=4000
   # shellcheck disable=SC2329
   recovery_hook() {
+    [ -d "$recovery_lock" ] || return 1
     printf '%s\t%s\n' "$1" "$2" >> "$hook_log"
   }
   export -f recovery_hook
   export FM_PENDING_REPLY_SEND_HOOK='recovery_hook'
   corr=$(fm_pending_reply_create "$home" "$state" "hibit" "$payload")
+  recovery_lock="$state/.pending-reply-$corr.lock"
   rec=$(fm_pending_reply_path "$state" "$corr")
   body_path=$(fm_pending_reply_request_path "$state" "$corr")
   [ -f "$body_path" ] || fail "create must write the sibling full-body file"

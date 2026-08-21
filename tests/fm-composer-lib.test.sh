@@ -766,7 +766,12 @@ test_pre_enter_refuses_rotating_ghost_equal_to_payload() {
   out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before" "$CAPS_STYLED") || true
   [ "$out" = not-accepted ] \
     || fail "a rotating dim suggestion equal to the payload must not prove acceptance, got '$out'"
-  pass "fm_composer_pre_enter_verdict: styled ghost text cannot prove payload acceptance"
+  before='❯ Try another task'
+  after='❯ please handle item 2'
+  out=$(fm_composer_pre_enter_verdict "$after" "$payload" "$before" "$CAPS_PLAIN") || true
+  [ "$out" = not-accepted ] \
+    || fail "a plain capture that cannot distinguish a rotating suggestion must fail closed, got '$out'"
+  pass "fm_composer_pre_enter_verdict: ghost text cannot prove payload acceptance"
 }
 
 test_queued_enter_verdict_does_not_convert_gated

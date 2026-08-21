@@ -834,6 +834,19 @@ fm_pending_reply_recovery_message() {  # <record-path>
 # (tests), otherwise invokes fm-send with FM_PENDING_REPLY_EXISTING_CORR so a
 # second expectation is not created.
 fm_pending_reply_send_recovery() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 lock rc=0
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  STATE=$state
+  lock="$state/.pending-reply-$corr.lock"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_pending_reply_send_recovery_locked "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_pending_reply_send_recovery_locked() {  # <state-dir> <corr_id>
   local state=$1 corr=$2
   local rec phase completed delivered attempted grace now age task_id msg parent_home send_status=0
   local sender_pid sender_identity

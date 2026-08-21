@@ -1275,7 +1275,7 @@ fm_composer_pre_type_ok() {  # <screen>
 # treats Enter as "confirm", which is the false-delivery hole this proof closes.
 fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen] [caps] [cursor-row] [identity]
   local after=$1 text=$2 before=${3:-} caps=${4:-} cy=${5:-} identity=${6:-}
-  local after_content before_content after_norm before_norm state
+  local after_content before_content after_norm before_norm state kv styled=0
   if fm_composer_screen_is_gated "$after"; then
     printf 'gated'
     return 1
@@ -1285,6 +1285,15 @@ fm_composer_pre_enter_verdict() {  # <after-screen> <text> [before-screen] [caps
     return 1
   fi
   [ -n "$caps" ] || caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_ACCEPT_LINES")
+  while IFS= read -r kv; do
+    [ "$kv" = styled=1 ] && styled=1
+  done <<EOF
+$caps
+EOF
+  if [ "$styled" != 1 ]; then
+    printf 'not-accepted'
+    return 1
+  fi
   state=$(fm_composer_classify_screen "$caps" "$after" "$cy" "$identity")
   case "$state" in
     pending|pending-unproven) ;;

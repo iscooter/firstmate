@@ -143,18 +143,18 @@ test_send_text_submit_verifies_empty_composer_after_enter() {
   printf '{"ok":true,"result":{"terminal":{"tail":["╭───╮","│ > │","╰───╯"]}}}\n' > "$RESP/5.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = empty ] || fail "send_text_submit should report empty on successful Orca send, got '$out'"
+  [ "$out" = not-accepted ] || fail "a plain Orca capture must fail closed before Enter, got '$out'"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f''hello captain'$'\x1f''--json' \
-    "send_text_submit did not type the text literally before Enter"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
-    "send_text_submit did not send Enter after typing"
+    "send_text_submit did not type the text literally before verification"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
+    "a plain capture must not authorize Enter"
   # The composer read is ONE bounded tail read: the old backward paging
   # (--cursor follow-ups on a limited page) is deleted, because paging into
   # scrollback is what let a stale startup banner compete with the live
   # composer (audit fm-composer-consolidation-audit-s1, section 3.3).
   assert_not_contains "$(cat "$LOG")" $'\x1f''--cursor'$'\x1f' \
     "the composer read must never page backward into scrollback"
-  pass "fm_backend_orca_send_text_submit: verifies empty composer after Enter with one bounded read"
+  pass "fm_backend_orca_send_text_submit: plain capture fails closed before Enter"
 }
 
 test_send_text_submit_borderless_claude_confirms() {
@@ -171,8 +171,8 @@ test_send_text_submit_borderless_claude_confirms() {
   printf '{"ok":true,"result":{"terminal":{"tail":["────────────────","❯","────────────────"]}}}\n' > "$RESP/5.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = empty ] || fail "a borderless claude composer should confirm the submit, got '$out'"
-  pass "fm_backend_orca_send_text_submit: a borderless claude composer confirms delivery (the missing #2029 shape)"
+  [ "$out" = not-accepted ] || fail "a plain borderless composer must fail closed before Enter, got '$out'"
+  pass "fm_backend_orca_send_text_submit: plain borderless composer cannot authorize Enter"
 }
 
 test_composer_state_stale_banner_never_wins() {
@@ -204,11 +204,11 @@ test_send_text_submit_retries_when_composer_stays_pending() {
   printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/7.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = empty ] || fail "send_text_submit should retry Enter until the composer clears, got '$out'"
+  [ "$out" = not-accepted ] || fail "a plain pending composer must fail closed before Enter, got '$out'"
   log_text=$(cat "$LOG")
-  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json')
-  [ "$enter_count" -eq 2 ] || fail "send_text_submit should send Enter twice when the first read is pending, got $enter_count"
-  pass "fm_backend_orca_send_text_submit: retries Enter while composer remains pending"
+  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json' || true)
+  [ "$enter_count" -eq 0 ] || fail "a plain pending composer must not authorize Enter, got $enter_count"
+  pass "fm_backend_orca_send_text_submit: plain pending composer cannot authorize Enter"
 }
 
 test_composer_state_popup_placeholder_fill_is_pending() {
@@ -247,11 +247,11 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   printf '{"ok":true,"result":{"terminal":{"tail":["  ╭────────────────────────╮","  │ ❯                      │","  ╰──────── Composer ──────╯","","  Shift+Tab:mode"]}}}\n' > "$RESP/7.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "/compact" 3 0.01 1.2' "$ROOT" )
-  [ "$out" = empty ] || fail "send_text_submit should eventually report empty once the SECOND Enter actually clears the composer, got '$out'"
+  [ "$out" = not-accepted ] || fail "a plain popup composer must fail closed before Enter, got '$out'"
   log_text=$(cat "$LOG")
-  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json')
-  [ "$enter_count" -eq 2 ] || fail "send_text_submit must send a SECOND Enter after the popup-placeholder fill still reads pending, got $enter_count Enter(s)"
-  pass "fm_backend_orca_send_text_submit: a slash-command popup's placeholder fill on Enter #1 does not short-circuit as submitted; Enter #2 is retried and lands it"
+  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json' || true)
+  [ "$enter_count" -eq 0 ] || fail "a plain popup composer must not authorize Enter, got $enter_count"
+  pass "fm_backend_orca_send_text_submit: plain popup composer cannot authorize Enter"
 }
 
 test_send_literal_constructs_non_enter_send() {
@@ -752,8 +752,8 @@ test_peek_send_and_crew_state_route_through_orca_meta() {
     "crew-state should not read the stable Orca alias as a terminal handle"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-io'$'\x1f''--text'$'\x1f''hello orca'$'\x1f''--json' \
     "send did not type through the recorded Orca terminal"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-io'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
-    "send did not submit Enter through the recorded Orca terminal"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-io'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
+    "a plain Orca capture must not authorize Enter"
   pass "fm-peek/fm-send/fm-crew-state route through backend=orca metadata"
 }
 
