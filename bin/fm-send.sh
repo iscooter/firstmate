@@ -177,18 +177,43 @@ case "${1:-}" in
       echo "error: '$2' is not a correlation id" >&2
       exit 2
     }
+    fm_send_typed_rec=$(fm_pending_reply_path "$STATE" "$2")
     if [ "$fm_send_typed_mode" = --typed-confirm ]; then
       fm_pending_reply_confirm_typed "$STATE" "$2" || {
         echo "error: no typed-unproven request '$2' in $STATE; it may already have been settled, delivered, or resolved" >&2
         exit 1
       }
-      echo "fm-send: request $2 recorded as delivered; its reply is expected again and durable recovery is re-armed" >&2
+      fm_send_typed_phase=$(fm_pending_reply_get "$fm_send_typed_rec" phase)
+      case "$fm_send_typed_phase" in
+        awaiting_report)
+          echo "fm-send: request $2 recorded as delivered; its reply is expected and durable recovery is armed" >&2
+          ;;
+        recovery_sent)
+          echo "fm-send: recovery attempt $2 recorded as delivered; the original request remains outstanding and its reply is expected" >&2
+          ;;
+        *)
+          echo "error: typed confirmation for '$2' reached unexpected phase '$fm_send_typed_phase'" >&2
+          exit 1
+          ;;
+      esac
     else
       fm_pending_reply_abandon_typed "$STATE" "$2" || {
         echo "error: no typed-unproven request '$2' in $STATE; it may already have been settled, delivered, or resolved" >&2
         exit 1
       }
-      echo "fm-send: request $2 abandoned; no reply is expected and nothing blocks the task's cleanup" >&2
+      fm_send_typed_phase=$(fm_pending_reply_get "$fm_send_typed_rec" phase)
+      case "$fm_send_typed_phase" in
+        '')
+          echo "fm-send: request $2 abandoned; no reply is expected and nothing blocks the task's cleanup" >&2
+          ;;
+        recovery_failed)
+          echo "fm-send: recovery attempt $2 abandoned; the original request remains outstanding and still expects a reply" >&2
+          ;;
+        *)
+          echo "error: typed abandonment for '$2' reached unexpected phase '$fm_send_typed_phase'" >&2
+          exit 1
+          ;;
+      esac
     fi
     exit 0
     ;;

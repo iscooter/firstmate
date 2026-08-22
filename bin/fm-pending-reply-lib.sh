@@ -196,19 +196,49 @@ fm_pending_reply_summarize() {  # <text>
   printf '%s' "$cleaned"
 }
 
-# Full request body for recovery. Prefers the sibling file; falls back to the
-# 117-character summary for records created before that file existed.
+# Full request body for recovery. Records with integrity metadata must match it;
+# legacy records without either metadata field fall back to their summary.
 fm_pending_reply_request_body() {  # <record-path>
-  local rec=$1 dir base body_path
+  local rec=$1 dir base body_path expected_bytes expected_hash actual_bytes actual_hash
   [ -f "$rec" ] || return 1
   dir=$(dirname "$rec")
   base=$(basename "$rec")
   body_path="$dir/${base}.request"
-  if [ -f "$body_path" ]; then
-    cat "$body_path"
+  expected_bytes=$(fm_pending_reply_get "$rec" request_bytes)
+  expected_hash=$(fm_pending_reply_get "$rec" request_sha256)
+  if [ -z "$expected_bytes" ] && [ -z "$expected_hash" ]; then
+    fm_pending_reply_get "$rec" request_summary
     return 0
   fi
-  fm_pending_reply_get "$rec" request_summary
+  case "$expected_bytes" in ''|*[!0-9]*)
+    printf 'pending-reply: invalid request body byte metadata for %s\n' "$base" >&2
+    return 1
+    ;;
+  esac
+  case "$expected_hash" in ''|*[!A-Fa-f0-9]*)
+    printf 'pending-reply: invalid request body digest metadata for %s\n' "$base" >&2
+    return 1
+    ;;
+  esac
+  [ "${#expected_hash}" -eq 64 ] || {
+    printf 'pending-reply: invalid request body digest metadata for %s\n' "$base" >&2
+    return 1
+  }
+  [ -f "$body_path" ] || {
+    printf 'pending-reply: request body missing for %s\n' "$base" >&2
+    return 1
+  }
+  actual_bytes=$(wc -c < "$body_path" | tr -d ' ')
+  [ "$actual_bytes" = "$expected_bytes" ] || {
+    printf 'pending-reply: request body byte count mismatch for %s\n' "$base" >&2
+    return 1
+  }
+  actual_hash=$(fm_pending_reply_sha256 < "$body_path") || return 1
+  [ "$actual_hash" = "$expected_hash" ] || {
+    printf 'pending-reply: request body digest mismatch for %s\n' "$base" >&2
+    return 1
+  }
+  cat "$body_path"
 }
 
 fm_pending_reply_get() {  # <record-path> <key>
@@ -969,11 +999,9 @@ fm_pending_reply_missing_report_is_evidence() {  # <state-dir> <task_id> <since-
 
 # Build the one automatic recovery message for a pending record.
 fm_pending_reply_recovery_message() {  # <record-path>
-  local rec=$1 corr summary body token msg
+  local rec=$1 corr body token msg
   corr=$(fm_pending_reply_get "$rec" corr_id)
-  summary=$(fm_pending_reply_get "$rec" request_summary)
-  body=$(fm_pending_reply_request_body "$rec")
-  [ -n "$body" ] || body=$summary
+  body=$(fm_pending_reply_request_body "$rec") || return 1
   token=$(fm_pending_reply_corr_token "$corr")
   msg="REPOST REQUIRED: previous marked request had no correlated parent report. Reply on the parent status channel including ${token}. Original request: ${body}"
   fm_pending_reply_embed_corr "$msg" "$corr" msg
@@ -1054,7 +1082,11 @@ _fm_pending_reply_prepare_recovery_locked() {  # <state-dir> <corr_id> <task-var
   prepared_task=$(fm_pending_reply_get "$rec" task_id)
   fm_pending_reply_missing_report_is_evidence "$state" "$prepared_task" "$completed" || return 1
   prepared_home=$(fm_pending_reply_get "$rec" parent_home)
-  prepared_message=$(fm_pending_reply_recovery_message "$rec")
+  if ! prepared_message=$(fm_pending_reply_recovery_message "$rec"); then
+    fm_pending_reply_set "$rec" recovery_delivery_outcome invalid-body || return 1
+    fm_pending_reply_set "$rec" phase recovery_failed || return 1
+    return 1
+  fi
   sender_pid=${BASHPID:-$$}
   sender_identity=$(fm_pending_reply_pid_identity "$sender_pid") || return 1
   fm_pending_reply_set "$rec" recovery_sender_pid "$sender_pid" || return 1
@@ -1161,8 +1193,11 @@ fm_pending_reply_escalation_payload() {  # <record-path> <kind>
       ;;
     recovery-delivery)
       outcome=$(fm_pending_reply_get "$rec" recovery_delivery_outcome)
-      case "$outcome" in failed|unknown) ;; *) return 1 ;; esac
-      token="pending-reply-recovery-delivery-$outcome"
+      case "$outcome" in
+        failed|unknown) token="pending-reply-recovery-delivery-$outcome" ;;
+        invalid-body) token=pending-reply-recovery-body-invalid ;;
+        *) return 1 ;;
+      esac
       ;;
     typed-unproven)
       printf 'pending-reply-typed-unproven: task=%s pending-reply-id=%s request=%s inspect the pane, then run fm-send.sh --typed-confirm %s after submitting the complete text, or fm-send.sh --typed-abandon %s after clearing it' \

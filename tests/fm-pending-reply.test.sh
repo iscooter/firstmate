@@ -200,8 +200,82 @@ test_recovery_transport_runs_outside_correlation_lock() {
   pass "recovery transport releases and reacquires its correlation lock around delivery"
 }
 
+test_recovery_validates_durable_request_integrity() {
+  local home state valid_corr valid_body captured corrupt_corr corrupt_err
+  local digest_corr digest_rec digest_err legacy_corr legacy_rec legacy_summary hook_log
+  home=$(setup_parent recovery-body-integrity)
+  state="$home/state"
+  hook_log="$TMP_ROOT/recovery-body-integrity.log"
+  export FM_PENDING_REPLY_NOW=2325 FM_TEST_RECOVERY_BODY_LOG="$hook_log"
+  recovery_body_hook() { printf '%s' "$2" > "$FM_TEST_RECOVERY_BODY_LOG"; }
+  export -f recovery_body_hook
+  export FM_PENDING_REPLY_SEND_HOOK=recovery_body_hook
+
+  valid_body=$'first exact line\nsecond exact line = intact'
+  valid_corr=$(fm_pending_reply_create "$home" "$state" hibit "$valid_body")
+  fm_pending_reply_mark_delivered "$state" "$valid_corr" || fail "valid body fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$valid_corr" request || fail "valid body fixture should complete turn"
+  : > "$hook_log"
+  fm_pending_reply_send_recovery "$state" "$valid_corr" || fail "valid durable body should recover"
+  captured=$(cat "$hook_log")
+  captured=${captured##*Original request: }
+  [ "$captured" = "$valid_body" ] || fail "valid recovery must preserve the exact durable request body"
+
+  corrupt_corr=$(fm_pending_reply_create "$home" "$state" hibit "complete durable request")
+  fm_pending_reply_mark_delivered "$state" "$corrupt_corr" || fail "truncated body fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$corrupt_corr" request || fail "truncated body fixture should complete turn"
+  printf 'truncated' > "$(fm_pending_reply_request_path "$state" "$corrupt_corr")"
+  : > "$hook_log"
+  corrupt_err="$TMP_ROOT/recovery-body-truncated.err"
+  if fm_pending_reply_send_recovery "$state" "$corrupt_corr" 2>"$corrupt_err"; then
+    fail "truncated durable body must refuse recovery"
+  fi
+  [ ! -s "$hook_log" ] || fail "truncated durable body must never reach recovery transport"
+  assert_contains "$(cat "$corrupt_err")" 'request body byte count mismatch' \
+    "truncated durable body must fail loudly"
+  [ "$(phase_of "$state" "$corrupt_corr")" = recovery_failed ] \
+    || fail "truncated durable body must enter a human-visible failure state"
+  fm_pending_reply_maybe_escalate "$state" "$corrupt_corr" || fail "invalid body failure should escalate"
+  grep -Fq "pending-reply-recovery-body-invalid:" "$state/hibit.status" \
+    || fail "invalid body escalation must name body integrity"
+
+  digest_corr=$(fm_pending_reply_create "$home" "$state" hibit "abcdef")
+  digest_rec=$(fm_pending_reply_path "$state" "$digest_corr")
+  fm_pending_reply_mark_delivered "$state" "$digest_corr" || fail "digest fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$digest_corr" request || fail "digest fixture should complete turn"
+  printf 'ghijkl' > "$(fm_pending_reply_request_path "$state" "$digest_corr")"
+  : > "$hook_log"
+  digest_err="$TMP_ROOT/recovery-body-digest.err"
+  if fm_pending_reply_send_recovery "$state" "$digest_corr" 2>"$digest_err"; then
+    fail "digest-mismatched durable body must refuse recovery"
+  fi
+  [ ! -s "$hook_log" ] || fail "digest-mismatched body must never reach recovery transport"
+  assert_contains "$(cat "$digest_err")" 'request body digest mismatch' \
+    "digest-mismatched durable body must fail loudly"
+  [ "$(fm_pending_reply_get "$digest_rec" recovery_delivery_outcome)" = invalid-body ] \
+    || fail "digest mismatch must retain its integrity outcome"
+
+  legacy_summary='legacy summary recovery payload'
+  legacy_corr=$(fm_pending_reply_create "$home" "$state" hibit "$legacy_summary")
+  legacy_rec=$(fm_pending_reply_path "$state" "$legacy_corr")
+  fm_pending_reply_set "$legacy_rec" request_bytes "" || fail "legacy byte metadata removal failed"
+  fm_pending_reply_set "$legacy_rec" request_sha256 "" || fail "legacy digest metadata removal failed"
+  rm -f "$(fm_pending_reply_request_path "$state" "$legacy_corr")"
+  fm_pending_reply_mark_delivered "$state" "$legacy_corr" || fail "legacy fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$legacy_corr" request || fail "legacy fixture should complete turn"
+  : > "$hook_log"
+  fm_pending_reply_send_recovery "$state" "$legacy_corr" || fail "legacy summary fallback should recover"
+  captured=$(cat "$hook_log")
+  captured=${captured##*Original request: }
+  [ "$captured" = "$legacy_summary" ] || fail "legacy recovery must use its stored summary"
+
+  unset FM_PENDING_REPLY_SEND_HOOK FM_TEST_RECOVERY_BODY_LOG
+  pass "recovery validates durable bodies and preserves legacy summary fallback"
+}
+
 test_recovery_typed_unproven_remains_operator_settleable() {
-  local home state confirm_corr confirm_rec abandon_corr abandon_rec status
+  local home state confirm_corr confirm_rec abandon_corr abandon_rec status confirm_err abandon_err
+  local ordinary_confirm ordinary_abandon ordinary_err
   home=$(setup_parent recovery-typed-unproven)
   state="$home/state"
   export FM_PENDING_REPLY_NOW=2350
@@ -227,10 +301,15 @@ test_recovery_typed_unproven_remains_operator_settleable() {
     "uncertain recovery must tell the operator how to confirm"
   assert_contains "$status" "fm-send.sh --typed-abandon $confirm_corr" \
     "uncertain recovery must tell the operator how to abandon"
-  fm_pending_reply_confirm_typed "$state" "$confirm_corr" \
-    || fail "uncertain recovery must remain confirmable"
+  confirm_err="$TMP_ROOT/recovery-typed-confirm.err"
+  env FM_ROOT_OVERRIDE="$home" FM_HOME="$home" "$SEND" --typed-confirm "$confirm_corr" \
+    >/dev/null 2>"$confirm_err" || fail "uncertain recovery must remain confirmable"
   [ "$(phase_of "$state" "$confirm_corr")" = recovery_sent ] \
     || fail "confirmed uncertain recovery must resume recovery tracking"
+  assert_contains "$(cat "$confirm_err")" "recovery attempt $confirm_corr recorded as delivered" \
+    "recovery confirmation must report its resulting recovery phase"
+  assert_contains "$(cat "$confirm_err")" 'original request remains outstanding' \
+    "recovery confirmation must not claim the original expectation was replaced"
 
   abandon_corr=$(fm_pending_reply_create "$home" "$state" hibit "abandon uncertain recovery")
   abandon_rec=$(fm_pending_reply_path "$state" "$abandon_corr")
@@ -241,11 +320,36 @@ test_recovery_typed_unproven_remains_operator_settleable() {
   fi
   [ "$(phase_of "$state" "$abandon_corr")" = typed_unproven ] \
     || fail "second recovery exit 4 must remain typed-unproven"
-  fm_pending_reply_abandon_typed "$state" "$abandon_corr" \
-    || fail "uncertain recovery must remain abandonable"
+  abandon_err="$TMP_ROOT/recovery-typed-abandon.err"
+  env FM_ROOT_OVERRIDE="$home" FM_HOME="$home" "$SEND" --typed-abandon "$abandon_corr" \
+    >/dev/null 2>"$abandon_err" || fail "uncertain recovery must remain abandonable"
   [ "$(phase_of "$state" "$abandon_corr")" = recovery_failed ] \
     || fail "cleared recovery text must record failed recovery delivery"
   [ -f "$abandon_rec" ] || fail "abandoned recovery must retain the original durable expectation"
+  assert_contains "$(cat "$abandon_err")" "recovery attempt $abandon_corr abandoned" \
+    "recovery abandonment must report its resulting recovery phase"
+  assert_contains "$(cat "$abandon_err")" 'original request remains outstanding and still expects a reply' \
+    "recovery abandonment must preserve the original expectation in its diagnostic"
+
+  ordinary_confirm=$(fm_pending_reply_create "$home" "$state" hibit "ordinary typed confirm")
+  fm_pending_reply_mark_typed_unproven "$state" "$ordinary_confirm" || fail "ordinary confirm fixture should become typed-unproven"
+  ordinary_err="$TMP_ROOT/ordinary-typed-confirm.err"
+  env FM_ROOT_OVERRIDE="$home" FM_HOME="$home" "$SEND" --typed-confirm "$ordinary_confirm" \
+    >/dev/null 2>"$ordinary_err" || fail "ordinary typed confirmation should succeed"
+  assert_contains "$(cat "$ordinary_err")" "request $ordinary_confirm recorded as delivered" \
+    "ordinary confirmation must keep its request-delivery wording"
+  [ "$(phase_of "$state" "$ordinary_confirm")" = awaiting_report ] \
+    || fail "ordinary confirmation must re-arm reply tracking"
+
+  ordinary_abandon=$(fm_pending_reply_create "$home" "$state" hibit "ordinary typed abandon")
+  fm_pending_reply_mark_typed_unproven "$state" "$ordinary_abandon" || fail "ordinary abandon fixture should become typed-unproven"
+  ordinary_err="$TMP_ROOT/ordinary-typed-abandon.err"
+  env FM_ROOT_OVERRIDE="$home" FM_HOME="$home" "$SEND" --typed-abandon "$ordinary_abandon" \
+    >/dev/null 2>"$ordinary_err" || fail "ordinary typed abandonment should succeed"
+  assert_contains "$(cat "$ordinary_err")" "request $ordinary_abandon abandoned; no reply is expected" \
+    "ordinary abandonment must keep its cleanup wording"
+  [ ! -f "$(fm_pending_reply_path "$state" "$ordinary_abandon")" ] \
+    || fail "ordinary abandonment must remove its expectation"
   unset FM_PENDING_REPLY_SEND_HOOK
   pass "recovery exit 4 remains distinct, visible, and operator-settleable"
 }
@@ -1482,6 +1586,7 @@ test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_transport_runs_outside_correlation_lock
+test_recovery_validates_durable_request_integrity
 test_recovery_typed_unproven_remains_operator_settleable
 test_recovery_attempt_is_never_reinjected
 test_recovery_reply_resolves_original
