@@ -701,10 +701,10 @@ test_send_tmux_contract() {
   # Case 2: plain text - typed literally exactly once, submitted with Enter,
   # confirmed against a fake composer that echoes the typed payload the way a
   # real pane does.
-  run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" hello captain
+  run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" hello captain unique payload
   rc=$?
   expect_code 0 "$rc" "fm-send plain text should confirm against the empty fake composer"
-  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''hello captain' \
+  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''hello captain unique payload' \
     "fm-send did not send the literal text with send-keys -l"
   [ "$(grep -c $'\x1f''-l'$'\x1f' "$log")" -eq 1 ] \
     || fail "fm-send must type the text exactly once (Enter-only retries, never a retype)"
@@ -713,10 +713,10 @@ test_send_tmux_contract() {
   # Case 3: a slash command still opens the popup-settle path (verified in
   # tests/fm-send-popup-settle.test.sh) and ends in the same command shape:
   # one literal type, then Enter.
-  run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" /some-skill
+  run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" "/some-skill unique payload marker"
   rc=$?
   expect_code 0 "$rc" "fm-send /skill should confirm against the empty fake composer"
-  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''/some-skill' \
+  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''/some-skill unique payload marker' \
     "fm-send /skill did not type the literal slash command"
   [ "$(grep -c $'\x1f''-l'$'\x1f' "$log")" -eq 1 ] \
     || fail "fm-send /skill must type the text exactly once"

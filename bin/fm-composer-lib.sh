@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/fm-composer-lib.sh - the ONE fleet-wide owner of composer classification:
 # every shape a verified harness draws, every glyph, every container proof, and
-# the empty|pending|pending-unproven|unknown|gated verdict, shared by every
+# the empty|pending|pending-unproven|unknown verdict, shared by every
 # session-provider adapter (tmux via bin/fm-tmux-lib.sh, and
 # bin/backends/{herdr,orca,cmux,zellij}.sh) and by fm-spawn.sh's kimi and
 # claude launch-readiness checks. Gated is a full-screen modal (a numbered
@@ -1196,6 +1196,7 @@ fm_composer_delta_rows() {  # <screen> -> normalized rows, one per line
 # collision, and 24 exact consecutive characters is far above where that is
 # plausible. 24 also leaves nine characters of margin against the narrowest
 # composer measured, rather than sitting one character from a refusal.
+FM_COMPOSER_DELTA_ANCHOR_MIN=24
 FM_COMPOSER_DELTA_ANCHOR_MAX=24
 
 # fm_composer_payload_tail_anchor: the payload's own TAIL in normalized form,
@@ -1206,7 +1207,7 @@ FM_COMPOSER_DELTA_ANCHOR_MAX=24
 fm_composer_payload_tail_anchor() {  # <text>
   local norm
   norm=$(fm_composer_delta_rows "$1" | LC_ALL=C tr -d '\n')
-  [ -n "$norm" ] || return 1
+  [ "${#norm}" -ge "$FM_COMPOSER_DELTA_ANCHOR_MIN" ] || return 1
   if [ "${#norm}" -le "$FM_COMPOSER_DELTA_ANCHOR_MAX" ]; then
     printf '%s' "$norm"
   else
@@ -1260,13 +1261,23 @@ fm_composer_count_occurrences() {  # <haystack> <needle>
 # The adapters share one rule for a capture that fails outright, because the
 # two sides mean different things: a failed BEFORE capture means nothing was
 # ever typed, so it reports `send-failed`; a failed AFTER capture means the
-# text WAS typed and cannot be proven, so it reports `unknown` - the verdict
-# that tells a caller never to retype.
+# text WAS typed and cannot be proven, so it reports `typed-unproven` - the
+# verdict that tells a caller never to retype.
 fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payload>
   local before=$1 after=$2 payload=$3
-  local anchor before_rows after_rows added before_joined after_joined cb ca rc=0
-  anchor=$(fm_composer_payload_tail_anchor "$payload") || {
+  local anchor payload_norm before_rows after_rows added before_joined after_joined cb ca rc=0
+  payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
+  if [ -z "$payload_norm" ]; then
     printf 'not-accepted:empty-payload'
+    return 1
+  fi
+  if [ "${#payload_norm}" -lt "$FM_COMPOSER_DELTA_ANCHOR_MIN" ]; then
+    printf 'not-accepted:payload-too-short(normalized=%s minimum=%s)' \
+      "${#payload_norm}" "$FM_COMPOSER_DELTA_ANCHOR_MIN"
+    return 1
+  fi
+  anchor=$(fm_composer_payload_tail_anchor "$payload") || {
+    printf 'not-accepted:invalid-anchor'
     return 1
   }
   before_rows=$(fm_composer_delta_rows "$before")
@@ -1371,10 +1382,6 @@ EOF
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
   fi
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
-  if fm_composer_screen_is_gated "$plain"; then
-    printf 'gated'
-    return 0
-  fi
   _fm_composer_scan_screen "$plain" "$cy"
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.

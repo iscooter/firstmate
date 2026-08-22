@@ -792,6 +792,17 @@ test_delta_verdict_fails_loud_on_an_empty_payload() {
 # The payload's own characters are normalized exactly like the screen's, so a
 # steer that itself contains box glyphs or exotic whitespace needs no special
 # case on either side.
+test_delta_verdict_refuses_short_collision_anchor() {
+  local verdict
+  verdict=$(fm_composer_delivery_delta_verdict '' '1' '1') \
+    && fail "a one-character screen collision must not prove payload delivery"
+  case "$verdict" in
+    not-accepted:payload-too-short\(normalized=1\ minimum=24\)) ;;
+    *) fail "a short payload must fail loudly with its uniqueness requirement, got '$verdict'" ;;
+  esac
+  pass "fm_composer_delivery_delta_verdict: short collision anchors are refused"
+}
+
 test_delta_verdict_normalizes_payload_and_screen_identically() {
   local payload verdict
   payload=$'draw │ a ╰ box ┃ then ▀ stop  END-MARK-3XQ'
@@ -799,6 +810,16 @@ test_delta_verdict_normalizes_payload_and_screen_identically() {
     $'╭──╮\n│ > draw a box then stop END-MARK-3XQ │\n╰──╯' "$payload") \
     || fail "a payload containing box glyphs must still match a rendered composer, got '$verdict'"
   pass "fm_composer_delivery_delta_verdict: box glyphs in the payload vanish on both sides, not just one"
+}
+
+test_post_enter_classifier_does_not_emit_pre_type_gate() {
+  local screen verdict
+  screen=$(cat "$DELTA_FIXTURES/claude-trust.before.plain")
+  fm_composer_screen_is_gated "$screen" || fail "the fixture must remain a recognized launch gate"
+  verdict=$(fm_composer_classify_screen "$CAPS_PLAIN" "$screen")
+  [ "$verdict" != gated ] \
+    || fail "the post-Enter classifier must not emit the pre-type gated verdict"
+  pass "fm_composer_classify_screen: pre-type gate verdicts do not leak post-Enter"
 }
 
 test_gate_ignores_transcript_signals_above_healthy_composer() {
@@ -815,6 +836,7 @@ test_gate_ignores_transcript_signals_above_healthy_composer() {
   pass "fm_composer_screen_is_gated: only current modal evidence is combined"
 }
 
+test_post_enter_classifier_does_not_emit_pre_type_gate
 test_gate_ignores_transcript_signals_above_healthy_composer
 test_delta_verdict_matches_real_harness_captures
 test_delta_verdict_survives_opencode_wrap_and_furniture
@@ -825,6 +847,7 @@ test_occurrence_count_refuses_when_novelty_is_defeated
 test_partial_write_of_the_payload_is_refused
 test_shape_free_echo_is_accepted
 test_delta_verdict_fails_loud_on_an_empty_payload
+test_delta_verdict_refuses_short_collision_anchor
 test_delta_verdict_normalizes_payload_and_screen_identically
 
 # A single-row composer that horizontally SCROLLS shows only a window of its

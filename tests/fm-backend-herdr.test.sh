@@ -3030,7 +3030,7 @@ test_composer_state_real_text_is_pending() {
 }
 
 # Live-verified incident (2026-07-03, real grok 0.2.82 on herdr, isolated
-# session): typing "/compact" opens the completion popup; the FIRST Enter
+# session): typing "/compact unique payload marker" opens the completion popup; the FIRST Enter
 # closes the popup and EXPANDS the composer into an argument-hint placeholder
 # ("/compact compaction instructions") rather than submitting - the composer
 # still reads real, unsubmitted text and the footer still shows "Enter:send".
@@ -3361,7 +3361,7 @@ test_send_text_submit_applies_herdr_minimum_confirm_budget() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/7.out"
@@ -3371,7 +3371,7 @@ test_send_text_submit_applies_herdr_minimum_confirm_budget() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/11.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_SLEEP_LOG="$sleep_log" FM_BACKEND_HERDR_SUBMIT_POLLS=6 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.6 \
-    bash -c '. "$0/bin/backends/herdr.sh"; sleep() { printf "sleep:%s\n" "$1" >> "$FM_SLEEP_LOG"; }; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.4 0' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; sleep() { printf "sleep:%s\n" "$1" >> "$FM_SLEEP_LOG"; }; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 1 0.4 0' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should catch a slow-but-valid transition inside the herdr minimum budget, got '$out'"
   sleeps=$(grep -c '^sleep:0.1200$' "$sleep_log")
   [ "$sleeps" -eq 5 ] || fail "a 0.4s caller budget should be expanded to five 0.1200s sleeps across the 0.6s herdr floor, got $sleeps; log: $(cat "$sleep_log")"
@@ -3431,7 +3431,7 @@ test_send_text_submit_detects_landed_send() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # 1: send-text (literal, no output)
   # 2: agent get - pre-Enter baseline is idle
   # 3: send-keys enter
@@ -3440,9 +3440,9 @@ test_send_text_submit_detects_landed_send() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should report empty (submitted) once agent_status reports working, got '$out'"
-  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''hello captain' "send_text_submit did not type the literal text first"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''hello captain unique payload' "send_text_submit did not type the literal text first"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should not need a second Enter for a plain message with no popup, sent $enter_count Enter(s)"
   # Herdr CONFIRMS a submit from native agent-state alone, never from pane
@@ -3463,19 +3463,19 @@ test_send_text_submit_detects_swallowed_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # Every post-Enter agent-get read still reports idle, and the composer still
   # holds the typed text: a genuine swallow, not a queued Enter.
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
-  printf '  \xe2\x9d\xaf hello captain\n' > "$resp/7.out"
+  printf '  \xe2\x9d\xaf hello captain unique payload\n' > "$resp/7.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/9.out"
-  printf '  \xe2\x9d\xaf hello captain\n' > "$resp/10.out"
+  printf '  \xe2\x9d\xaf hello captain unique payload\n' > "$resp/10.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/11.out"
   printf '  ready\n' > "$resp/12.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = pending ] || fail "send_text_submit should report pending once retries are exhausted with agent_status never going busy and the composer still holding the text, got '$out'"
   pass "fm_backend_herdr_send_text_submit: reports 'pending' when agent_status stays idle and the composer still holds unsent text after retried Enters (swallowed)"
 }
@@ -3492,8 +3492,8 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "/compact"
-  # 1: send-text "/compact"
+  herdr_submit_delta_screens "$resp" "/compact unique payload marker"
+  # 1: send-text "/compact unique payload marker"
   # 2: agent get - pre-Enter baseline is idle
   # 3: send-keys enter (#1) - closes the popup, fills the placeholder; no turn starts
   # 4: agent get -> idle (not submitted yet)
@@ -3501,13 +3501,13 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
   # 5: composer still holds the placeholder fill; native idle falls through
   #    to the shared composer verdict, which retries rather than confirming.
-  printf '  \xe2\x9d\xaf /compact\n' > "$resp/7.out"
+  printf '  \xe2\x9d\xaf /compact unique payload marker\n' > "$resp/7.out"
   # 6: send-keys enter (#2) - actually submits
   # 7: agent get -> working (submitted)
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/9.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "/compact" 3 0.01 1.2' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "/compact unique payload marker" 3 0.01 1.2' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should eventually report empty once the SECOND Enter actually starts a turn, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 2 ] || fail "send_text_submit must send a SECOND Enter after the popup-placeholder fill's agent_status still reads idle, got $enter_count Enter(s)"
@@ -3520,13 +3520,13 @@ test_send_text_submit_confirms_blocked_after_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "needs approval"
+  herdr_submit_delta_screens "$resp" "needs approval unique payload"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"blocked"}}}\n' > "$resp/5.out"
   printf '{"result":{"agent":{"agent_status":"blocked"}}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "needs approval" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "needs approval unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should treat a blocked state after Enter as a confirmed delivered prompt, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "blocked after Enter must not provoke a retry into the prompt, sent $enter_count Enter(s)"
@@ -3539,18 +3539,18 @@ test_send_text_submit_preexisting_working_pending_is_queued_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # Native working + proven pending after the retry budget is the OpenCode
   # busy-queued Enter: the harness accepted Enter and will submit when the
   # current turn ends. Footer transition is not the confirmation path here
   # because the pre-Enter native status is already working.
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/4.out"
   printf '  ready\n' > "$resp/5.out"
-  printf '  \xe2\x9d\xaf hello captain\n' > "$resp/7.out"
+  printf '  \xe2\x9d\xaf hello captain unique payload\n' > "$resp/7.out"
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 1 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "a working native baseline plus proven pending after retries is a queued Enter, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "queued-Enter confirmation should use the configured retry count, sent $enter_count Enter(s)"
@@ -3563,15 +3563,15 @@ test_send_text_submit_preexisting_working_does_not_confirm_failed_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/4.out"
   printf '  ready\n' > "$resp/5.out"
   printf '1\n' > "$resp/6.exit"
-  printf '  \xe2\x9d\xaf hello captain\n' > "$resp/7.out"
+  printf '  \xe2\x9d\xaf hello captain unique payload\n' > "$resp/7.out"
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 1 0.01 0.01' "$ROOT" )
   [ "$out" = send-failed ] || fail "a failed Enter must not be reported as queued delivery merely because native status is working, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should attempt the configured number of Enters, made $enter_count attempt(s)"
@@ -3584,13 +3584,13 @@ test_send_text_submit_idle_baseline_does_not_confirm_failed_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '1\n' > "$resp/5.exit"
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 1 0.01 0.01' "$ROOT" )
   [ "$out" = send-failed ] || fail "a failed Enter must not borrow a later native transition as delivery proof, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should attempt the configured number of Enters, made $enter_count attempt(s)"
@@ -3604,7 +3604,7 @@ test_send_text_submit_idle_native_empty_composer_confirms_delivery() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # Live Claude on Herdr 0.8.0 keeps agent_status idle through a landed turn.
   # After Enter, native wait_for_working stays idle and the composer clears:
   # that empty verdict is positive delivery, not a swallow.
@@ -3613,7 +3613,7 @@ test_send_text_submit_idle_native_empty_composer_confirms_delivery() {
   printf '  \xe2\x9d\xaf\n' > "$resp/7.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "an idle native status plus a cleared composer must confirm delivery, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "a cleared composer should confirm without extra Enters, sent $enter_count Enter(s)"
@@ -3626,17 +3626,17 @@ test_send_text_submit_idle_native_pending_plus_rendered_busy_is_queued() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # Idle native baseline (Claude never leaves idle) with proven pending text
   # and a generating footer after retries is a queued follow-up Enter.
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
-  printf '  \xe2\x9d\xaf hello captain\n' > "$resp/7.out"
+  printf '  \xe2\x9d\xaf hello captain unique payload\n' > "$resp/7.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/8.out"
   printf 'thinking... esc to interrupt\n' > "$resp/9.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 1 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "idle native + proven pending + rendered busy after retries is a queued Enter, got '$out'"
   pass "fm_backend_herdr_send_text_submit: idle native baseline uses a rendered busy footer to confirm a queued Enter"
 }
@@ -3711,7 +3711,7 @@ test_send_text_submit_confirms_never_idle_native_state_via_footer_transition() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # 1: send-text
   # 2: agent get - cursor is `blocked` even while idle, so the native
   #    idle-baseline path is unreachable and the composer branch runs
@@ -3727,7 +3727,7 @@ test_send_text_submit_confirms_never_idle_native_state_via_footer_transition() {
   herdr_cursor_midturn_plain > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "an idle-to-busy rendered-footer transition must confirm the submit for a harness whose native state never goes idle, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "a confirmed submit must not send a needless extra Enter, sent $enter_count Enter(s)"
@@ -3740,7 +3740,7 @@ test_send_text_submit_never_idle_native_state_keeps_pending_without_a_transition
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # The pane was ALREADY mid-turn before our Enter, so its busy footer is not
   # evidence about OUR message: the verdict must stay pending rather than
   # borrowing someone else's turn as proof of our delivery.
@@ -3750,7 +3750,7 @@ test_send_text_submit_never_idle_native_state_keeps_pending_without_a_transition
   herdr_cursor_midturn_ansi > "$resp/9.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = pending ] || fail "a pane already busy before our Enter must not confirm from that same busy footer, got '$out'"
   pass "fm_backend_herdr_send_text_submit: an already-busy footer baseline is never accepted as proof that this Enter landed"
 }
@@ -3768,12 +3768,12 @@ test_send_text_submit_confirms_despite_codex_idle_tip_composer() {
   # A codex-style composer whose idle tip ROTATES between the two captures, so
   # the pane churns for reasons that have nothing to do with our payload.
   printf '%s\n' '╭────────────────────────╮' '│ ❯ Tip: try /model      │' '╰────────────────────────╯' > "$resp/1.out"
-  printf '%s\n' '╭────────────────────────╮' '│ ❯ reply with just OK   │' '│ Tip: try /skills       │' '╰────────────────────────╯' > "$resp/3.out"
+  printf '%s\n' '╭────────────────────────╮' '│ ❯ reply with just OK unique payload   │' '│ Tip: try /skills       │' '╰────────────────────────╯' > "$resp/3.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should confirm via agent_status alone even for a harness whose idle composer shows dynamic tip text, got '$out'"
   # Confirmation still comes from native agent-state alone: no pane content is
   # read once Enter has been sent, so a dynamic idle tip cannot be mistaken for
@@ -3787,7 +3787,7 @@ test_send_text_submit_confirms_despite_codex_idle_tip_composer() {
   : > "$log"
   printf '%s\n' '╭────────────────────────╮' '│ ❯ Tip: try /skills     │' '╰────────────────────────╯' > "$resp/3.out"
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = not-accepted:absent-from-added ] \
     || fail "a rotating idle tip must not satisfy the pre-Enter proof on its own, got '$out'"
   assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' \
@@ -3839,7 +3839,7 @@ test_send_text_submit_slow_transition_within_one_enter_needs_no_extra_enter() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "hello captain"
+  herdr_submit_delta_screens "$resp" "hello captain unique payload"
   # 1: send-text  2: baseline idle  3: send-keys enter  4,5: agent get -> idle  6: agent get -> working
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
@@ -3847,7 +3847,7 @@ test_send_text_submit_slow_transition_within_one_enter_needs_no_extra_enter() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=3 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.03 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain unique payload" 3 0.03 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should confirm once a later sample within the SAME Enter attempt observes working, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "a slow (but within-budget) transition must not provoke a needless extra Enter, sent $enter_count Enter(s)"
@@ -3875,12 +3875,12 @@ test_send_text_submit_unknown_on_capture_failure() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "x"
+  herdr_submit_delta_screens "$resp" "capture failure payload marker"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '1\n' > "$resp/6.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "capture failure payload marker" 2 0.01 0.01' "$ROOT" )
   [ "$out" = unknown ] || fail "send_text_submit should report unknown when the post-Enter agent-get read fails, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must never retry past an unreadable target (that is a hard I/O failure, not a timing race), sent $enter_count Enter(s)"
@@ -3893,13 +3893,13 @@ test_send_text_submit_unknown_on_composer_capture_failure() {
   # 1 and 3 are the pre-Enter delta proof's two pane reads: the composer
   # before typing, then the same composer holding the payload. Every later
   # number is the native agent-state sequence this test actually pins.
-  herdr_submit_delta_screens "$resp" "x"
+  herdr_submit_delta_screens "$resp" "composer failure payload marker"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/6.out"
   printf '1\n' > "$resp/7.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "composer failure payload marker" 2 0.01 0.01' "$ROOT" )
   [ "$out" = unknown ] || fail "send_text_submit should report unknown when native status stays idle but the composer cannot be read, got '$out'"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must not retry Enter after composer verification becomes unreadable, sent $enter_count Enter(s)"

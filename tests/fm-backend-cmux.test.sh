@@ -863,15 +863,15 @@ test_send_text_submit_detects_landed_send() {
   cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯'
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  │ unique payload         │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should report empty (submitted) once the composer row reads empty, got '$out'"
-  assert_contains "$(cat "$dir/log")" $'\x1f''send'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''--'$'\x1f''hello captain' \
+  assert_contains "$(cat "$dir/log")" $'\x1f''send'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''--'$'\x1f''hello captain unique payload' \
     "send_text_submit did not type the literal text first"
   enter_count=$(grep -c $'\x1f''send-key'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''enter' "$dir/log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should not need a second Enter for a plain message with no popup, sent $enter_count Enter(s)"
@@ -885,16 +885,16 @@ test_send_text_submit_detects_swallowed_enter() {
   cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  │ unique payload         │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
+  cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  │ unique payload         │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   cmux_panes_response "$dir" 11 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 13 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 14 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
+  cmux_read_screen_response "$dir" 14 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  │ unique payload         │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = pending ] || fail "send_text_submit should report pending once retries are exhausted with no visible change, got '$out'"
   pass "fm_backend_cmux_send_text_submit: reports 'pending' when the composer never clears after retried Enters (swallowed)"
 }
@@ -908,7 +908,7 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   local dir fb out
   dir="$TMP_ROOT/submit-popup-autocomplete"; mkdir -p "$dir/responses"
   # 1-2: BEFORE capture - an empty composer
-  # 3-4: list-panes + send "/compact"
+  # 3-4: list-panes + send "/compact unique payload marker"
   # 5-6: AFTER capture - the typed slash command is now present
   # 7-8: list-panes + send-key enter (#1) - closes the popup, fills the placeholder
   # 9-10: composer_state - still reads real (pending) text
@@ -916,7 +916,7 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ /compact             │\n  ╰──────── Composer ──────╯'
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ /compact unique       │\n  │ payload marker         │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_read_screen_response "$dir" 10 $'  ╭──────────────────────────────────────╮\n  │ ❯ /compact compaction instructions   │\n  ╰──────────────── Composer ────────────╯\n\n  Enter:send'
@@ -927,7 +927,7 @@ test_send_text_submit_popup_autocomplete_requires_second_enter() {
   cmux_read_screen_response "$dir" 14 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "/compact" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "/compact unique payload marker" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should eventually report empty once the SECOND Enter actually clears the composer, got '$out'"
   enter_count=$(grep -c $'\x1f''send-key'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''enter' "$dir/log")
   [ "$enter_count" -eq 2 ] || fail "send_text_submit should have sent exactly 2 Enters (popup-close, then real submit), sent $enter_count"

@@ -38,7 +38,8 @@
 #   created_epoch=          when the expectation was created
 #   delivered_epoch=        when the marked request was confirmed delivered
 #                           (empty until delivery; delivery never resolves)
-#   phase=                  awaiting_report | delivery_unknown | recovery_sending |
+#   phase=                  awaiting_report | typed_unproven | delivery_unknown |
+#                           recovery_sending |
 #                           recovery_sent | recovery_failed | recovery_unknown |
 #                           escalated | resolved
 #   turn_seen_busy=         0|1 after delivery for the original request turn
@@ -362,7 +363,7 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   case "$phase" in
-    awaiting_report|delivery_unknown|recovery_sending|recovery_sent|escalated|resolved) ;;
+    awaiting_report|typed_unproven|delivery_unknown|recovery_sending|recovery_sent|escalated|resolved) ;;
     *) return 1 ;;
   esac
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
@@ -370,9 +371,11 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
     now=${confirmed_epoch:-$(fm_pending_reply_now)}
     fm_pending_reply_set "$rec" delivered_epoch "$now" || return 1
   fi
-  if [ "$phase" = delivery_unknown ]; then
-    fm_pending_reply_set "$rec" phase awaiting_report || return 1
-  fi
+  case "$phase" in
+    typed_unproven|delivery_unknown)
+      fm_pending_reply_set "$rec" phase awaiting_report || return 1
+      ;;
+  esac
   return 0
 }
 
@@ -416,6 +419,19 @@ fm_pending_reply_confirm_delivery() {  # <state-dir> <corr_id>
     return 0
   fi
   return 2
+}
+
+fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec phase delivered
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 1
+  phase=$(fm_pending_reply_get "$rec" phase)
+  case "$phase" in awaiting_report|typed_unproven) ;;
+    *) return 1 ;;
+  esac
+  delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
+  [ -z "$delivered" ] || return 1
+  fm_pending_reply_set "$rec" phase typed_unproven
 }
 
 # Preserve an expectation when a remote transport disconnect makes delivery

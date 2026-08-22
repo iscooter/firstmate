@@ -767,9 +767,9 @@ test_unmarked_captain_input_creates_no_expectation() {
   fm_write_meta "$home/state/build.meta" \
     "window=sess:fm-build" "worktree=$home/wt" "project=$home/p" \
     "harness=echo" "kind=ship" "mode=no-mistakes" "yolo=off"
-  run_send "$fb" "$home" "$log" "build" "captain says hello"; rc=$?
+  run_send "$fb" "$home" "$log" "build" "captain says hello unique payload"; rc=$?
   expect_code 0 "$rc" "unmarked crewmate send should succeed"
-  [ "$(cat "$log")" = "captain says hello" ] \
+  [ "$(cat "$log")" = "captain says hello unique payload" ] \
     || fail "crewmate send should stay unmarked"$'\n'"$(cat "$log" | od -An -c)"
   pending_count=$(find "$home/state/pending-replies" -type f 2>/dev/null | wc -l | tr -d ' ')
   [ "$pending_count" = 0 ] || fail "unmarked input must create no pending-reply records (got $pending_count)"

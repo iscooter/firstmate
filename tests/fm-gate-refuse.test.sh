@@ -258,25 +258,25 @@ test_send_refuses_and_admits() {
 
   # env-marker refuse.
   : > "$log"
-  out=$(run_send "$NORMAL_CWD" "$home" "$fakebin" "$log" fm-lane-ok "hello captain" NO_MISTAKES_GATE=1); rc=$?
+  out=$(run_send "$NORMAL_CWD" "$home" "$fakebin" "$log" fm-lane-ok "hello captain unique payload" NO_MISTAKES_GATE=1); rc=$?
   expect_code 3 "$rc" "send: NO_MISTAKES_GATE must refuse"
   assert_contains "$out" "$ENV_MSG" "send: env-marker refusal message"
   [ ! -s "$log" ] || fail "send: refused env-marker send still typed to the endpoint"$'\n'"$(cat "$log")"
 
   # path-backstop refuse (marker UNSET).
   : > "$log"
-  out=$(run_send "$GATE_WT" "$home" "$fakebin" "$log" fm-lane-ok "hello captain"); rc=$?
+  out=$(run_send "$GATE_WT" "$home" "$fakebin" "$log" fm-lane-ok "hello captain unique payload"); rc=$?
   expect_code 3 "$rc" "send: gate-worktree cwd must refuse with the marker unset"
   assert_contains "$out" "$PATH_MSG" "send: path-backstop refusal message"
   [ ! -s "$log" ] || fail "send: refused backstop send still typed to the endpoint"$'\n'"$(cat "$log")"
 
   # no-regression.
   : > "$log"
-  out=$(run_send "$NORMAL_CWD" "$home" "$fakebin" "$log" fm-lane-ok "hello captain"); rc=$?
+  out=$(run_send "$NORMAL_CWD" "$home" "$fakebin" "$log" fm-lane-ok "hello captain unique payload"); rc=$?
   expect_code 0 "$rc" "send: a normal session must still send"
   assert_not_contains "$out" "$ENV_MSG" "send: normal send must not print the gate refusal"
   assert_not_contains "$out" "$PATH_MSG" "send: normal send must not print the backstop refusal"
-  assert_contains "$(cat "$log")" "target=sess:fm-lane-ok literal=1 arg=hello captain" "send: normal send should type the text"
+  assert_contains "$(cat "$log")" "target=sess:fm-lane-ok literal=1 arg=hello captain unique payload" "send: normal send should type the text"
   pass "fm-send: refuses on marker and gate-worktree backstop; a normal steer is unaffected"
 }
 

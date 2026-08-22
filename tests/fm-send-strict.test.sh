@@ -122,10 +122,10 @@ test_exact_lane_id_send_still_works() {
   fm_write_meta "$home/state/mpf-lane-m8.meta" "window=sess:fm-mpf-lane-m8" "kind=ship"
 
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" mpf-lane-m8 "lost dispatch" >/dev/null 2>"$err"; rc=$?
+    "$SEND" mpf-lane-m8 "lost dispatch payload marker" >/dev/null 2>"$err"; rc=$?
   expect_code 0 "$rc" "exact task id send should succeed when metadata exists"
   got=$(cat "$log")
-  assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=1 arg=lost dispatch" "exact id should type literal text to the meta target"
+  assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=1 arg=lost dispatch payload marker" "exact id should type literal text to the meta target"
   assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=0 arg=Enter" "exact id should submit with Enter"
   pass "fm-send strict: exact task/lane ids resolve through home metadata"
 }
@@ -212,10 +212,10 @@ test_healthy_fm_id_send_still_works() {
   fm_write_meta "$home/state/lane-ok.meta" "window=sess:fm-lane-ok" "kind=ship" "harness=codex"
 
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" fm-lane-ok "hello captain" >/dev/null 2>"$err"; rc=$?
+    "$SEND" fm-lane-ok "hello captain unique payload" >/dev/null 2>"$err"; rc=$?
   expect_code 0 "$rc" "healthy fm-id send should succeed"
   got=$(cat "$log")
-  assert_contains "$got" "target=sess:fm-lane-ok literal=1 arg=hello captain" "healthy send should type literal text to the meta target"
+  assert_contains "$got" "target=sess:fm-lane-ok literal=1 arg=hello captain unique payload" "healthy send should type literal text to the meta target"
   assert_contains "$got" "target=sess:fm-lane-ok literal=0 arg=Enter" "healthy send should submit with Enter"
   assert_contains "$(cat "$err")" "requested message WILL still be sent" "fm-send guard banner should keep send-specific continuation wording"
   pass "fm-send strict: healthy fm-<id> sends still type once and submit"
@@ -273,10 +273,11 @@ test_gated_trust_dialog_is_refused_loud() {
 }
 
 test_after_type_capture_failure_refuses_without_retry() {
-  local dir fb home err log rc
+  local dir fb home err log rc rec
   dir="$TMP_ROOT/typed-unproven"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); home=$(setup_home typed-unproven); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
-  fm_write_meta "$home/state/lane.meta" "window=sess:fm-lane" "kind=ship" "harness=claude"
+  fm_write_meta "$home/state/lane.meta" \
+    "window=sess:fm-lane" "kind=secondmate" "mode=secondmate" "harness=claude" "home=$home"
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
     FM_FAKE_TMUX_AFTER_TYPE_CAPTURE_FAIL=1 \
     "$SEND" lane "typed but capture failed" >/dev/null 2>"$err"; rc=$?
@@ -287,7 +288,14 @@ test_after_type_capture_failure_refuses_without_retry() {
     fail "an unproven typed payload must never receive Enter"$'\n'"$(cat "$log")"
   fi
   [ "$(grep -c 'literal=1' "$log")" -eq 1 ] || fail "the payload must be typed exactly once"
-  pass "fm-send: after-type capture failure is distinct and never invites retry"
+  rec=$(find "$home/state/pending-replies" -maxdepth 1 -type f ! -name '.*' ! -name '*.request' | head -1)
+  [ -f "$rec" ] || fail "typed-unproven marked input must retain its pending-reply record"
+  [ "$(grep '^phase=' "$rec" | cut -d= -f2-)" = typed_unproven ] \
+    || fail "typed-unproven marked input must retain an explicit unresolved phase"
+  [ -f "$rec.request" ] || fail "typed-unproven marked input must retain its full recovery payload"
+  [ -z "$(grep '^delivered_epoch=' "$rec" | cut -d= -f2-)" ] \
+    || fail "typed-unproven input must not be marked delivered"
+  pass "fm-send: after-type capture failure preserves unresolved durable recovery"
 }
 
 test_missing_payload_tail_is_refused_and_closes_no_key() {
@@ -323,7 +331,7 @@ esac
 SH
   chmod +x "$fb/tmux"
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" labmate --resolve-key demo "please handle item 2" >/dev/null 2>"$err"; rc=$?
+    "$SEND" labmate --resolve-key demo "please handle item 2 safely" >/dev/null 2>"$err"; rc=$?
   [ "$rc" -ne 0 ] || fail "a swallowed payload must not exit 0"
   assert_contains "$(cat "$err")" "not accepted" "the diagnostic must name the missing tail"
   if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then

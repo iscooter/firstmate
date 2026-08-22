@@ -925,14 +925,14 @@ test_send_text_submit_detects_landed_send() {
   printf '%s' $'❯ ' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/6.out"
   zellij_pane_response "$dir" 7 7 3
   zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'hello captain\n❯ ' > "$dir/responses/10.out"
+  printf '%s' $'hello captain unique payload\n❯ ' > "$dir/responses/10.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 3 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should report empty once the composer positively classifies empty, got '$out'"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''paste' \
     "send_text_submit did not verify the pane before paste"
@@ -940,7 +940,7 @@ test_send_text_submit_detects_landed_send() {
     "send_text_submit did not verify the pane before capture"
   assert_contains "$(cat "$dir/log")" $'\x1f''dump-screen'$'\x1f''--pane-id'$'\x1f''7'$'\x1f''--ansi' \
     "send_text_submit did not read the composer through the styled dump"
-  assert_contains "$(cat "$dir/log")" $'\x1f''paste'$'\x1f''--pane-id'$'\x1f''7'$'\x1f''--'$'\x1f''hello captain' "send_text_submit did not type the literal text first"
+  assert_contains "$(cat "$dir/log")" $'\x1f''paste'$'\x1f''--pane-id'$'\x1f''7'$'\x1f''--'$'\x1f''hello captain unique payload' "send_text_submit did not type the literal text first"
   pass "fm_backend_zellij_send_text_submit: reports 'empty' once the composer classifies empty (submitted)"
 }
 
@@ -951,17 +951,17 @@ test_send_text_submit_detects_swallowed_enter() {
   printf '%s' $'❯ ' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/6.out"
   zellij_pane_response "$dir" 7 7 3
   zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/10.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/10.out"
   zellij_pane_response "$dir" 11 7 3
   zellij_pane_response "$dir" 13 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/14.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/14.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = pending ] || fail "send_text_submit should report pending once retries are exhausted with the text still in the composer, got '$out'"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''send-keys' \
     "send_text_submit did not verify the pane before send-keys"
@@ -981,17 +981,17 @@ test_send_text_submit_unrelated_change_is_not_delivery() {
   printf '%s' $'clock 11:59:59\n❯ ' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'clock 12:00:00\n❯ hello captain' > "$dir/responses/6.out"
+  printf '%s' $'clock 12:00:00\n❯ hello captain unique payload' > "$dir/responses/6.out"
   zellij_pane_response "$dir" 7 7 3
   zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'clock 12:00:01\n❯ hello captain' > "$dir/responses/10.out"
+  printf '%s' $'clock 12:00:01\n❯ hello captain unique payload' > "$dir/responses/10.out"
   zellij_pane_response "$dir" 11 7 3
   zellij_pane_response "$dir" 13 7 3
-  printf '%s' $'clock 12:00:02\n❯ hello captain' > "$dir/responses/14.out"
+  printf '%s' $'clock 12:00:02\n❯ hello captain unique payload' > "$dir/responses/14.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" != empty ] || fail "an unrelated pane change must never read as delivered (the content-diff false positive)"
   [ "$out" = pending ] || fail "the still-typed composer should classify pending, got '$out'"
   pass "fm_backend_zellij_send_text_submit: an unrelated pane change is not a delivery confirmation (false-positive regression)"
@@ -1008,7 +1008,7 @@ test_send_text_submit_rejects_unobserved_paste() {
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = not-accepted:absent-from-added ] \
     || fail "an unobserved paste must be refused by the shared delta proof, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
@@ -1020,14 +1020,14 @@ test_send_text_submit_rejects_transcript_echo_with_unrelated_draft() {
   local dir fb out
   dir="$TMP_ROOT/submit-transcript-echo"; mkdir -p "$dir/responses"
   zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'hello captain\n❯ unrelated draft' > "$dir/responses/2.out"
+  printf '%s' $'hello captain unique payload\n❯ unrelated draft' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'hello captain\n❯ unrelated draft' > "$dir/responses/6.out"
+  printf '%s' $'hello captain unique payload\n❯ unrelated draft' > "$dir/responses/6.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   # The stale transcript copy is present in BOTH captures, so it can neither be
   # an addition nor raise an occurrence count. Refusal here is now structural
   # rather than a consequence of scoping the read to a parsed composer region.
@@ -1042,14 +1042,14 @@ test_send_text_submit_rejects_existing_intended_text_after_noop_paste() {
   local dir fb out
   dir="$TMP_ROOT/submit-existing-text-noop"; mkdir -p "$dir/responses"
   zellij_pane_response "$dir" 1 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/2.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello captain' > "$dir/responses/6.out"
+  printf '%s' $'❯ hello captain unique payload' > "$dir/responses/6.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = not-accepted:absent-from-added ] \
     || fail "pre-existing intended text after a no-op paste must not prove typing, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
@@ -1069,8 +1069,10 @@ test_send_text_submit_rejects_furniture_match_after_noop_paste() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "high" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = not-accepted:absent-from-added ] \
-    || fail "footer furniture matching a short steer must not prove typing, got '$out'"
+  case "$out" in
+    not-accepted:payload-too-short*) ;;
+    *) fail "footer furniture matching a short steer must not prove typing, got '$out'" ;;
+  esac
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when only furniture matches the steer"
   pass "fm_backend_zellij_send_text_submit: unrelated drafts and furniture cannot prove typing"
@@ -1083,14 +1085,14 @@ test_send_text_submit_accepts_wrapped_boxed_text() {
   printf '%s' $'╭────────────────────╮\n│ > Type a message...│\n╰────────────────────╯' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'╭────────────────────╮\n│ > hello            │\n│ captain            │\n╰────────────────────╯' > "$dir/responses/6.out"
+  printf '%s' $'╭────────────────────────╮\n│ > hello captain        │\n│ unique payload         │\n╰────────────────────────╯' > "$dir/responses/6.out"
   zellij_pane_response "$dir" 7 7 3
   zellij_pane_response "$dir" 9 7 3
   printf '%s' $'╭────────────────────╮\n│ ❯                  │\n╰────────────────────╯' > "$dir/responses/10.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain unique payload" 2 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "wrapped text replacing a shell-prompt placeholder should be observed and submitted, got '$out'"
   assert_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should send Enter after observing wrapped boxed text"
@@ -1122,15 +1124,15 @@ test_send_text_submit_accepts_wrapped_bare_text() {
 test_send_text_submit_preserves_agent_glyph_within_wrapped_content() {
   local dir fb out text
   dir="$TMP_ROOT/submit-wrapped-agent-glyph"; mkdir -p "$dir/responses"
-  text='hello ❯ captain'
+  text='hello ❯ captain unique payload'
   zellij_pane_response "$dir" 1 7 3
   printf '%s' $'❯ ' > "$dir/responses/2.out"
   zellij_pane_response "$dir" 3 7 3
   zellij_pane_response "$dir" 5 7 3
-  printf '%s' $'❯ hello ❯\ncaptain' > "$dir/responses/6.out"
+  printf '%s' $'❯ hello ❯\ncaptain unique payload' > "$dir/responses/6.out"
   zellij_pane_response "$dir" 7 7 3
   zellij_pane_response "$dir" 9 7 3
-  printf '%s' $'hello ❯ captain\n❯ ' > "$dir/responses/10.out"
+  printf '%s' $'hello ❯ captain unique payload\n❯ ' > "$dir/responses/10.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \

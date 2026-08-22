@@ -66,7 +66,7 @@ run_send() {
   : > "$log"
   env "$@" PATH="$fb:$PATH" \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SLEEP_LOG="$log" \
-    "$SEND" "sess:win" "hello captain" 2>/dev/null
+    "$SEND" "sess:win" "hello captain unique payload" 2>/dev/null
 }
 
 test_default_send_pauses_one_second() {

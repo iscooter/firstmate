@@ -661,8 +661,8 @@ else
       exit 1
       ;;
     typed-unproven)
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      if [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_mark_typed_unproven "$STATE" "$PENDING_REPLY_CORR" || true
       fi
       echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh and submit Enter only if the complete text is still present." >&2
       exit 4
