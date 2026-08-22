@@ -2881,10 +2881,12 @@ if [ "$HARNESS" = kimi ]; then
     kimi_spawn_fail "kimi brief pointer could not be submitted"
     exit 1
   }
-  if [ "$KIMI_SUBMIT_VERDICT" = send-failed ]; then
-    kimi_spawn_fail "kimi brief pointer could not be submitted"
-    exit 1
-  fi
+  case "$KIMI_SUBMIT_VERDICT" in
+    send-failed|gated|typed-unproven|not-accepted|not-accepted:*)
+      kimi_spawn_fail "kimi brief pointer could not be submitted"
+      exit 1
+      ;;
+  esac
   if ! kimi_wait_for_delivery; then
     kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
     exit 1

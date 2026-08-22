@@ -51,6 +51,9 @@ fake_screen() {
     delivered)
       printf '✨ Read the brief at %s and follow it exactly.\\ncontext: 1%% (2k/256k)\\n╭────────────────────────────────╮\\n│ >                              │\\n╰────────────────────────────────╯\\n' "\$FM_FAKE_BRIEF_REAL"
       ;;
+    active-empty)
+      printf 'Working on an earlier turn\\ncontext: 1%% (2k/256k)\\n╭────────────────────────────────╮\\n│ >                              │\\n╰────────────────────────────────╯\\n'
+      ;;
     *)
       printf 'shell starting\\n\$ \\n'
       ;;
@@ -86,8 +89,12 @@ case "\${1:-}" in
           ;;
         *)
           printf '%s\\n' "\$literal" >> "\$FM_FAKE_POINTER_LOG"
-          fm_test_tmux_note_literal "\$literal"
-          printf 'pointer-typed\\n' > "\$FM_FAKE_KIMI_STATE"
+          if [ "\${FM_FAKE_KIMI_POINTER_SWALLOWED:-no}" = yes ]; then
+            printf 'active-empty\\n' > "\$FM_FAKE_KIMI_STATE"
+          else
+            fm_test_tmux_note_literal "\$literal"
+            printf 'pointer-typed\\n' > "\$FM_FAKE_KIMI_STATE"
+          fi
           ;;
       esac
       exit 0
@@ -99,6 +106,9 @@ case "\${1:-}" in
             if [ "\${FM_FAKE_KIMI_READY:-yes}" = yes ]; then
               printf 'ready\\n' > "\$FM_FAKE_KIMI_STATE"
             fi
+            ;;
+          active-empty)
+            : > "\$FM_FAKE_KIMI_POINTER_ENTERED"
             ;;
           pointer-typed)
             if [ "\${FM_FAKE_KIMI_DELIVERY:-yes}" = yes ]; then
@@ -176,6 +186,8 @@ run_spawn() {
     FM_FAKE_KIMI_STATE="$case_dir/kimi.state" \
     FM_FAKE_KIMI_SWALLOWED="$case_dir/kimi.swallowed" \
     FM_FAKE_KIMI_SWALLOW_FIRST="${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" \
+    FM_FAKE_KIMI_POINTER_SWALLOWED="${FM_FAKE_KIMI_POINTER_SWALLOWED:-no}" \
+    FM_FAKE_KIMI_POINTER_ENTERED="$case_dir/pointer.entered" \
     FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
     FM_FAKE_BRIEF_REAL="$(cd "$home/data/$id" && pwd -P)/brief.md" \
     FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
@@ -501,6 +513,24 @@ test_kimi_unconfirmed_delivery_fails_loudly() {
   pass "fm-spawn: kimi treats a silent pointer drop as a failed spawn"
 }
 
+test_kimi_pre_enter_refusal_cannot_become_delivery() {
+  local id rec out rc
+  id=kimi-pre-enter-refusal-z6
+  rec=$(make_spawn_case pre-enter-refusal "$id")
+  read_spawn_record "$rec"
+  rc=0
+  out=$(FM_FAKE_KIMI_POINTER_SWALLOWED=yes run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "kimi spawn accepted a pre-Enter pointer refusal"
+  assert_contains "$out" "kimi brief pointer could not be submitted" \
+    "pre-Enter pointer refusal lacked a loud submission diagnostic"
+  assert_grep 'failed: kimi brief pointer could not be submitted' "$HOME_DIR/state/$id.status" \
+    "pre-Enter pointer refusal did not leave a supervisor-visible failure"
+  assert_absent "$CASE_DIR/pointer.entered" \
+    "the refused pointer received Enter before delivery polling"
+  pass "fm-spawn: kimi rejects pre-Enter pointer refusals before delivery polling"
+}
+
 test_kimi_readiness_gate_precedes_pointer() {
   local id rec out rc
   id=kimi-not-ready-z3
@@ -683,6 +713,7 @@ test_kimi_teardown_removes_pointer_and_registry_token
 test_kimi_falls_back_to_expanded_home_binary
 test_kimi_missing_binary_refuses_before_pane_creation
 test_kimi_unconfirmed_delivery_fails_loudly
+test_kimi_pre_enter_refusal_cannot_become_delivery
 test_kimi_readiness_gate_precedes_pointer
 test_kimi_detection_uses_ancestry_after_markers
 test_kimi_session_lock_identity
