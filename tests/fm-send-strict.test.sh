@@ -64,6 +64,10 @@ case "${1:-}" in
     printf '%%1\n'
     exit 0 ;;
   capture-pane)
+    if [ -n "${FM_FAKE_TMUX_AFTER_TYPE_CAPTURE_FAIL:-}" ] \
+      && [ -f "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}" ]; then
+      exit 1
+    fi
     if [ -n "${FM_FAKE_TMUX_GATED:-}" ]; then
       printf '%s\n' \
         ' Quick safety check: Is this a project you created or' \
@@ -268,6 +272,24 @@ test_gated_trust_dialog_is_refused_loud() {
   pass "fm-send: a Claude trust-dialog pane is refused loudly, with no Enter and no delivered marker"
 }
 
+test_after_type_capture_failure_refuses_without_retry() {
+  local dir fb home err log rc
+  dir="$TMP_ROOT/typed-unproven"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home typed-unproven); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  fm_write_meta "$home/state/lane.meta" "window=sess:fm-lane" "kind=ship" "harness=claude"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_FAKE_TMUX_AFTER_TYPE_CAPTURE_FAIL=1 \
+    "$SEND" lane "typed but capture failed" >/dev/null 2>"$err"; rc=$?
+  expect_code 4 "$rc" "an after-type capture failure must preserve its no-Enter stage"
+  assert_contains "$(cat "$err")" "text was typed" "the diagnostic must preserve the typed stage"
+  assert_contains "$(cat "$err")" "Do not retype or resend" "the diagnostic must prevent an unsafe retry"
+  if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then
+    fail "an unproven typed payload must never receive Enter"$'\n'"$(cat "$log")"
+  fi
+  [ "$(grep -c 'literal=1' "$log")" -eq 1 ] || fail "the payload must be typed exactly once"
+  pass "fm-send: after-type capture failure is distinct and never invites retry"
+}
+
 test_missing_payload_tail_is_refused_and_closes_no_key() {
   local dir fb home err log rc status
   dir="$TMP_ROOT/not-accepted"; mkdir -p "$dir"
@@ -384,5 +406,6 @@ test_unmatched_single_colon_target_must_exist
 test_fm_prefixed_herdr_session_is_an_explicit_target
 test_healthy_fm_id_send_still_works
 test_gated_trust_dialog_is_refused_loud
+test_after_type_capture_failure_refuses_without_retry
 test_missing_payload_tail_is_refused_and_closes_no_key
 test_shape_free_echo_still_confirms_delivery

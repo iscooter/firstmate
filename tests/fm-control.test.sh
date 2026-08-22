@@ -128,6 +128,9 @@ case "\${1:-}" in
     done
     printf 'fakepane\\n'; exit 0 ;;
   capture-pane)
+    if [ -n "\${FM_FAKE_CAPTURE_FAIL_AFTER_TYPE:-}" ] && [ -s "\$D/literal" ]; then
+      exit 1
+    fi
     if [ -f "\$D/pane" ]; then cat "\$D/pane"; else fm_test_tmux_echo_capture; fi
     exit 0 ;;
   list-windows)
@@ -200,6 +203,7 @@ run_control() {
     FM_FAKE_MUSE_LOG="${FM_FAKE_MUSE_LOG:-}" \
     FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK="${FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK:-}" \
     FM_FAKE_INTERRUPT_STOPS_AGENT="${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" \
+    FM_FAKE_CAPTURE_FAIL_AFTER_TYPE="${FM_FAKE_CAPTURE_FAIL_AFTER_TYPE:-}" \
     "$CONTROL" "$@" 2>&1
 }
 
@@ -830,6 +834,18 @@ test_exit_rejects_pre_enter_refusals_immediately() {
   [ "$(literals "$dir")" = /exit ] || fail "the delta refusal should occur after typing the exit command"
   if grep -qx Enter "$dir/fake/keys"; then
     fail "an unproven exit must send no Enter"
+  fi
+
+  dir=$(new_case exit-typed-unproven)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  out=$(FM_FAKE_CAPTURE_FAIL_AFTER_TYPE=1 run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an after-type capture failure should fail before Enter"$'\n'"$out"
+  assert_contains "$out" "(typed-unproven)" "the exit refusal should preserve the typed stage"
+  assert_not_contains "$out" "exit-command=delivered" "typed but unproven input must not be reported delivered"
+  [ "$(literals "$dir")" = /exit ] || fail "the exit command should have been typed exactly once"
+  if grep -qx Enter "$dir/fake/keys"; then
+    fail "typed but unproven exit input must send no Enter"
   fi
   pass "fm-control exit: pre-Enter refusals fail immediately"
 }

@@ -295,7 +295,7 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   fi
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  after=$(fm_tmux_composer_capture "$target") || { printf 'unknown'; return 0; }
+  after=$(fm_tmux_composer_capture "$target") || { printf 'typed-unproven'; return 0; }
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
     printf '%s' "$verdict"
     return 0

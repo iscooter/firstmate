@@ -803,7 +803,7 @@ test_delta_verdict_normalizes_payload_and_screen_identically() {
 
 test_gate_ignores_transcript_signals_above_healthy_composer() {
   local screen verdict
-  screen=$'Normal response:\n1. Keep the first item\n2. Keep the second item\nPress Enter to continue\n\n\n❯'
+  screen=$'Normal response:\n1. Keep the first item\n2. Keep the second item\nPress Enter to continue · Esc to cancel\n❯'
   if fm_composer_screen_is_gated "$screen"; then
     fail "numbered response text above a healthy composer must not be combined into a gate"
   fi

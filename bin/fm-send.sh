@@ -24,8 +24,9 @@
 # 3 = the text was typed into the live endpoint and Enter was sent, but the
 # submit read-back stayed unconfirmed (verify the pane before any resend, and
 # never re-type blindly; a marked request's pending-reply expectation stays
-# armed because this outcome is not a proven failure); any other nonzero = the
-# send failed and nothing may be assumed delivered. Verdicts `gated` and
+# armed because this outcome is not a proven failure); 4 = text was typed but
+# no Enter was sent because the pre-Enter proof capture failed; any other
+# nonzero = the send failed and nothing may be assumed delivered. Verdicts `gated` and
 # `not-accepted:<why>` are pre-Enter refusals - the pane was a modal dialog, or
 # the payload never became newly present after typing - so Enter was never
 # sent. There is deliberately no bypass for either: a harness whose composer
@@ -601,6 +602,9 @@ else
       verdict=empty
       send_rc=0
       REMOTE_DELIVERY_NOTICE=1
+    elif [ "$send_rc" -eq 4 ]; then
+      verdict=typed-unproven
+      send_rc=0
     else
       verdict=send-failed
       [ -z "$remote_err" ] || printf '%s\n' "$remote_err" >&2
@@ -655,6 +659,13 @@ else
       fi
       echo "error: text not sent to $T: pane is a gated modal dialog, not an accepting composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Inspect with fm-peek.sh; a workspace-trust, update, or similar confirm prompt must be cleared before any steer." >&2
       exit 1
+      ;;
+    typed-unproven)
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      fi
+      echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh and submit Enter only if the complete text is still present." >&2
+      exit 4
       ;;
     not-accepted|not-accepted:*)
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then

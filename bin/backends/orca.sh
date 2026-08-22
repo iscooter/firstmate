@@ -286,7 +286,7 @@ fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sl
   fm_backend_orca_send_literal "$terminal" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
   after=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_DELTA_LINES") \
-    || { printf 'unknown'; return 0; }
+    || { printf 'typed-unproven'; return 0; }
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
     printf '%s' "$verdict"
     return 0

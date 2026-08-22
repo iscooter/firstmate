@@ -2802,7 +2802,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   fi
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  after=$(fm_backend_herdr_delta_capture "$target") || { printf 'unknown'; return 0; }
+  after=$(fm_backend_herdr_delta_capture "$target") || { printf 'typed-unproven'; return 0; }
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
     printf '%s' "$verdict"
     return 0

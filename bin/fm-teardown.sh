@@ -310,7 +310,10 @@ remote_pending_replies_cleanup() {
     for rec in ./*; do
       [ -e "$rec" ] || [ -L "$rec" ] || continue
       [ -f "$rec" ] && [ ! -L "$rec" ] || exit 1
-      [ "$(fm_meta_get "$rec" task_id)" = "$ID" ] && rm -f -- "$rec"
+      case "$rec" in *.request) continue ;; esac
+      if [ "$(fm_meta_get "$rec" task_id)" = "$ID" ]; then
+        rm -f -- "$rec" "$rec.request"
+      fi
     done
   )
 }
@@ -350,6 +353,7 @@ remote_secondmate_teardown() {
   if [ "$FORCE" != --force ] && [ -d "$STATE/pending-replies" ]; then
     for rec in "$STATE/pending-replies"/*; do
       [ -f "$rec" ] || continue
+      case "$rec" in *.request) continue ;; esac
       task_id=$(fm_meta_get "$rec" task_id)
       [ "$task_id" = "$ID" ] || continue
       phase=$(fm_meta_get "$rec" phase)

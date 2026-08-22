@@ -1292,7 +1292,7 @@ fm_pending_reply_tick() {  # <state-dir>
   for rec in "$dir"/*; do
     [ -f "$rec" ] || continue
     case "$(basename "$rec")" in
-      .*) continue ;;
+      .*|*.request) continue ;;
     esac
     corr=$(fm_pending_reply_get "$rec" corr_id)
     [ -n "$corr" ] || corr=$(basename "$rec")
@@ -1398,6 +1398,9 @@ fm_pending_reply_task_has_open() {  # <state-dir> <task_id>
   [ -d "$dir" ] || return 1
   for rec in "$dir"/*; do
     [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in
+      .*|*.request) continue ;;
+    esac
     tid=$(fm_pending_reply_get "$rec" task_id)
     [ "$tid" = "$task_id" ] || continue
     phase=$(fm_pending_reply_get "$rec" phase)

@@ -1296,12 +1296,10 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payloa
 }
 
 # fm_composer_screen_is_gated: 0 when <screen> is a modal/gated prompt rather
-# than an accepting composer. Evidence is limited to the current trailing panel
-# and needs at least two independent signals, including modal context, so no
-# single vendor string is load-bearing: a numbered selection list, an
-# Enter-to-confirm affordance, a trust/directory prompt, a safety check, or an
-# Esc-to-cancel affordance. Claude Code's workspace-trust dialog trips several
-# of these at once; a bare `❯` composer trips none.
+# than an accepting composer. A positive verdict requires a coherent current
+# modal: trust/safety context, two nearby numbered choices, and a trailing
+# confirm affordance in that order. Claude Code's workspace-trust dialog trips
+# all of these at once; a bare `❯` composer trips none.
 #
 # This scorer is deliberately NOT load-bearing for send safety - a modal that
 # swallows the payload produces no delta, so the delta proof above refuses it
@@ -1314,30 +1312,33 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payloa
 # diff against. That demotion is the point: the tuning target is specificity
 # only, not sensitivity.
 fm_composer_screen_is_gated() {  # <screen>
-  local plain panel n=0 confirm=0 trust=0 safety=0 esc=0 score=0
+  local plain
   plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
-  panel=$(printf '%s\n' "$plain" | awk '
-    /^[[:space:]]*$/ { blanks++; next }
+  printf '%s\n' "$plain" | awk '
     {
-      if (blanks >= 2) panel = ""
-      else if (blanks == 1 && panel != "") panel = panel "\n"
-      blanks = 0
-      panel = panel (panel == "" ? "" : "\n") $0
+      lower = tolower($0)
+      if (context && $0 ~ /^[[:space:]]*([^[:space:][:digit:]]+[[:space:]]+)?[0-9]+\.[[:space:]]+[^[:space:]]/) {
+        if (!first_choice) first_choice = NR
+        if (!last_choice || NR - last_choice <= 2) choices++
+        else { first_choice = NR; choices = 1 }
+        last_choice = NR
+      } else if (lower ~ /trust this folder|trust the contents of this directory|do you trust|quick safety check|[[:space:]]safety check/) {
+        context = NR
+        choices = 0
+        first_choice = 0
+        last_choice = 0
+        affordance = 0
+      } else if (context && choices >= 2 && lower ~ /enter to confirm|press enter to (confirm|continue|accept)|esc to cancel/) {
+        affordance = NR
+      }
+      if ($0 !~ /^[[:space:]]*$/) last_content = NR
     }
-    END { print panel }
-  ')
-  n=$(printf '%s\n' "$panel" | grep -cE '^[[:space:]]*(❯|›|⟩|→|>)?[[:space:]]*[0-9]+\.[[:space:]]+[^[:space:]]' || true)
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  printf '%s\n' "$panel" | grep -qiE 'enter to confirm|press enter to (confirm|continue|accept)' && confirm=1
-  printf '%s\n' "$panel" | grep -qiE 'trust this folder|trust the contents of this directory|do you trust' && trust=1
-  printf '%s\n' "$panel" | grep -qiE 'quick safety check|[[:space:]]safety check' && safety=1
-  printf '%s\n' "$panel" | grep -qiE 'esc to cancel' && esc=1
-  [ "$n" -ge 2 ] && score=$((score + 1))
-  [ "$confirm" = 1 ] && score=$((score + 1))
-  [ "$trust" = 1 ] && score=$((score + 1))
-  [ "$safety" = 1 ] && score=$((score + 1))
-  [ "$esc" = 1 ] && score=$((score + 1))
-  [ "$score" -ge 2 ] && { [ "$trust" = 1 ] || [ "$safety" = 1 ] || [ "$esc" = 1 ]; }
+    END {
+      exit !(context && choices >= 2 && first_choice > context \
+        && first_choice - context <= 12 && affordance > last_choice \
+        && affordance - last_choice <= 3 && affordance == last_content)
+    }
+  '
 }
 
 # fm_composer_pre_type_ok: refuse to type at all when the pane is a gated

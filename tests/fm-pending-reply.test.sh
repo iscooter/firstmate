@@ -1184,6 +1184,25 @@ test_failed_send_discards_undelivered_expectation() {
   pass "failed transport discards undelivered expectation only"
 }
 
+test_request_body_is_never_scanned_as_a_record() {
+  local home state corr rec body before after
+  home=$(setup_parent request-not-record)
+  state="$home/state"
+  body=$'task_id=ghost-task\nphase=awaiting_report\ndelivered_epoch=1'
+  corr=$(fm_pending_reply_create "$home" "$state" real-task "$body") \
+    || fail "pending reply with record-shaped body should be created"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" phase resolved || fail "test record should resolve"
+  before=$(fm_pending_reply_request_body "$rec")
+  if fm_pending_reply_task_has_open "$state" ghost-task; then
+    fail "record-shaped request content must not create a pending task"
+  fi
+  fm_pending_reply_tick "$state" || fail "pending reply tick should ignore request bodies"
+  after=$(fm_pending_reply_request_body "$rec")
+  [ "$after" = "$before" ] || fail "pending reply tick must not mutate request content"
+  pass "pending request bodies are never scanned as records"
+}
+
 test_create_falls_back_to_sha256sum() {
   local home state expected
   home=$(setup_parent sha256sum-fallback)
@@ -1210,6 +1229,7 @@ test_create_falls_back_to_sha256sum() {
 
 # --- run --------------------------------------------------------------------
 
+test_request_body_is_never_scanned_as_a_record
 test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
