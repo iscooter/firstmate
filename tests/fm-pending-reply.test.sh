@@ -1214,6 +1214,51 @@ test_typed_unproven_escalates_through_real_scan() {
   pass "typed-unproven records escalate once through the real scan and remain settleable"
 }
 
+test_typed_abandon_serializes_with_watcher_escalation() {
+  local home state corr rec entered release abandon_pid escalation_pid i watcher_finished=0
+  home=$(setup_parent typed-abandon-race)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=9050
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "typed request racing escalation")
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_mark_typed_unproven "$state" "$corr" || fail "typed race fixture should persist"
+  fm_pending_reply_set "$rec" grace_secs 0 || fail "typed race fixture grace should persist"
+  entered="$TMP_ROOT/typed-abandon-race.entered"
+  release="$TMP_ROOT/typed-abandon-race.release"
+  rm -f "$entered" "$release"
+
+  (
+    fm_pending_reply_settle_typed_escalation() {
+      : > "$entered"
+      while [ ! -f "$release" ]; do sleep 0.01; done
+      return 0
+    }
+    fm_pending_reply_abandon_typed "$state" "$corr"
+  ) &
+  abandon_pid=$!
+  for i in $(seq 1 100); do
+    [ -f "$entered" ] && break
+    sleep 0.01
+  done
+  [ -f "$entered" ] || fail "abandon did not reach its serialized transition"
+
+  fm_pending_reply_maybe_escalate "$state" "$corr" >/dev/null 2>&1 &
+  escalation_pid=$!
+  sleep 0.1
+  kill -0 "$escalation_pid" 2>/dev/null || watcher_finished=1
+  : > "$release"
+  wait "$abandon_pid" || fail "serialized typed abandonment failed"
+  wait "$escalation_pid" 2>/dev/null || true
+
+  [ "$watcher_finished" -eq 0 ] \
+    || fail "watcher escalation did not wait for typed abandonment"
+  [ ! -f "$rec" ] || fail "typed abandonment must remove its record"
+  if [ -f "$state/hibit.status" ] && grep -Fq "blocked [key=pending-reply-$corr]:" "$state/hibit.status"; then
+    fail "watcher published a blocker after typed abandonment"
+  fi
+  pass "typed abandonment serializes with watcher escalation"
+}
+
 test_failed_send_discards_undelivered_expectation() {
   local home state corr
   home=$(setup_parent discard)
@@ -1314,6 +1359,7 @@ test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_typed_unproven_escalates_through_real_scan
+test_typed_abandon_serializes_with_watcher_escalation
 test_failed_send_discards_undelivered_expectation
 test_remote_repost_waits_for_the_reply_channel
 test_mirrored_remote_reply_never_triggers_a_repost

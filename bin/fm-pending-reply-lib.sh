@@ -402,25 +402,40 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
 # The operator verified the complete text was present and submitted it: the
 # request is delivered, so the ordinary reply-and-recovery machinery resumes.
 fm_pending_reply_confirm_typed() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase
-  rec=$(fm_pending_reply_path "$state" "$corr")
-  [ -f "$rec" ] || return 1
-  phase=$(fm_pending_reply_get "$rec" phase)
-  [ "$phase" = typed_unproven ] || return 1
-  fm_pending_reply_settle_typed_escalation "$state" "$corr" confirmed || return 1
-  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_settle_typed "$1" "$2" confirmed
 }
 
 # The operator verified the text never landed, or cleared it: nothing was
 # delivered, so the expectation is dropped and its stored body is purged.
 fm_pending_reply_abandon_typed() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase
+  fm_pending_reply_settle_typed "$1" "$2" abandoned
+}
+
+fm_pending_reply_settle_typed() {  # <state-dir> <corr_id> <confirmed|abandoned>
+  local state=$1 corr=$2 lock rc=0
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  STATE=$state
+  lock="$state/.pending-reply-$corr.lock"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_pending_reply_settle_typed_locked "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_pending_reply_settle_typed_locked() {  # <state-dir> <corr_id> <confirmed|abandoned>
+  local state=$1 corr=$2 outcome=$3 rec phase
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   [ "$phase" = typed_unproven ] || return 1
-  fm_pending_reply_settle_typed_escalation "$state" "$corr" abandoned || return 1
-  fm_pending_reply_discard_undelivered "$state" "$corr"
+  fm_pending_reply_settle_typed_escalation "$state" "$corr" "$outcome" || return 1
+  case "$outcome" in
+    confirmed) fm_pending_reply_mark_delivered "$state" "$corr" ;;
+    abandoned) fm_pending_reply_discard_undelivered "$state" "$corr" ;;
+    *) return 1 ;;
+  esac
 }
 
 fm_pending_reply_delivery_confirmation_path() {  # <state-dir> <corr_id>
