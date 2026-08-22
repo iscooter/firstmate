@@ -933,6 +933,10 @@ sim_capture() {
     printf '%s\n%s\n%s' "$SIM_SCROLLBACK" 'unrelated token counter: 2' "> $(cat "$SIM_FILE")"
     return 0
   fi
+  if [ "$SIM_MODE" = erase-final-greedy-churn ] && [ ! -s "$SIM_FILE" ] && [ "$SIM_ERASE_CALLS" -gt 0 ]; then
+    printf '%s\n%s\n%s' "$SIM_SCROLLBACK" '2' '2'
+    return 0
+  fi
   printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
 }
 sim_literal() {
@@ -952,6 +956,7 @@ sim_erase() {
     erase-fails) return 1 ;;
     erase-noop) return 0 ;;
     erase-greedy|erase-greedy-churn|erase-final-greedy) take=2 ;;
+    erase-final-greedy-churn) [ "${#cur}" -ne 2 ] || take=2 ;;
     erase-last-noop) [ "${#cur}" -ne 2 ] || return 0 ;;
   esac
   keep=$((${#cur} - take))
@@ -1149,6 +1154,16 @@ test_core_two_checkpoint_erase_refuses_both_directions() {
     "the secondary barrier must name a greedy final erase"
   assert_contains "$err" "$wire" \
     "the greedy final-erase warning must name the exact wire"
+
+  sim_reset erase-final-greedy-churn
+  verdict=$(sim_send '2' 2>"$SIM_DIR/final-over-churn.err") \
+    && fail "payload churn must not hide a final erase that empties the composer"
+  err=$(cat "$SIM_DIR/final-over-churn.err")
+  [ "$verdict" = typed-unproven ] \
+    || fail "a churn-hidden final over-erase must report typed-unproven, got '$verdict'"
+  assert_contains "$err" 'envelope-final-erase-consumed-payload(checkpoint=1 after-erase=2)' \
+    "payload-count equality must name the churn-hidden final over-erase"
+  [ ! -s "$SIM_FILE" ] || fail "the churn regression must actually empty the simulated composer"
   pass "fm_composer_typed_delivery_core: erase checkpoints and final payload retention refuse every measured direction"
 }
 

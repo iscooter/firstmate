@@ -1440,11 +1440,12 @@ fm_composer_envelope_prepare() {  # <payload> <before>
 # be absent before typing. Its presence after N-1 erase keys measures this
 # send's erase granularity: those keys removed exactly N-1 characters, neither
 # more nor fewer. Its required absence after the final key proves no suffix
-# residue remains. A secondary payload-count barrier catches a plain final key
-# that consumes a payload character.
+# residue remains. A secondary payload-count barrier requires the payload count
+# to remain equal from the stage-one capture to the capture after the final key,
+# catching a plain final key that consumes a payload character.
 #
 # There is no independent positive proof that the payload survived the final
-# key if screen churn exactly offsets that count drop. Such a shape-free proof
+# key if screen churn exactly offsets that count change. Such a shape-free proof
 # cannot exist once the correct erase leaves only the low-entropy payload and
 # no high-entropy artifact to anchor on; obtaining one would require reading the
 # drawn composer shape, which this delta design deliberately replaced.
@@ -1490,7 +1491,7 @@ fm_composer_envelope_payload_retained_verdict() {  # <checkpoint> <after-erased>
   erased_joined=$(fm_composer_delta_rows "$erased" | LC_ALL=C tr -d '\n')
   before_count=$(fm_composer_count_occurrences "$checkpoint_joined" "$payload_norm")
   after_count=$(fm_composer_count_occurrences "$erased_joined" "$payload_norm")
-  if [ "$after_count" -lt "$before_count" ]; then
+  if [ "$after_count" -ne "$before_count" ]; then
     printf 'not-accepted:envelope-final-erase-consumed-payload(checkpoint=%s after-erase=%s)' \
       "$before_count" "$after_count"
     return 1

@@ -200,6 +200,56 @@ test_recovery_transport_runs_outside_correlation_lock() {
   pass "recovery transport releases and reacquires its correlation lock around delivery"
 }
 
+test_recovery_typed_unproven_remains_operator_settleable() {
+  local home state confirm_corr confirm_rec abandon_corr abandon_rec status
+  home=$(setup_parent recovery-typed-unproven)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=2350
+  recovery_typed_unproven_hook() { return 4; }
+  export -f recovery_typed_unproven_hook
+  export FM_PENDING_REPLY_SEND_HOOK=recovery_typed_unproven_hook
+
+  confirm_corr=$(fm_pending_reply_create "$home" "$state" hibit "confirm uncertain recovery")
+  confirm_rec=$(fm_pending_reply_path "$state" "$confirm_corr")
+  fm_pending_reply_mark_delivered "$state" "$confirm_corr" || fail "confirm recovery fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$confirm_corr" request || fail "confirm recovery fixture should complete turn"
+  if fm_pending_reply_send_recovery "$state" "$confirm_corr"; then
+    fail "typed-unproven recovery must not report confirmed delivery"
+  fi
+  [ "$(phase_of "$state" "$confirm_corr")" = typed_unproven ] \
+    || fail "recovery exit 4 must remain typed-unproven"
+  [ "$(fm_pending_reply_get "$confirm_rec" recovery_delivery_outcome)" = typed-unproven ] \
+    || fail "recovery exit 4 must not collapse to failed delivery"
+  fm_pending_reply_set "$confirm_rec" grace_secs 0 || fail "confirm recovery grace should persist"
+  fm_pending_reply_tick_one "$state" "$confirm_corr" unknown || fail "typed recovery escalation tick failed"
+  status=$(cat "$state/hibit.status")
+  assert_contains "$status" "fm-send.sh --typed-confirm $confirm_corr" \
+    "uncertain recovery must tell the operator how to confirm"
+  assert_contains "$status" "fm-send.sh --typed-abandon $confirm_corr" \
+    "uncertain recovery must tell the operator how to abandon"
+  fm_pending_reply_confirm_typed "$state" "$confirm_corr" \
+    || fail "uncertain recovery must remain confirmable"
+  [ "$(phase_of "$state" "$confirm_corr")" = recovery_sent ] \
+    || fail "confirmed uncertain recovery must resume recovery tracking"
+
+  abandon_corr=$(fm_pending_reply_create "$home" "$state" hibit "abandon uncertain recovery")
+  abandon_rec=$(fm_pending_reply_path "$state" "$abandon_corr")
+  fm_pending_reply_mark_delivered "$state" "$abandon_corr" || fail "abandon recovery fixture should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$abandon_corr" request || fail "abandon recovery fixture should complete turn"
+  if fm_pending_reply_send_recovery "$state" "$abandon_corr"; then
+    fail "second typed-unproven recovery must not report confirmed delivery"
+  fi
+  [ "$(phase_of "$state" "$abandon_corr")" = typed_unproven ] \
+    || fail "second recovery exit 4 must remain typed-unproven"
+  fm_pending_reply_abandon_typed "$state" "$abandon_corr" \
+    || fail "uncertain recovery must remain abandonable"
+  [ "$(phase_of "$state" "$abandon_corr")" = recovery_failed ] \
+    || fail "cleared recovery text must record failed recovery delivery"
+  [ -f "$abandon_rec" ] || fail "abandoned recovery must retain the original durable expectation"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "recovery exit 4 remains distinct, visible, and operator-settleable"
+}
+
 test_recovery_attempt_is_never_reinjected() {
   local home state corr rec hook_log lines live_corr live_rec live_pid live_identity
   home=$(setup_parent recovery-at-most-once)
@@ -1432,6 +1482,7 @@ test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_transport_runs_outside_correlation_lock
+test_recovery_typed_unproven_remains_operator_settleable
 test_recovery_attempt_is_never_reinjected
 test_recovery_reply_resolves_original
 test_second_missed_turn_escalates_once_and_stays_durable
