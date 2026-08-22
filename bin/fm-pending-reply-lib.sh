@@ -136,6 +136,17 @@ fm_pending_reply_request_path() {  # <state-dir> <corr_id>
   printf '%s/%s.request' "$(fm_pending_reply_dir "$1")" "$2"
 }
 
+fm_pending_reply_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 2>/dev/null | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum 2>/dev/null | awk '{print $1}'
+  else
+    printf 'pending-reply: sha256 requires shasum or sha256sum\n' >&2
+    return 1
+  fi
+}
+
 # Privacy-safe correlation id: 16 lowercase hex chars (64 bits of entropy).
 fm_pending_reply_new_id() {
   local raw hex
@@ -144,7 +155,7 @@ fm_pending_reply_new_id() {
   fi
   if [ -z "$raw" ]; then
     raw=$(printf '%s' "$$-$(date +%s%N 2>/dev/null || date +%s)-$RANDOM$RANDOM" | cksum 2>/dev/null | awk '{print $1}')
-    hex=$(printf '%s' "$raw$RANDOM$RANDOM" | shasum -a 256 2>/dev/null | awk '{print $1}')
+    hex=$(printf '%s' "$raw$RANDOM$RANDOM" | fm_pending_reply_sha256)
     raw=${hex:0:16}
   fi
   printf '%s' "$(printf '%s' "$raw" | tr 'A-F' 'a-f' | tr -cd 'a-f0-9' | cut -c1-16)"
@@ -297,8 +308,12 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
     rm -f "$body_tmp"
     return 1
   fi
-  body_hash=$(shasum -a 256 < "$body_tmp" | awk '{print $1}')
-  [ -n "$body_hash" ] || { rm -f "$body_tmp"; return 1; }
+  body_hash=$(fm_pending_reply_sha256 < "$body_tmp") \
+    || { rm -f "$body_tmp"; return 1; }
+  case "$body_hash" in
+    *[!A-Fa-f0-9]*|'') rm -f "$body_tmp"; return 1 ;;
+  esac
+  [ "${#body_hash}" -eq 64 ] || { rm -f "$body_tmp"; return 1; }
   chmod 600 "$body_tmp" 2>/dev/null || true
   mv -f "$body_tmp" "$body_path" || { rm -f "$body_tmp"; return 1; }
   tmp="$dir/.${corr}.tmp.$$"

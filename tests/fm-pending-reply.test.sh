@@ -1184,8 +1184,33 @@ test_failed_send_discards_undelivered_expectation() {
   pass "failed transport discards undelivered expectation only"
 }
 
+test_create_falls_back_to_sha256sum() {
+  local home state expected
+  home=$(setup_parent sha256sum-fallback)
+  state="$home/state"
+  expected=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  (
+    command() {
+      if [ "${1:-}" = -v ] && [ "${2:-}" = shasum ]; then
+        return 1
+      fi
+      builtin command "$@"
+    }
+    sha256sum() {
+      printf '%s  -\n' "$expected"
+    }
+    export -f sha256sum
+    corr=$(fm_pending_reply_create "$home" "$state" hibit "linux hash fallback") \
+      || exit 1
+    rec=$(fm_pending_reply_path "$state" "$corr")
+    [ "$(fm_pending_reply_get "$rec" request_sha256)" = "$expected" ]
+  ) || fail "pending reply creation should use sha256sum when shasum is absent"
+  pass "pending reply creation falls back to sha256sum"
+}
+
 # --- run --------------------------------------------------------------------
 
+test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_attempt_is_never_reinjected
