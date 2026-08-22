@@ -144,6 +144,38 @@ case "$large" in
 esac
 pass "real tmux: fm_backend_tmux_capture's -S -N bound trims old history for a small window and reaches it for a large one"
 
+# --- the erase key the pre-Enter proof's verification envelope depends on ----
+#
+# A short steer is typed with a random suffix and the suffix is erased again
+# before Enter (bin/fm-composer-lib.sh, fm_composer_typed_delivery_core). That
+# only works if this backend's erase key really removes exactly one character,
+# which is a vendor fact about tmux's own key vocabulary and a byte convention
+# the pane's termios chooses - neither is knowable from a stub. If this breaks,
+# every short steer on tmux refuses rather than misdelivering, but it still
+# breaks, so it is proven here against a real pane.
+fm_backend_tmux_send_literal "$TARGET" 'erase-probe-abcdef' \
+  || fail "fm_backend_tmux_send_literal failed before the erase probe"
+sleep 0.4
+out=$(fm_backend_tmux_capture "$TARGET" 20) || fail "capture failed before the erase probe"
+case "$out" in
+  *erase-probe-abcdef*) ;;
+  *) fail "real tmux: the erase probe must be visible before it can be erased"$'\n'"$out" ;;
+esac
+fm_tmux_composer_erase_one "$TARGET" || fail "fm_tmux_composer_erase_one failed"
+fm_tmux_composer_erase_one "$TARGET" || fail "fm_tmux_composer_erase_one failed"
+sleep 0.4
+out=$(fm_backend_tmux_capture "$TARGET" 20) || fail "capture failed after the erase probe"
+case "$out" in
+  *erase-probe-abcdef*)
+    fail "real tmux: two erase keys removed nothing (tmux $(tmux -V))"$'\n'"$out" ;;
+  *erase-probe-abcd*) ;;
+  *) fail "real tmux: two erase keys must remove exactly two characters, not more (tmux $(tmux -V))"$'\n'"$out" ;;
+esac
+# Leave the pane clean for the checks below.
+fm_backend_tmux_send_key "$TARGET" C-c
+sleep 0.3
+pass "real tmux: the composer erase key removes exactly one character per press"
+
 # --- resolve_bare_selector (live-window-listing) -----------------------------
 
 resolved=$(fm_backend_tmux_resolve_bare_selector "$WINDOW") \

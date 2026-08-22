@@ -247,6 +247,44 @@ Measured against the horizontally scrolling single-row composer in `tests/fm-afk
 Known drift, unrelated to this proof and pre-existing on `main`: grok 1.0.5's idle composer no longer reaches `empty` in the matrix above (it reads `pending-unproven`, and `unknown` from a raw capture), against the `grok 1.0.0` result recorded there on 2026-08-10.
 That is the shape catalogue, not the send path, and it is what defers away-mode injection into a grok pane; it needs its own work item.
 
+### Composer erase key
+
+A steer whose payload is shorter than the anchor minimum is typed with a random verification suffix that lifts it to a full-length anchor, and that suffix alone is erased again before Enter (`bin/fm-composer-lib.sh`, `fm_composer_typed_delivery_core`).
+The erase is what makes the agent receive the caller's payload and nothing else, so each backend's erase key must remove exactly one character per press.
+That is a per-backend vendor fact - the key name belongs to each tool's own vocabulary, and the byte it resolves to belongs to the pane - so no backend's spelling may be borrowed from another's.
+A wrong key name refuses the send rather than misdelivering it, but it still refuses every short steer on that backend, which is why each one carries a live guard.
+
+Verified 2026-08-22 on macOS Darwin 25.5.0 (arm64).
+
+| Backend | Key | Result | Live guard |
+| --- | --- | --- | --- |
+| tmux | `BSpace` | Removed exactly one character per press (tmux 3.6a). | `tests/fm-backend-tmux-smoke.test.sh` |
+| zellij | `Backspace` | Removed exactly one character per press (zellij 0.44.0). `BSpace` is rejected outright (`Invalid key at position 1`), and `backspace` also works. | `tests/fm-backend-zellij-smoke.test.sh` |
+| herdr | `backspace` | **Not live-verified.** Consistent with herdr's own lowercase vocabulary (`enter`, `escape`, `ctrl+c`, `ctrl+u`), and `backspace` is the only spelling of that key present in the herdr 0.8.0 binary's strings; neither `bspace` nor `back_space` appears. | `tests/fm-backend-herdr-smoke.test.sh` |
+| cmux | `backspace` | **Not live-verified** (cmux is not installed on this machine). Consistent with cmux's own lowercase key vocabulary. | `tests/fm-backend-cmux-smoke.test.sh` |
+| orca | none | Orca's send API exposes only text, Enter, and interrupt, so a character cannot be taken back off its composer. The shared core refuses a short payload on Orca *before* typing, rather than stranding a suffix it has no way to remove. | n/a - refusal is pinned portably in `tests/fm-composer-lib.test.sh` |
+
+Sending a raw backspace byte through the literal-text channel instead of a named key was measured and rejected: `0x08` did not erase at all against a real tmux pane, and `0x7f` did.
+Which of the two a pane wants is the pane's own convention, which is exactly what a named key delegates to the backend.
+
+Refresh these rows by running the guard for each installed backend:
+
+```sh
+tests/fm-backend-tmux-smoke.test.sh
+tests/fm-backend-zellij-smoke.test.sh
+tests/fm-backend-herdr-smoke.test.sh
+tests/fm-backend-cmux-smoke.test.sh
+```
+
+Observed output for the two verified today:
+
+```text
+ok - real tmux: the composer erase key removes exactly one character per press
+ok - real zellij: the composer erase key removes exactly one character per press
+```
+
+The portable half - that the suffix is fresh, shares no character with the payload, lifts a one-character steer to a full-length anchor, and that both an under-erase and an over-erase are refused by name - runs everywhere with no backend at all, in `tests/fm-composer-lib.test.sh`.
+
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
 ## Herdr

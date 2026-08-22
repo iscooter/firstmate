@@ -381,6 +381,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "tests/fixtures/composer-delta/README.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },

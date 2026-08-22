@@ -82,6 +82,34 @@ case "$out" in
 esac
 pass "real cmux: send_literal (unsubmitted) + send_key Enter submit as two steps and the output is capturable"
 
+# --- the erase key the pre-Enter proof's verification envelope depends on ----
+#
+# A short steer is typed with a random suffix and the suffix is erased again
+# before Enter (bin/fm-composer-lib.sh, fm_composer_typed_delivery_core), so
+# this backend's erase key must remove exactly one character. cmux's key
+# vocabulary is its own (lowercase, hyphenated), so the spelling is proven here
+# against a real surface rather than borrowed from another backend.
+fm_backend_cmux_send_literal "$TARGET" 'erase-probe-abcdef' \
+  || fail "send_literal failed before the erase probe"
+sleep 0.5
+out=$(fm_backend_cmux_capture "$TARGET" 20) || fail "capture failed before the erase probe"
+case "$out" in
+  *erase-probe-abcdef*) ;;
+  *) fail "real cmux: the erase probe must be visible before it can be erased"$'\n'"$out" ;;
+esac
+fm_backend_cmux_erase_one "$TARGET" || fail "fm_backend_cmux_erase_one failed"
+fm_backend_cmux_erase_one "$TARGET" || fail "fm_backend_cmux_erase_one failed"
+sleep 0.5
+out=$(fm_backend_cmux_capture "$TARGET" 20) || fail "capture failed after the erase probe"
+case "$out" in
+  *erase-probe-abcdef*) fail "real cmux: two erase keys removed nothing"$'\n'"$out" ;;
+  *erase-probe-abcd*) ;;
+  *) fail "real cmux: two erase keys must remove exactly two characters, not more"$'\n'"$out" ;;
+esac
+fm_backend_cmux_send_key "$TARGET" C-c
+sleep 0.4
+pass "real cmux: the composer erase key removes exactly one character per press"
+
 # --- send_text_line (the composed form) --------------------------------------
 
 fm_backend_cmux_send_text_line "$TARGET" "echo captain-on-deck-line" \

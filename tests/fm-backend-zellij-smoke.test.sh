@@ -99,6 +99,36 @@ case "$out" in
 esac
 pass "real zellij: send_literal (paste) + send_key Enter submit as two steps and the output is capturable"
 
+# --- the erase key the pre-Enter proof's verification envelope depends on ----
+#
+# A short steer is typed with a random suffix and the suffix is erased again
+# before Enter (bin/fm-composer-lib.sh, fm_composer_typed_delivery_core), so
+# this backend's erase key must remove exactly one character. zellij's key
+# parser is strict and its vocabulary differs from tmux's - "BSpace" is
+# rejected outright here - so the mapping is proven against a real pane rather
+# than assumed from another backend's spelling.
+fm_backend_zellij_send_literal "$TARGET" 'erase-probe-abcdef' \
+  || fail "send_literal failed before the erase probe"
+sleep 0.6
+out=$(fm_backend_zellij_capture "$TARGET" 20) || fail "capture failed before the erase probe"
+case "$out" in
+  *erase-probe-abcdef*) ;;
+  *) fail "real zellij: the erase probe must be visible before it can be erased"$'\n'"$out" ;;
+esac
+fm_backend_zellij_erase_one "$TARGET" "$LABEL" || fail "fm_backend_zellij_erase_one failed"
+fm_backend_zellij_erase_one "$TARGET" "$LABEL" || fail "fm_backend_zellij_erase_one failed"
+sleep 0.6
+out=$(fm_backend_zellij_capture "$TARGET" 20) || fail "capture failed after the erase probe"
+case "$out" in
+  *erase-probe-abcdef*)
+    fail "real zellij: two erase keys removed nothing (zellij $(zellij --version))"$'\n'"$out" ;;
+  *erase-probe-abcd*) ;;
+  *) fail "real zellij: two erase keys must remove exactly two characters, not more (zellij $(zellij --version))"$'\n'"$out" ;;
+esac
+fm_backend_zellij_send_key "$TARGET" C-c "$LABEL"
+sleep 0.4
+pass "real zellij: the composer erase key removes exactly one character per press"
+
 # --- send_text_line (the composed atomic-run form) ---------------------------
 
 fm_backend_zellij_send_text_line "$TARGET" "echo captain-on-deck-line" \
