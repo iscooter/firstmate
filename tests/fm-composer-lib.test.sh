@@ -852,6 +852,48 @@ test_envelope_gives_a_short_payload_a_full_length_anchor() {
   pass "fm_composer_envelope_prepare: a short payload gets a fresh full-length anchor and an exact erase count"
 }
 
+# A payload exactly one character short still needs a fresh random boundary;
+# there is no longer nonce tail whose randomness could hide a fixed boundary.
+test_envelope_randomizes_a_single_character_suffix() {
+  local draw_dir payload before
+  draw_dir=$(fm_test_tmproot fm-envelope-random)
+  payload='abcdefghijklmnopqrstuvw'
+  before="idle transcript ${payload}x"
+  printf '0\n' > "$draw_dir/index"
+
+  (
+    fm_composer_random_from_pool() {
+      local pool=$1 want=$2 index
+      [ "$want" -eq 1 ] || fail "the single-character fixture must request one random character"
+      index=$(cat "$draw_dir/index")
+      printf '%s\n' "$((index + 1))" > "$draw_dir/index"
+      printf '%s' "${pool:index:1}"
+    }
+
+    fm_composer_envelope_prepare "$payload" "$before" || fail "first single-character prepare failed"
+    local first=$FM_COMPOSER_ENVELOPE_NONCE first_wire=$FM_COMPOSER_ENVELOPE_WIRE
+    fm_composer_envelope_prepare "$payload" "$before" || fail "second single-character prepare failed"
+    local second=$FM_COMPOSER_ENVELOPE_NONCE before_joined probe
+
+    [ "${#first}" -eq 1 ] && [ "${#second}" -eq 1 ] \
+      || fail "a 23-character payload must receive exactly one suffix character"
+    [ "$first" != "$second" ] \
+      || fail "the single-character suffix must be selected afresh, got '$first' twice"
+    [ "$first_wire" = "$payload$first" ] \
+      || fail "the first wire must contain only the payload and selected suffix"
+    case "$payload" in
+      *"$first"*|*"$second"*) fail "a selected suffix character must not occur in the payload" ;;
+    esac
+    before_joined=$(fm_composer_delta_rows "$before" | tr -d '\n')
+    for probe in "$payload$first" "$payload$second"; do
+      [ "$(fm_composer_count_occurrences "$before_joined" "$probe")" -eq 0 ] \
+        || fail "the selected boundary probe must be absent before typing, got '$probe'"
+    done
+  ) || fail "single-character envelope randomness must preserve its proof invariants"
+
+  pass "fm_composer_envelope_prepare: a single-character suffix is selected afresh"
+}
+
 # The ordinary long steer must pay nothing for this: no suffix, no erase, and
 # the wire byte-identical to the payload including whitespace the anchor
 # normalization would have dropped.
@@ -1322,6 +1364,7 @@ test_shape_free_echo_is_accepted
 test_delta_verdict_fails_loud_on_an_empty_payload
 test_delta_verdict_refuses_short_collision_anchor
 test_envelope_gives_a_short_payload_a_full_length_anchor
+test_envelope_randomizes_a_single_character_suffix
 test_envelope_leaves_a_self_proving_payload_alone
 test_envelope_refuses_a_short_multi_row_payload
 test_envelope_boundary_verdict_pins_both_checkpoints

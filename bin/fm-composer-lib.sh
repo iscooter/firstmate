@@ -1338,28 +1338,11 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <wire-t
 # without cursor movement no backend agrees on.
 FM_COMPOSER_ENVELOPE_ALPHABET='abcdefghijklmnopqrstuvwxyz0123456789'
 
-# fm_composer_envelope_nonce: <length> fresh characters drawn from the alphabet
-# MINUS every character the payload contains.
-#
-# That exclusion is not cosmetic - it is what makes the erase proof decidable.
-# With no payload character anywhere in the nonce, the payload cannot occur
-# inside the nonce, and it cannot occur across the payload/nonce boundary
-# either. So the payload's whole-screen occurrence count is unaffected by the
-# nonce's presence or removal, and any DROP in that count after the erase can
-# only mean the erase ate into the payload itself.
-#
 # /dev/urandom when it is readable, $RANDOM otherwise. This defends against
 # COINCIDENCE - a pane redrawing text that happens to match - not against an
 # adversary choosing pane content, so an unseeded fallback is still sound.
-fm_composer_envelope_nonce() {  # <payload-norm> <length>
-  local payload=$1 want=$2 pool='' ch i out='' n raw
-  i=0
-  while [ "$i" -lt "${#FM_COMPOSER_ENVELOPE_ALPHABET}" ]; do
-    ch=${FM_COMPOSER_ENVELOPE_ALPHABET:i:1}
-    i=$((i + 1))
-    case "$payload" in *"$ch"*) continue ;; esac
-    pool="$pool$ch"
-  done
+fm_composer_random_from_pool() {  # <pool> <length>
+  local pool=$1 want=$2 out='' n raw i
   n=${#pool}
   [ "$n" -gt 0 ] || return 1
   raw=$(LC_ALL=C tr -dc "$pool" < /dev/urandom 2>/dev/null | LC_ALL=C head -c "$want" 2>/dev/null) || true
@@ -1373,6 +1356,27 @@ fm_composer_envelope_nonce() {  # <payload-norm> <length>
     i=$((i + 1))
   done
   printf '%s' "$out"
+}
+
+# fm_composer_envelope_nonce: <length> fresh characters drawn from the alphabet
+# MINUS every character the payload contains.
+#
+# That exclusion is not cosmetic - it is what makes the erase proof decidable.
+# With no payload character anywhere in the nonce, the payload cannot occur
+# inside the nonce, and it cannot occur across the payload/nonce boundary
+# either. So the payload's whole-screen occurrence count is unaffected by the
+# nonce's presence or removal, and any DROP in that count after the erase can
+# only mean the erase ate into the payload itself.
+fm_composer_envelope_nonce() {  # <payload-norm> <length>
+  local payload=$1 want=$2 pool='' ch i
+  i=0
+  while [ "$i" -lt "${#FM_COMPOSER_ENVELOPE_ALPHABET}" ]; do
+    ch=${FM_COMPOSER_ENVELOPE_ALPHABET:i:1}
+    i=$((i + 1))
+    case "$payload" in *"$ch"*) continue ;; esac
+    pool="$pool$ch"
+  done
+  fm_composer_random_from_pool "$pool" "$want"
 }
 
 # fm_composer_envelope_prepare: decide the wire text for <payload> against the
@@ -1398,7 +1402,7 @@ fm_composer_envelope_nonce() {  # <payload-norm> <length>
 # erasing across a row boundary is a line-join on some composers and a no-op on
 # others, and no real steer is both multi-row and under two dozen characters.
 fm_composer_envelope_prepare() {  # <payload> <before>
-  local payload=$1 before=${2-} norm before_joined nonce first='' rest want ch i probe
+  local payload=$1 before=${2-} norm before_joined nonce first rest want ch i probe candidates=''
   FM_COMPOSER_ENVELOPE_WIRE=$payload
   FM_COMPOSER_ENVELOPE_NONCE=
   FM_COMPOSER_ENVELOPE_ERASE=0
@@ -1417,13 +1421,16 @@ fm_composer_envelope_prepare() {  # <payload> <before>
     case "$norm" in *"$ch"*) continue ;; esac
     probe="$norm$ch"
     [ "$(fm_composer_count_occurrences "$before_joined" "$probe")" -eq 0 ] || continue
-    first=$ch
-    break
+    candidates="$candidates$ch"
   done
-  if [ -z "$first" ]; then
+  if [ -z "$candidates" ]; then
     FM_COMPOSER_ENVELOPE_ERROR=envelope-boundary-probe-unavailable
     return 1
   fi
+  first=$(fm_composer_random_from_pool "$candidates" 1) || {
+    FM_COMPOSER_ENVELOPE_ERROR=envelope-boundary-probe-unavailable
+    return 1
+  }
   want=$((FM_COMPOSER_DELTA_ANCHOR_MIN - ${#norm}))
   rest=
   if [ "$want" -gt 1 ]; then
