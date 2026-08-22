@@ -39,6 +39,7 @@
 #   delivered_epoch=        when the marked request was confirmed delivered
 #                           (empty until delivery; delivery never resolves)
 #   typed_unproven_epoch=   when typed input first became operator-settleable
+#   typed_suffix_length=    verification suffix length for operator settlement
 #   phase=                  awaiting_report | typed_unproven | delivery_unknown |
 #                           recovery_sending |
 #                           recovery_sent | recovery_failed | recovery_unknown |
@@ -362,6 +363,7 @@ request_sha256=$body_hash
 created_epoch=$now
 delivered_epoch=
 typed_unproven_epoch=
+typed_suffix_length=
 phase=awaiting_report
 turn_seen_busy=0
 request_turn_completed_epoch=
@@ -429,7 +431,7 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
 # stale copy of the diagnostic cannot disturb a request that has since resolved
 # on its own.
 
-# The operator verified the complete text was present and submitted it: the
+# The operator verified an exact payload-only match and submitted it: the
 # request is delivered, so the ordinary reply-and-recovery machinery resumes.
 fm_pending_reply_confirm_typed() {  # <state-dir> <corr_id>
   fm_pending_reply_settle_typed "$1" "$2" confirmed
@@ -523,7 +525,7 @@ fm_pending_reply_confirm_delivery() {  # <state-dir> <corr_id>
   return 2
 }
 
-fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
+fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id> [suffix-length]
   local state=$1 corr=$2 lock rc=0
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   STATE=$state
@@ -536,8 +538,9 @@ fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
   return "$rc"
 }
 
-_fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase delivered typed_epoch marker entry marker_state
+_fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id> [suffix-length]
+  local state=$1 corr=$2 suffix_len=${3:-0} rec phase delivered typed_epoch marker entry marker_state
+  case "$suffix_len" in ''|*[!0-9]*) return 1 ;; esac
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
@@ -565,6 +568,7 @@ _fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id>
   if [ -z "$typed_epoch" ]; then
     fm_pending_reply_set "$rec" typed_unproven_epoch "$(fm_pending_reply_now)" || return 1
   fi
+  fm_pending_reply_set "$rec" typed_suffix_length "$suffix_len" || return 1
   fm_pending_reply_set "$rec" phase typed_unproven
 }
 
@@ -1142,6 +1146,7 @@ fm_pending_reply_finish_recovery() {  # <state-dir> <corr_id> <confirmed|failed|
       if [ -z "$typed_epoch" ]; then
         fm_pending_reply_set "$rec" typed_unproven_epoch "$(fm_pending_reply_now)" || return 1
       fi
+      fm_pending_reply_set "$rec" typed_suffix_length 0 || return 1
       fm_pending_reply_set "$rec" phase typed_unproven || return 1
       ;;
     failed) fm_pending_reply_set "$rec" phase recovery_failed || return 1 ;;
@@ -1200,8 +1205,19 @@ fm_pending_reply_escalation_payload() {  # <record-path> <kind>
       esac
       ;;
     typed-unproven)
-      printf 'pending-reply-typed-unproven: task=%s pending-reply-id=%s request=%s inspect the pane, then run fm-send.sh --typed-confirm %s after submitting the complete text, or fm-send.sh --typed-abandon %s after clearing it' \
-        "$task_id" "$corr" "$summary" "$corr" "$corr"
+      local body actual_payload suffix_len instruction
+      body=$(fm_pending_reply_request_body "$rec") || body=$summary
+      if [ "$(fm_pending_reply_get "$rec" recovery_delivery_outcome)" = typed-unproven ]; then
+        actual_payload=$(fm_pending_reply_recovery_message "$rec") || actual_payload=$body
+        suffix_len=0
+      else
+        fm_pending_reply_embed_corr "$body" "$corr" actual_payload
+        suffix_len=$(fm_pending_reply_get "$rec" typed_suffix_length)
+        case "$suffix_len" in ''|*[!0-9]*) suffix_len=$(fm_composer_verification_suffix_length "$actual_payload") ;; esac
+      fi
+      instruction=$(fm_composer_typed_settlement_instruction "$actual_payload" "$corr" "$suffix_len")
+      printf 'pending-reply-typed-unproven: task=%s pending-reply-id=%s request=%s inspect the pane. %s' \
+        "$task_id" "$corr" "$summary" "$instruction"
       return 0
       ;;
     *) return 1 ;;

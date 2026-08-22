@@ -171,11 +171,11 @@ test_remote_delivered_unconfirmed_is_not_failure() {
 }
 
 test_remote_typed_unproven_replays_stranded_suffix_warning() {
-  local dir fb log ssh_log home rc err rec warning
+  local dir fb log ssh_log home home2 rc rc2 err err2 rec warning
   dir="$TMP_ROOT/remote-typed-unproven"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); log="$dir/send.log"; ssh_log="$dir/ssh.log"; : > "$ssh_log"
   home=$(setup_remote_home remote-typed-unproven)
-  warning='warning: the pane could not be captured after typing at fm-remote:w1:p1; the composer may still hold the verification suffix. Expected text: 2abcdefghijklmnopqrstuvw (the last 23 characters are the suffix and are NOT part of the message). Clear the composer before sending anything else.'
+  warning='warning: the pane could not be captured after typing at fm-remote:w1:p1; the composer may still hold the verification suffix. Expected text: 2abcdefghijklmnopqrstuvw (the last 23 characters are the suffix and are NOT part of the message). Submit Enter ONLY if the composer is an exact payload-only match: it holds the payload and NOTHING after it. The 23-character verification suffix must NOT remain after the payload. If anything follows the payload, clear the composer and never submit it.'
 
   : > "$log"
   env PATH="$fb:$PATH" \
@@ -189,13 +189,42 @@ test_remote_typed_unproven_replays_stranded_suffix_warning() {
     "the parent must replay the exact stranded remote wire"
   assert_contains "$err" 'last 23 characters are the suffix' \
     "the parent must replay the remote suffix length"
+  assert_contains "$err" 'exact payload-only match' \
+    "the real command must require exact payload-only inspection"
+  assert_contains "$err" '23-character verification suffix must NOT remain' \
+    "the real command must name the remote verification suffix length"
+  assert_contains "$err" 'If anything follows the payload, clear the composer' \
+    "the real command must forbid submitting suffix residue"
   assert_contains "$err" '--typed-confirm' \
     "the parent must retain its operator confirmation guidance"
+  assert_contains "$err" '--typed-abandon' \
+    "the parent must retain its operator abandonment guidance"
+  assert_not_contains "$err" 'complete text is present' \
+    "the real command must not permit an approximate payload match"
   rec=$(pending_record "$home")
   [ -n "$rec" ] || fail "remote typed-unproven must retain its pending record"
   [ "$(fm_pending_reply_get "$rec" phase)" = typed_unproven ] \
     || fail "remote typed-unproven must persist its unresolved phase"
-  pass "fm-send remote: typed-unproven replays exact stranded-suffix guidance"
+
+  home2=$(setup_remote_home remote-typed-unproven-no-suffix)
+  : > "$log"
+  env PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home2" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=4 \
+    FM_FAKE_SSH_STDERR='' \
+    "$SEND" rsm "this self-proving payload is substantially longer than the minimum anchor" \
+    >"$dir/out2" 2>"$dir/err2"; rc2=$?
+  err2=$(cat "$dir/err2")
+  expect_code 4 "$rc2" "a non-enveloped typed-unproven send must preserve exit 4"
+  assert_contains "$err2" 'exact payload-only match' \
+    "a non-enveloped command must still require an exact payload-only match"
+  assert_contains "$err2" '--typed-confirm' \
+    "a non-enveloped command must retain its concrete confirmation command"
+  assert_contains "$err2" '--typed-abandon' \
+    "a non-enveloped command must retain its concrete abandonment command"
+  assert_not_contains "$err2" 'verification suffix' \
+    "a non-enveloped command must not invent a verification suffix"
+  pass "fm-send remote: typed-unproven settlement guidance stays exact and suffix-aware"
 }
 
 test_remote_real_failure_still_fails() {

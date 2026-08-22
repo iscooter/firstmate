@@ -1546,7 +1546,12 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
   "$lit_fn" "$target" "$wire" "$label" || { printf 'send-failed'; return 1; }
   sleep "$settle"
   typed=$("$cap_fn" "$target" "$label") || {
-    [ "$erase_n" -eq 0 ] || fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured after typing'
+    if [ "$erase_n" -gt 0 ]; then
+      fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured after typing'
+    else
+      printf 'warning: the pane could not be captured after typing at %s. %s\n' \
+        "$target" "$(fm_composer_typed_settlement_instruction "$text" '')" >&2
+    fi
     printf 'typed-unproven'
     return 1
   }
@@ -1554,8 +1559,8 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     if [ "$erase_n" -gt 0 ]; then
       fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
     else
-      printf 'warning: %s at %s after the text was written; delivery could not be proven. Do not retype or resend.\n' \
-        "$verdict" "$target" >&2
+      printf 'warning: %s at %s after the text was written; delivery could not be proven. %s\n' \
+        "$verdict" "$target" "$(fm_composer_typed_settlement_instruction "$text" '')" >&2
     fi
     printf 'typed-unproven'
     return 1
@@ -1605,14 +1610,43 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
   return 0
 }
 
+fm_composer_verification_suffix_length() {  # <payload>
+  local norm
+  norm=$(fm_composer_delta_rows "$1" | LC_ALL=C tr -d '\n')
+  if [ -n "$norm" ] && [ "${#norm}" -lt "$FM_COMPOSER_DELTA_ANCHOR_MIN" ]; then
+    printf '%s' "$((FM_COMPOSER_DELTA_ANCHOR_MIN - ${#norm}))"
+  else
+    printf '0'
+  fi
+}
+
+fm_composer_typed_settlement_instruction() {  # <payload> <corr-id-or-empty> [suffix-length]
+  local payload=$1 corr=$2 suffix_len=${3-}
+  if [ -z "$suffix_len" ]; then
+    suffix_len=$(fm_composer_verification_suffix_length "$payload")
+  fi
+  printf 'Submit Enter ONLY if the composer is an exact payload-only match: it holds the payload and NOTHING after it.'
+  if [ "$suffix_len" -gt 0 ]; then
+    printf ' The %s-character verification suffix must NOT remain after the payload.' "$suffix_len"
+  fi
+  if [ -n "$corr" ]; then
+    printf " If anything follows the payload, clear the composer and run 'fm-send.sh --typed-abandon %s'; never submit it. After submitting the exact payload-only match, run 'fm-send.sh --typed-confirm %s'." "$corr" "$corr"
+  else
+    printf ' If anything follows the payload, clear the composer and never submit it.'
+  fi
+}
+
 # fm_composer_envelope_strand_note: say on stderr exactly what may still be
 # sitting in the composer, because the verdict token alone cannot carry it. The
 # operator settling a typed-unproven request needs the literal text to look for
 # and the number of characters to remove; without them "inspect the pane" is
 # not an actionable instruction.
 fm_composer_envelope_strand_note() {  # <target> <wire> <erase-count> <why>
-  printf 'warning: %s at %s; the composer may still hold the verification suffix. Expected text: %s (the last %s characters are the suffix and are NOT part of the message). Clear the composer before sending anything else.\n' \
-    "$4" "$1" "$2" "$3" >&2
+  local target=$1 wire=$2 erase_count=$3 why=$4 payload instruction
+  payload=${wire:0:${#wire}-erase_count}
+  instruction=$(fm_composer_typed_settlement_instruction "$payload" '' "$erase_count")
+  printf 'warning: %s at %s; the composer may still hold the verification suffix. Expected text: %s (the last %s characters are the suffix and are NOT part of the message). %s\n' \
+    "$why" "$target" "$wire" "$erase_count" "$instruction" >&2
 }
 
 # fm_composer_screen_is_gated: 0 when <screen> is a modal/gated prompt rather

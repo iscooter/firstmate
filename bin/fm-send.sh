@@ -728,17 +728,15 @@ else
       exit 1
       ;;
     typed-unproven)
+      typed_suffix_len=$(fm_composer_verification_suffix_length "$MESSAGE")
       if [ -n "$PENDING_REPLY_CORR" ]; then
-        if ! fm_pending_reply_mark_typed_unproven "$STATE" "$PENDING_REPLY_CORR"; then
+        if ! fm_pending_reply_mark_typed_unproven "$STATE" "$PENDING_REPLY_CORR" "$typed_suffix_len"; then
           echo "error: text was typed at $T, but its pending-reply record $PENDING_REPLY_CORR could not be moved to typed-unproven. No Enter was sent. Do not retype or use the confirm/abandon commands; inspect the pane and repair the durable record first." >&2
           exit 4
         fi
       fi
-      if [ -n "$PENDING_REPLY_CORR" ]; then
-        echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh, then settle this request one way or the other so nothing is left waiting on it: if the complete text is present, submit Enter and run 'fm-send.sh --typed-confirm $PENDING_REPLY_CORR'; if it is not, clear the pane and run 'fm-send.sh --typed-abandon $PENDING_REPLY_CORR'." >&2
-      else
-        echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh and submit Enter only if the complete text is still present." >&2
-      fi
+      typed_instruction=$(fm_composer_typed_settlement_instruction "$MESSAGE" "$PENDING_REPLY_CORR" "$typed_suffix_len")
+      echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh. $typed_instruction" >&2
       exit 4
       ;;
     not-accepted|not-accepted:*)

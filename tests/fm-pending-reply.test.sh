@@ -1348,7 +1348,7 @@ test_mirrored_remote_reply_never_triggers_a_repost() {
 }
 
 test_typed_unproven_escalates_through_real_scan() {
-  local home state corr rec status escalations corr2 rec2
+  local home state corr rec status escalations corr2 rec2 corr3 rec3 suffix_status
   home=$(setup_parent typed-unproven-escalation)
   state="$home/state"
   export FM_PENDING_REPLY_NOW=9000
@@ -1371,6 +1371,12 @@ test_typed_unproven_escalates_through_real_scan() {
     "typed-unproven escalation must name the concrete confirm command"
   assert_contains "$status" "fm-send.sh --typed-abandon $corr" \
     "typed-unproven escalation must name the concrete abandon command"
+  assert_contains "$status" 'exact payload-only match' \
+    "typed-unproven escalation must require exact payload-only inspection"
+  assert_not_contains "$status" 'verification suffix' \
+    "a non-enveloped escalation must not invent a verification suffix"
+  assert_not_contains "$status" 'complete text is present' \
+    "typed-unproven escalation must not permit an approximate payload match"
   [ "$(phase_of "$state" "$corr")" = typed_unproven ] \
     || fail "escalation must ignore the correlated report and keep the record operator-settleable"
   fm_pending_reply_tick "$state" || fail "repeated real scan should be idempotent"
@@ -1399,7 +1405,28 @@ test_typed_unproven_escalates_through_real_scan() {
   fm_pending_reply_tick "$state" || fail "scan after abandonment should remain inert"
   [ "$(grep -Fc "blocked [key=pending-reply-$corr2]:" "$state/hibit.status")" -eq 1 ] \
     || fail "abandoned record re-escalated"
-  pass "typed-unproven records escalate once through the real scan and remain settleable"
+
+  corr3=$(fm_pending_reply_create "$home" "$state" hibit "2")
+  rec3=$(fm_pending_reply_path "$state" "$corr3")
+  fm_pending_reply_mark_typed_unproven "$state" "$corr3" 23 \
+    || fail "enveloped typed fixture should persist its suffix length"
+  fm_pending_reply_set "$rec3" grace_secs 0 || fail "enveloped fixture grace should persist"
+  fm_pending_reply_tick "$state" || fail "enveloped typed fixture should escalate through real scan"
+  suffix_status=$(grep -F "blocked [key=pending-reply-$corr3]:" "$state/hibit.status")
+  assert_contains "$suffix_status" 'exact payload-only match' \
+    "enveloped escalation must require exact payload-only inspection"
+  assert_contains "$suffix_status" '23-character verification suffix must NOT remain' \
+    "enveloped escalation must name the verification suffix and length"
+  assert_contains "$suffix_status" "fm-send.sh --typed-confirm $corr3" \
+    "enveloped escalation must name its concrete confirm command"
+  assert_contains "$suffix_status" "fm-send.sh --typed-abandon $corr3" \
+    "enveloped escalation must name its concrete abandon command"
+  assert_contains "$suffix_status" 'If anything follows the payload, clear the composer' \
+    "enveloped escalation must forbid submitting suffix residue"
+  assert_not_contains "$suffix_status" 'complete text is present' \
+    "enveloped escalation must not permit an approximate payload match"
+  fm_pending_reply_abandon_typed "$state" "$corr3" || fail "enveloped typed fixture should remain abandonable"
+  pass "typed-unproven records escalate once with exact suffix-aware settlement guidance"
 }
 
 test_typed_transition_supersedes_only_unconfirmed_delivery_unknown() {
