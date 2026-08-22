@@ -171,6 +171,35 @@ test_completed_turn_no_report_triggers_one_recovery() {
   pass "completed turn with no report triggers exactly one recovery"
 }
 
+test_recovery_transport_runs_outside_correlation_lock() {
+  local home state corr rec lock_probe
+  home=$(setup_parent recovery-lock-release)
+  state="$home/state"
+  lock_probe="$TMP_ROOT/recovery-lock-release.log"
+  : > "$lock_probe"
+  export FM_PENDING_REPLY_NOW=2250
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "recovery lock probe")
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_mark_delivered "$state" "$corr" || fail "lock probe should mark delivered"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" request || fail "lock probe should complete turn"
+  export FM_TEST_RECOVERY_STATE="$state" FM_TEST_RECOVERY_CORR="$corr" FM_TEST_RECOVERY_LOG="$lock_probe"
+  recovery_lock_probe() {
+    local lock="$FM_TEST_RECOVERY_STATE/.pending-reply-$FM_TEST_RECOVERY_CORR.lock"
+    fm_lock_try_acquire "$lock" || return 1
+    printf 'unlocked\n' >> "$FM_TEST_RECOVERY_LOG"
+    fm_lock_release "$lock"
+  }
+  export -f recovery_lock_probe
+  export FM_PENDING_REPLY_SEND_HOOK=recovery_lock_probe
+  fm_pending_reply_send_recovery "$state" "$corr" \
+    || fail "recovery transport must run without its correlation lock held"
+  [ "$(cat "$lock_probe")" = unlocked ] || fail "recovery hook did not acquire the correlation lock"
+  [ "$(phase_of "$state" "$corr")" = recovery_sent ] \
+    || fail "unlocked recovery transport did not commit its outcome"
+  unset FM_PENDING_REPLY_SEND_HOOK FM_TEST_RECOVERY_STATE FM_TEST_RECOVERY_CORR FM_TEST_RECOVERY_LOG
+  pass "recovery transport releases and reacquires its correlation lock around delivery"
+}
+
 test_recovery_attempt_is_never_reinjected() {
   local home state corr rec hook_log lines live_corr live_rec live_pid live_identity
   home=$(setup_parent recovery-at-most-once)
@@ -1220,7 +1249,7 @@ test_typed_unproven_escalates_through_real_scan() {
 }
 
 test_typed_transition_supersedes_only_unconfirmed_delivery_unknown() {
-  local home state confirm_corr confirm_rec abandon_corr abandon_rec delivered_corr
+  local home state confirm_corr confirm_rec abandon_corr abandon_rec escalated_corr escalated_rec delivered_corr
   home=$(setup_parent typed-transition-delivery-unknown)
   state="$home/state"
   export FM_PENDING_REPLY_NOW=9030
@@ -1253,6 +1282,26 @@ test_typed_transition_supersedes_only_unconfirmed_delivery_unknown() {
   fm_pending_reply_abandon_typed "$state" "$abandon_corr" \
     || fail "delivery_unknown promoted to typed-unproven must remain abandonable"
   [ ! -f "$abandon_rec" ] || fail "operator abandonment must remove the promoted record"
+
+  escalated_corr=$(fm_pending_reply_create "$home" "$state" hibit "typed escalation race")
+  escalated_rec=$(fm_pending_reply_path "$state" "$escalated_corr")
+  fm_pending_reply_prepare_delivery "$state" "$escalated_corr" || fail "escalated fixture delivery attempt should persist"
+  fm_pending_reply_set "$escalated_rec" grace_secs 0 || fail "escalated fixture grace should persist"
+  fm_pending_reply_reconcile_delivery "$state" "$escalated_corr" || fail "escalated fixture should reconcile"
+  fm_pending_reply_maybe_escalate "$state" "$escalated_corr" || fail "delivery uncertainty should escalate"
+  [ "$(phase_of "$state" "$escalated_corr")" = escalated ] \
+    || fail "escalated fixture must begin escalated"
+  fm_pending_reply_mark_typed_unproven "$state" "$escalated_corr" \
+    || fail "typed-unproven must supersede escalated unconfirmed delivery"
+  [ "$(phase_of "$state" "$escalated_corr")" = typed_unproven ] \
+    || fail "escalated fixture did not enter typed_unproven"
+  grep -Fq "resolved [key=pending-reply-$escalated_corr]: pending-reply-typed-superseded" "$state/hibit.status" \
+    || fail "superseded delivery escalation remained open"
+  [ -z "$(fm_pending_reply_get "$escalated_rec" escalated_epoch)" ] \
+    || fail "superseded delivery escalation still blocks typed escalation"
+  fm_pending_reply_abandon_typed "$state" "$escalated_corr" \
+    || fail "escalated record promoted to typed-unproven must remain abandonable"
+  [ ! -f "$escalated_rec" ] || fail "abandoned escalated record must be removed"
 
   delivered_corr=$(fm_pending_reply_create "$home" "$state" hibit "confirmed delivery")
   fm_pending_reply_mark_delivered "$state" "$delivered_corr" || fail "confirmed fixture should be delivered"
@@ -1382,6 +1431,7 @@ test_request_body_is_never_scanned_as_a_record
 test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
+test_recovery_transport_runs_outside_correlation_lock
 test_recovery_attempt_is_never_reinjected
 test_recovery_reply_resolves_original
 test_second_missed_turn_escalates_once_and_stays_durable

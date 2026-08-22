@@ -1551,8 +1551,8 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
       printf 'typed-unproven'
     else
       case "$verdict" in
-        not-accepted:no-new-occurrence*) printf 'typed-unproven' ;;
-        *) printf '%s' "$verdict" ;;
+        not-accepted:absent-from-added) printf '%s' "$verdict" ;;
+        *) printf 'typed-unproven' ;;
       esac
     fi
     return 1

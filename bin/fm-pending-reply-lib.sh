@@ -498,7 +498,7 @@ _fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id>
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
-  case "$phase" in awaiting_report|typed_unproven|delivery_unknown) ;;
+  case "$phase" in awaiting_report|typed_unproven|delivery_unknown|escalated) ;;
     *) return 1 ;;
   esac
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
@@ -509,8 +509,14 @@ _fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id>
     marker_state=${entry%%=*}
     [ "$marker_state" != confirmed ] || return 1
   fi
-  if [ "$phase" = delivery_unknown ]; then
-    [ -f "$marker" ] && [ "$marker_state" = attempted ] || return 1
+  case "$phase" in
+    delivery_unknown|escalated)
+      [ -f "$marker" ] && [ "$marker_state" = attempted ] || return 1
+      ;;
+  esac
+  if [ "$phase" = escalated ]; then
+    fm_pending_reply_settle_typed_escalation "$state" "$corr" superseded || return 1
+    fm_pending_reply_set "$rec" escalated_epoch "" || return 1
   fi
   typed_epoch=$(fm_pending_reply_get "$rec" typed_unproven_epoch)
   if [ -z "$typed_epoch" ]; then
@@ -966,21 +972,49 @@ fm_pending_reply_recovery_message() {  # <record-path>
 # (tests), otherwise invokes fm-send with FM_PENDING_REPLY_EXISTING_CORR so a
 # second expectation is not created.
 fm_pending_reply_send_recovery() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 lock rc=0
+  local state=$1 corr=$2 lock rc=0 prepared=0 send_status=0 commit_rc=0
+  local task_id msg parent_home
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   STATE=$state
   lock="$state/.pending-reply-$corr.lock"
   # shellcheck source=bin/fm-wake-lib.sh
   . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
   fm_lock_acquire_wait "$lock" || return 1
-  _fm_pending_reply_send_recovery_locked "$@" || rc=$?
+  if _fm_pending_reply_prepare_recovery_locked "$state" "$corr" task_id msg parent_home; then
+    prepared=1
+  else
+    rc=$?
+  fi
   fm_lock_release "$lock"
-  return "$rc"
+  [ "$prepared" = 1 ] || return "$rc"
+
+  if [ -n "${FM_PENDING_REPLY_SEND_HOOK:-}" ]; then
+    # shellcheck disable=SC2086
+    if ! eval "$FM_PENDING_REPLY_SEND_HOOK" "$(printf '%q' "$task_id")" "$(printf '%q' "$msg")"; then
+      send_status=1
+    fi
+  else
+    if [ -z "$parent_home" ] || [ ! -d "$parent_home" ]; then
+      send_status=1
+    elif ! env FM_HOME="$parent_home" FM_PENDING_REPLY_EXISTING_CORR="$corr" \
+      "$_FM_PENDING_REPLY_LIB_DIR/fm-send.sh" "$task_id" "$msg"; then
+      send_status=1
+    fi
+  fi
+
+  fm_lock_acquire_wait "$lock" || return 1
+  if [ "$send_status" = 0 ]; then
+    fm_pending_reply_finish_recovery "$state" "$corr" confirmed || commit_rc=$?
+  else
+    fm_pending_reply_finish_recovery "$state" "$corr" failed || commit_rc=$?
+  fi
+  fm_lock_release "$lock"
+  [ "$send_status" = 0 ] && [ "$commit_rc" = 0 ]
 }
 
-_fm_pending_reply_send_recovery_locked() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2
-  local rec phase completed delivered attempted grace now age task_id msg parent_home send_status=0
+_fm_pending_reply_prepare_recovery_locked() {  # <state-dir> <corr_id> <task-var> <message-var> <home-var>
+  local state=$1 corr=$2 task_var=$3 message_var=$4 home_var=$5
+  local rec phase completed delivered attempted grace now age prepared_task prepared_message prepared_home
   local sender_pid sender_identity
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
@@ -1000,37 +1034,19 @@ _fm_pending_reply_send_recovery_locked() {  # <state-dir> <corr_id>
   now=$(fm_pending_reply_now)
   age=$((now - delivered))
   [ "$age" -ge "$grace" ] || return 1
-  task_id=$(fm_pending_reply_get "$rec" task_id)
-  # A remote mate's report may exist and simply not have been mirrored yet.
-  fm_pending_reply_missing_report_is_evidence "$state" "$task_id" "$completed" || return 1
-  parent_home=$(fm_pending_reply_get "$rec" parent_home)
-  msg=$(fm_pending_reply_recovery_message "$rec")
+  prepared_task=$(fm_pending_reply_get "$rec" task_id)
+  fm_pending_reply_missing_report_is_evidence "$state" "$prepared_task" "$completed" || return 1
+  prepared_home=$(fm_pending_reply_get "$rec" parent_home)
+  prepared_message=$(fm_pending_reply_recovery_message "$rec")
   sender_pid=${BASHPID:-$$}
   sender_identity=$(fm_pending_reply_pid_identity "$sender_pid") || return 1
   fm_pending_reply_set "$rec" recovery_sender_pid "$sender_pid" || return 1
   fm_pending_reply_set "$rec" recovery_sender_identity "$sender_identity" || return 1
   fm_pending_reply_set "$rec" recovery_attempted_epoch "$now" || return 1
   fm_pending_reply_set "$rec" phase recovery_sending || return 1
-  if [ -n "${FM_PENDING_REPLY_SEND_HOOK:-}" ]; then
-    # Hook receives: task_id message
-    # shellcheck disable=SC2086
-    if ! eval "$FM_PENDING_REPLY_SEND_HOOK" "$(printf '%q' "$task_id")" "$(printf '%q' "$msg")"; then
-      send_status=1
-    fi
-  else
-    if [ -z "$parent_home" ] || [ ! -d "$parent_home" ]; then
-      send_status=1
-    elif ! env FM_HOME="$parent_home" FM_PENDING_REPLY_EXISTING_CORR="$corr" \
-      "$_FM_PENDING_REPLY_LIB_DIR/fm-send.sh" "$task_id" "$msg"; then
-      send_status=1
-    fi
-  fi
-  if [ "$send_status" = 0 ]; then
-    fm_pending_reply_finish_recovery "$state" "$corr" confirmed
-    return $?
-  fi
-  fm_pending_reply_finish_recovery "$state" "$corr" failed || return 1
-  return 1
+  printf -v "$task_var" '%s' "$prepared_task"
+  printf -v "$message_var" '%s' "$prepared_message"
+  printf -v "$home_var" '%s' "$prepared_home"
 }
 
 fm_pending_reply_pid_identity() {  # <pid>

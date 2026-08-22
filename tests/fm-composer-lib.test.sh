@@ -973,6 +973,11 @@ sim_send() {  # <text> -> the core's verdict on stdout, its return code preserve
   fm_composer_typed_delivery_core sim_capture sim_literal sim_erase pane "$1" 0
 }
 
+sim_send_with_broken_diff() {
+  diff() { return 2; }
+  sim_send "$1"
+}
+
 # The case that must not regress: a one-character steer into a healthy pane is
 # DELIVERED, and the composer is left holding exactly the payload - no
 # verification suffix reaches the agent.
@@ -1024,7 +1029,15 @@ test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals() {
     || fail "an added anchor with no count rise must report typed-unproven, got '$scrolloff'"
   [ "$swallowed" != "$scrolloff" ] \
     || fail "swallow and scroll-off outcomes must remain observably distinct"
-  pass "fm_composer_typed_delivery_core: swallow, scroll-off, and enveloped refusals preserve distinct recovery states"
+
+  sim_reset healthy
+  scrolloff=$(sim_send_with_broken_diff "$DELTA_PAYLOAD") \
+    && fail "a post-write diff failure must not be proven"
+  [ "$scrolloff" = typed-unproven ] \
+    || fail "a post-write diff failure must report typed-unproven, got '$scrolloff'"
+  [ "$swallowed" != "$scrolloff" ] \
+    || fail "the retryable swallow must remain distinct from infrastructure failure"
+  pass "fm_composer_typed_delivery_core: only absent-from-added remains a retryable post-write refusal"
 }
 
 # The round-1 false pass: the payload is already on screen from an earlier
