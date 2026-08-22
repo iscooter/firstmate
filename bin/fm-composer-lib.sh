@@ -1437,10 +1437,17 @@ fm_composer_envelope_prepare() {  # <payload> <before>
 }
 
 # The erase proof uses the payload/first-suffix-character boundary selected to
-# be absent before typing. After N-1 erase keys that probe must be present; an
-# over-erase destroys it. After the final erase key it must be absent; an
-# under-erase preserves it. The opposite checkpoints make unrelated probe churn
-# fail toward refusal in at least one stage.
+# be absent before typing. Its presence after N-1 erase keys measures this
+# send's erase granularity: those keys removed exactly N-1 characters, neither
+# more nor fewer. Its required absence after the final key proves no suffix
+# residue remains. A secondary payload-count barrier catches a plain final key
+# that consumes a payload character.
+#
+# There is no independent positive proof that the payload survived the final
+# key if screen churn exactly offsets that count drop. Such a shape-free proof
+# cannot exist once the correct erase leaves only the low-entropy payload and
+# no high-entropy artifact to anchor on; obtaining one would require reading the
+# drawn composer shape, which this delta design deliberately replaced.
 fm_composer_envelope_boundary_verdict() {  # <screen> <payload> <nonce> <present|absent>
   local screen=$1 payload=$2 nonce=$3 expected=$4 payload_norm probe joined count
   payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
@@ -1469,6 +1476,25 @@ fm_composer_envelope_boundary_verdict() {  # <screen> <payload> <nonce> <present
       return 1
       ;;
   esac
+  printf 'accepted'
+}
+
+fm_composer_envelope_payload_retained_verdict() {  # <checkpoint> <after-erased> <payload>
+  local checkpoint=$1 erased=$2 payload=$3 payload_norm checkpoint_joined erased_joined before_count after_count
+  payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
+  [ -n "$payload_norm" ] || {
+    printf 'not-accepted:envelope-erase-unverifiable'
+    return 1
+  }
+  checkpoint_joined=$(fm_composer_delta_rows "$checkpoint" | LC_ALL=C tr -d '\n')
+  erased_joined=$(fm_composer_delta_rows "$erased" | LC_ALL=C tr -d '\n')
+  before_count=$(fm_composer_count_occurrences "$checkpoint_joined" "$payload_norm")
+  after_count=$(fm_composer_count_occurrences "$erased_joined" "$payload_norm")
+  if [ "$after_count" -lt "$before_count" ]; then
+    printf 'not-accepted:envelope-final-erase-consumed-payload(checkpoint=%s after-erase=%s)' \
+      "$before_count" "$after_count"
+    return 1
+  fi
   printf 'accepted'
 }
 
@@ -1557,6 +1583,11 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     return 1
   }
   if ! verdict=$(fm_composer_envelope_boundary_verdict "$erased" "$text" "$nonce" absent); then
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
+    printf 'typed-unproven'
+    return 1
+  fi
+  if ! verdict=$(fm_composer_envelope_payload_retained_verdict "$checkpoint" "$erased" "$text"); then
     fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
     printf 'typed-unproven'
     return 1

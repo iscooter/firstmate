@@ -950,7 +950,7 @@ sim_erase() {
   case "$SIM_MODE" in
     erase-fails) return 1 ;;
     erase-noop) return 0 ;;
-    erase-greedy|erase-greedy-churn) take=2 ;;
+    erase-greedy|erase-greedy-churn|erase-final-greedy) take=2 ;;
     erase-last-noop) [ "${#cur}" -ne 2 ] || return 0 ;;
   esac
   keep=$((${#cur} - take))
@@ -1108,7 +1108,19 @@ test_core_two_checkpoint_erase_refuses_both_directions() {
     || fail "a one-character suffix must pass both erase checkpoints, got '$verdict'"
   [ "$(cat "$SIM_FILE")" = "$payload23" ] \
     || fail "the one-character suffix path must leave only its payload"
-  pass "fm_composer_typed_delivery_core: two erase checkpoints refuse both directions and support a one-character suffix"
+
+  sim_reset erase-final-greedy
+  verdict=$(sim_send "$payload23" 2>"$SIM_DIR/final-over.err") \
+    && fail "a final erase consuming a payload character must not be proven"
+  err=$(cat "$SIM_DIR/final-over.err")
+  wire=$(cat "$SIM_FILE.wire")
+  [ "$verdict" = typed-unproven ] \
+    || fail "a greedy final erase must report typed-unproven, got '$verdict'"
+  assert_contains "$err" 'envelope-final-erase-consumed-payload' \
+    "the secondary barrier must name a greedy final erase"
+  assert_contains "$err" "$wire" \
+    "the greedy final-erase warning must name the exact wire"
+  pass "fm_composer_typed_delivery_core: erase checkpoints and final payload retention refuse every measured direction"
 }
 
 test_core_reports_a_failed_erase_as_typed_unproven() {
