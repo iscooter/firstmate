@@ -211,8 +211,8 @@ Spawn-time fixed commands may use Herdr's atomic run primitive.
 Enter, Escape, and Ctrl-C are supported.
 Slash and dollar-prefixed input uses the shared harness-aware settle before the first Enter so a completion popup cannot consume it.
 Text is typed once; only Enter is retried.
-Before that Enter, the adapter captures the pane, types once, captures again, and defers to the shared pre-Enter delivery proof (`fm_composer_delivery_delta_verdict`; see [architecture.md](architecture.md#event-driven-supervision)).
-Both captures come from one primitive that prefers the ANSI read and falls back to the plain one, so whichever fidelity Herdr can supply no longer changes the verdict, and the identity probe is not consulted on the send path at all.
+The adapter supplies capture, literal-write, and lowercase `backspace` erase primitives to the [shared pre-Enter type-and-prove sequence](architecture.md#event-driven-supervision).
+Its capture primitive prefers the ANSI read and falls back to the plain one, while the identity probe is not consulted by the pre-Enter delivery proof.
 
 On an idle or done native baseline, submit confirmation first waits for `working` or `blocked` across a bounded polling window.
 If native status stays idle, the shared composer verdict is the next positive signal: a cleared composer is delivery, and proven pending text retries Enter.

@@ -240,7 +240,7 @@ That last case is the recorded reason the gate scorer must never be load-bearing
 Typing the probe into codex's trust dialog also **exited the pane**, because its digits act as control input on a numbered selection list.
 That is the recorded reason `fm_composer_pre_type_ok` refuses to type into a gated screen at all rather than relying on the delivery proof to clean up afterwards.
 
-The anchor length (`FM_COMPOSER_DELTA_ANCHOR_MAX`) is bounded by the narrowest composer a steer must land in, not by uniqueness.
+The maximum anchor length (`FM_COMPOSER_DELTA_ANCHOR_MAX`) is bounded by the narrowest composer a steer must land in, while the 24-character minimum is the uniqueness floor.
 Measured against the horizontally scrolling single-row composer in `tests/fm-afk-inject-herdr-e2e.test.sh`, a 40-column window leaves 33 normalized payload characters visible, so an anchor of 34 or more silently turns that healthy away-mode injection into a refusal (confirmed by bisection: 32 passes, 34 and 37 and 48 all fail).
 `tests/fm-composer-lib.test.sh` pins that constraint portably.
 
@@ -283,7 +283,7 @@ ok - real tmux: the composer erase key removes exactly one character per press
 ok - real zellij: the composer erase key removes exactly one character per press
 ```
 
-The portable half - that the suffix is fresh, shares no character with the payload, lifts a one-character steer to a full-length anchor, and that both an under-erase and an over-erase are refused by name - runs everywhere with no backend at all, in `tests/fm-composer-lib.test.sh`.
+The portable half - that the suffix is fresh even when only one character is needed, shares no character with the payload, lifts a one-character steer to a full-length anchor, and that both an under-erase and an over-erase are refused by name - runs everywhere with no backend at all, in `tests/fm-composer-lib.test.sh`.
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 

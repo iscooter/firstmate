@@ -75,8 +75,7 @@ The adapter records the previously active tab and immediately restores it with `
 There is a narrow visible race between those calls that no current Zellij flag can remove.
 
 Literal send uses bracketed paste followed by a separate explicit Enter.
-Before sending Enter, the adapter rejects a gated pre-type screen and then defers to the shared pre-Enter delivery proof over two whole `dump-screen` captures (`fm_composer_delivery_delta_verdict`; see [architecture.md](architecture.md#event-driven-supervision)); an unreadable pane, a paste that lands elsewhere, or unrelated pane output fails without submitting.
-Zellij used to carry its own acceptance rule here, requiring the extracted composer region to equal the previous content plus the pasted text; that second answer to a fleet-wide question is gone, and zellij now proves delivery exactly the way every other backend does.
+The adapter supplies whole `dump-screen` capture, bracketed-paste literal-write, and `Backspace` erase primitives to the [shared pre-Enter type-and-prove sequence](architecture.md#event-driven-supervision); an unreadable pane, a paste that lands elsewhere, or unrelated pane output fails without submitting.
 The adapter supports `Enter`, `Esc`, and the one-argument key expression `Ctrl c` through the shared key vocabulary.
 Zellij exposes no cursor-row or native agent-state signal, but `dump-screen --ansi` (verified at 0.44.0) preserves styling, so the composer is read through the same fleet-wide classifier as tmux and herdr (`bin/fm-composer-lib.sh`), with ghost and placeholder text stripped before the verdict.
 Submit acknowledgement requires a positively classified empty composer.

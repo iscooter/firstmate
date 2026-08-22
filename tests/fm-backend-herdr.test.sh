@@ -3788,8 +3788,8 @@ test_send_text_submit_confirms_despite_codex_idle_tip_composer() {
   printf '%s\n' '╭────────────────────────╮' '│ ❯ Tip: try /skills     │' '╰────────────────────────╯' > "$resp/3.out"
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "reply with just OK unique payload" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = not-accepted:absent-from-added ] \
-    || fail "a rotating idle tip must not satisfy the pre-Enter proof on its own, got '$out'"
+  [ "$out" = typed-unproven ] \
+    || fail "a rotating idle tip must leave the successful write non-retryable when delivery is unproven, got '$out'"
   assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' \
     "no Enter may be sent when only the idle tip changed"
   pass "fm_backend_herdr_send_text_submit: confirms submission via native agent-state alone, immune to a codex-style dynamic idle-tip composer that would have misread as 'pending' under the old composer-based confirmation"

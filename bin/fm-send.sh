@@ -28,12 +28,13 @@
 # submit read-back stayed unconfirmed (verify the pane before any resend, and
 # never re-type blindly; a marked request's pending-reply expectation stays
 # armed because this outcome is not a proven failure); 4 = text was typed but
-# no Enter was sent because the pre-Enter proof capture failed; any other
-# nonzero = the send failed and nothing may be assumed delivered. Verdicts `gated` and
-# `not-accepted:<why>` are pre-Enter refusals - the pane was a modal dialog, or
-# the payload never became newly present after typing - so Enter was never
-# sent. There is deliberately no bypass for either: a harness whose composer
-# cannot be proven is refused, not steered blind.
+# no Enter was sent because its presence or verification-suffix removal could
+# not be proven (inspect the pane and never retype; a marked request remains in
+# typed-unproven until explicitly settled); any other nonzero = the send failed
+# and nothing may be assumed delivered. Verdicts `gated` and
+# `not-accepted:<why>` are pre-write refusals, so neither text nor Enter was
+# sent. There is deliberately no bypass: a harness whose composer cannot be
+# proven is refused, not steered blind.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).

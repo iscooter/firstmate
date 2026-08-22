@@ -82,8 +82,8 @@ The submit acknowledgement and away-mode supervisor-pane busy guard below still 
 The supervisor guard selects only the detected primary harness's signature rather than a global union of vendor patterns.
 
 `bin/fm-tmux-lib.sh` owns exact type-and-submit mechanics.
-It refuses a gated modal before typing, captures the whole visible pane, types the message once, captures again, and sends Enter only once the shared pre-Enter delivery proof accepts (`fm_composer_delivery_delta_verdict`; see [architecture.md](architecture.md#event-driven-supervision)); it then retries Enter only until submission is confirmed.
-That proof reads no composer region, so tmux's cursor row and identity probe are no longer consulted on the send path at all - they remain the classifier's inputs for the verdicts below.
+It supplies whole-visible-pane capture, literal-write, and `BSpace` erase primitives to the [shared pre-Enter type-and-prove sequence](architecture.md#event-driven-supervision), then retries Enter only until submission is confirmed.
+Tmux's cursor row and identity probe remain classifier inputs for the verdicts below but are not consulted by the pre-Enter delivery proof.
 Only a proven empty composer is a positive delivery acknowledgement.
 Text left in established structure remains `pending`, text in ambiguous structure remains unproven, and unreadable or unsafe state remains unknown.
 `fm-send.sh` never retypes or assumes a confirmed submit for an unconfirmed verdict; its header owns the distinct delivered-unconfirmed exit status and operator response.

@@ -356,7 +356,7 @@ SH
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
     "$SEND" labmate --resolve-key demo "please handle item 2 safely" >/dev/null 2>"$err"; rc=$?
   [ "$rc" -ne 0 ] || fail "a swallowed payload must not exit 0"
-  assert_contains "$(cat "$err")" "not accepted" "the diagnostic must name the missing tail"
+  assert_contains "$(cat "$err")" "not-accepted:absent-from-added" "the diagnostic must name the missing tail"
   if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then
     fail "missing tail must never send Enter"$'\n'"$(cat "$log")"
   fi

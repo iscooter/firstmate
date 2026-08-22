@@ -1142,13 +1142,19 @@ _fm_composer_select_cursorless() {
 # this is one locale-independent deletion rather than a hand-enumerated glyph
 # list that the next vendor border would escape - opencode alone draws its
 # composer with U+2503, U+2579 and U+2580.
-printf -v _FM_COMPOSER_DELTA_SED '%b' \
-  's|\0033\0135[^\0007\0033]*\0007||g;' \
-  's|\0033\0135[^\0007\0033]*\0033\0134\0134||g;' \
-  's/\0342[\0224\0225][\0200-\0277]//g;' \
-  's/\0342\0226[\0200-\0237]//g;' \
-  's/[[:space:]]//g'
-readonly _FM_COMPOSER_DELTA_SED
+# fm-send loads more than one backend adapter into the same shell, and each
+# adapter sources this shared owner. Initialize the readonly program once so a
+# later adapter cannot turn an otherwise healthy delivery proof into a capture
+# failure by attempting to assign it again.
+if [ -z "${_FM_COMPOSER_DELTA_SED+x}" ]; then
+  printf -v _FM_COMPOSER_DELTA_SED '%b' \
+    's|\0033\0135[^\0007\0033]*\0007||g;' \
+    's|\0033\0135[^\0007\0033]*\0033\0134\0134||g;' \
+    's/\0342[\0224\0225][\0200-\0277]//g;' \
+    's/\0342\0226[\0200-\0237]//g;' \
+    's/[[:space:]]//g'
+  readonly _FM_COMPOSER_DELTA_SED
+fi
 
 # The delta proof subtracts pre-existing screen content by TIME rather than
 # avoiding it by LOCATION, so its capture window is no longer a hazard to be
