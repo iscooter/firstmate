@@ -1303,19 +1303,15 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <wire-t
   added=$(printf '%s\n' "$added" | LC_ALL=C sed -n 's/^> //p' | LC_ALL=C tr -d '\n')
   before_joined=$(printf '%s' "$before_rows" | LC_ALL=C tr -d '\n')
   after_joined=$(printf '%s' "$after_rows" | LC_ALL=C tr -d '\n')
-  cb=$(fm_composer_count_occurrences "$before_joined" "$anchor")
-  ca=$(fm_composer_count_occurrences "$after_joined" "$anchor")
   case "$added" in
     *"$anchor"*) ;;
     *)
-      if [ "$ca" -gt "$cb" ]; then
-        printf 'not-accepted:absent-from-added-with-new-occurrence(before=%s after=%s)' "$cb" "$ca"
-      else
-        printf 'not-accepted:absent-from-added'
-      fi
+      printf 'not-accepted:absent-from-added'
       return 1
       ;;
   esac
+  cb=$(fm_composer_count_occurrences "$before_joined" "$anchor")
+  ca=$(fm_composer_count_occurrences "$after_joined" "$anchor")
   if [ "$ca" -le "$cb" ]; then
     printf 'not-accepted:no-new-occurrence(before=%s after=%s)' "$cb" "$ca"
     return 1
@@ -1520,7 +1516,11 @@ fm_composer_envelope_payload_retained_verdict() {  # <checkpoint> <after-erased>
 #   send-failed     nothing was typed
 #   gated           a modal was in the way; nothing was typed
 #   typed-unproven  text WAS typed and could not be proven; never retype
-#   not-accepted:*  the pane did not show what was typed
+#   not-accepted:*  a pre-write requirement refused the payload
+#
+# After a successful literal write, every unproven result is typed-unproven. A
+# screen delta cannot distinguish a successful write that was not rendered from
+# one the pane swallowed, so no post-write result is safe to retry.
 #
 # A backend with no erase primitive refuses a short payload BEFORE typing
 # anything, so it can never strand an envelope it has no way to remove.
@@ -1553,18 +1553,11 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$typed" "$wire"); then
     if [ "$erase_n" -gt 0 ]; then
       fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
-      printf 'typed-unproven'
     else
-      case "$verdict" in
-        not-accepted:absent-from-added) printf '%s' "$verdict" ;;
-        not-accepted:absent-from-added-with-new-occurrence*)
-          printf 'warning: %s at %s; the text is visible but its row-delta proof is ambiguous. Do not retype or resend.\n' \
-            "$verdict" "$target" >&2
-          printf 'typed-unproven'
-          ;;
-        *) printf 'typed-unproven' ;;
-      esac
+      printf 'warning: %s at %s after the text was written; delivery could not be proven. Do not retype or resend.\n' \
+        "$verdict" "$target" >&2
     fi
+    printf 'typed-unproven'
     return 1
   fi
   [ "$erase_n" -gt 0 ] || return 0

@@ -930,6 +930,10 @@ sim_capture() {
     fi
     return 0
   fi
+  if [ "$SIM_MODE" = unchanged-visible-tail ]; then
+    printf '%s' "$SIM_SCROLLBACK"
+    return 0
+  fi
   if [ -s "$SIM_FILE" ]; then
     case "$SIM_MODE" in
       capture-after-write-fails) return 1 ;;
@@ -1015,42 +1019,63 @@ test_core_delivers_a_self_proving_steer_untouched() {
   pass "fm_composer_typed_delivery_core: a self-proving steer is delivered with no envelope"
 }
 
-# A pane that swallowed the keystrokes shows no delta, so no Enter may follow.
-# This is the round-1 false delivery, and it must refuse for BOTH lengths.
-test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals() {
-  local swallowed scrolloff short_verdict err wire
+# Once the literal primitive succeeds, a screen delta cannot distinguish a pane
+# that swallowed the bytes from one that accepted them without rendering them.
+test_core_keeps_every_post_write_refusal_typed_unproven() {
+  local verdict err wire mode
   sim_reset swallow
-  short_verdict=$(sim_send '2' 2>"$SIM_DIR/short-swallow.err") \
+  verdict=$(sim_send '2' 2>"$SIM_DIR/short-swallow.err") \
     && fail "a swallowed short steer must not be proven"
   err=$(cat "$SIM_DIR/short-swallow.err")
   wire=$(cat "$SIM_FILE.wire")
-  [ "$short_verdict" = typed-unproven ] \
-    || fail "an enveloped post-write refusal must report typed-unproven, got '$short_verdict'"
+  [ "$verdict" = typed-unproven ] \
+    || fail "an enveloped post-write refusal must report typed-unproven, got '$verdict'"
   assert_contains "$err" "$wire" \
     "an enveloped refusal must warn with the exact stranded wire"
 
-  sim_reset swallow
-  swallowed=$(sim_send "$DELTA_PAYLOAD") \
-    && fail "a swallowed long steer must not be proven"
-  [ "$swallowed" = not-accepted:absent-from-added ] \
-    || fail "an absent added anchor must remain a retryable swallow, got '$swallowed'"
-
-  sim_reset scroll-off "old transcript: $DELTA_PAYLOAD"
-  scrolloff=$(sim_send "$DELTA_PAYLOAD") \
-    && fail "a scroll-off collision must not be proven"
-  [ "$scrolloff" = typed-unproven ] \
-    || fail "an added anchor with no count rise must report typed-unproven, got '$scrolloff'"
-  [ "$swallowed" != "$scrolloff" ] \
-    || fail "swallow and scroll-off outcomes must remain observably distinct"
+  for mode in swallow scroll-off; do
+    if [ "$mode" = scroll-off ]; then
+      sim_reset "$mode" "old transcript: $DELTA_PAYLOAD"
+    else
+      sim_reset "$mode"
+    fi
+    verdict=$(sim_send "$DELTA_PAYLOAD" 2>"$SIM_DIR/$mode.err") \
+      && fail "a $mode steer must not be proven"
+    [ "$verdict" = typed-unproven ] \
+      || fail "a successful $mode write must report typed-unproven, got '$verdict'"
+    assert_contains "$(cat "$SIM_DIR/$mode.err")" 'not-accepted:' \
+      "a $mode refusal must retain its precise delta reason"
+  done
 
   sim_reset healthy
-  scrolloff=$(sim_send_with_broken_diff "$DELTA_PAYLOAD") \
+  verdict=$(sim_send_with_broken_diff "$DELTA_PAYLOAD" 2>"$SIM_DIR/diff-failed.err") \
     && fail "a post-write diff failure must not be proven"
-  [ "$scrolloff" = typed-unproven ] \
-    || fail "a post-write diff failure must report typed-unproven, got '$scrolloff'"
-  [ "$swallowed" != "$scrolloff" ] \
-    || fail "the retryable swallow must remain distinct from infrastructure failure"
-  pass "fm_composer_typed_delivery_core: only a genuine swallow remains a retryable post-write refusal"
+  [ "$verdict" = typed-unproven ] \
+    || fail "a post-write diff failure must report typed-unproven, got '$verdict'"
+  assert_contains "$(cat "$SIM_DIR/diff-failed.err")" 'not-accepted:diff-failed' \
+    "a post-write infrastructure failure must retain its precise delta reason"
+
+  sim_reset write-fails
+  verdict=$(sim_send "$DELTA_PAYLOAD") && fail "a refused literal write must not succeed"
+  [ "$verdict" = send-failed ] \
+    || fail "a failure before any text was written must remain send-failed, got '$verdict'"
+  pass "fm_composer_typed_delivery_core: every unproven successful write is typed-unproven"
+}
+
+test_core_refuses_unchanged_visible_tail_as_typed_unproven() {
+  local anchor verdict err
+  anchor=$(fm_composer_payload_tail_anchor "$DELTA_PAYLOAD") || fail "visible-tail fixture needs a valid anchor"
+  sim_reset unchanged-visible-tail "> $anchor"
+  verdict=$(sim_send "$DELTA_PAYLOAD" 2>"$SIM_DIR/unchanged-visible-tail.err") \
+    && fail "an unchanged visible tail must not prove a repeated write"
+  err=$(cat "$SIM_DIR/unchanged-visible-tail.err")
+  [ "$verdict" = typed-unproven ] \
+    || fail "an unchanged visible tail after a successful write must be typed-unproven, got '$verdict'"
+  assert_contains "$err" 'not-accepted:absent-from-added' \
+    "the unchanged visible-tail refusal must retain its delta reason"
+  [ "$(cat "$SIM_FILE")" = "$DELTA_PAYLOAD" ] \
+    || fail "the unchanged visible-tail fixture must actually accept the repeated payload"
+  pass "fm_composer_typed_delivery_core: unchanged visible tail never invites a duplicate write"
 }
 
 test_core_preserves_wrapped_payload_when_added_rows_omit_anchor() {
@@ -1080,8 +1105,8 @@ test_core_preserves_wrapped_payload_when_added_rows_omit_anchor() {
   err=$(cat "$SIM_DIR/wrapped-footer-ambiguous.err")
   [ "$verdict" = typed-unproven ] \
     || fail "a visible payload omitted by row diff must report typed-unproven, got '$verdict'"
-  assert_contains "$err" 'absent-from-added-with-new-occurrence' \
-    "the ambiguous wrapped-footer refusal must name both delta facts"
+  assert_contains "$err" 'not-accepted:absent-from-added' \
+    "the ambiguous wrapped-footer refusal must retain its precise delta reason"
   [ "$(cat "$SIM_FILE")" = "$DELTA_PAYLOAD" ] \
     || fail "the ambiguous wrapped-footer fixture must leave the complete payload typed"
   pass "fm_composer_typed_delivery_core: a rising count prevents ambiguous row diff from inviting retry"
@@ -1091,15 +1116,16 @@ test_core_preserves_wrapped_payload_when_added_rows_omit_anchor() {
 # send, and the write goes nowhere. Novelty alone could be fooled; the
 # occurrence count cannot, because a pre-existing copy cannot raise it.
 test_core_refuses_a_scrollback_copy_of_the_payload() {
-  local verdict
+  local verdict err
   sim_reset swallow "agent idle
 $DELTA_PAYLOAD"
-  verdict=$(sim_send "$DELTA_PAYLOAD") \
+  verdict=$(sim_send "$DELTA_PAYLOAD" 2>"$SIM_DIR/scrollback-copy.err") \
     && fail "a scrollback copy of the payload must not prove a new delivery"
-  case "$verdict" in
-    not-accepted:*) ;;
-    *) fail "the scrollback case must refuse with a named reason, got '$verdict'" ;;
-  esac
+  err=$(cat "$SIM_DIR/scrollback-copy.err")
+  [ "$verdict" = typed-unproven ] \
+    || fail "the post-write scrollback case must be typed-unproven, got '$verdict'"
+  assert_contains "$err" 'not-accepted:' \
+    "the scrollback case must retain its named delta reason"
   pass "fm_composer_typed_delivery_core: an earlier copy of the payload on screen proves nothing"
 }
 
@@ -1293,7 +1319,8 @@ SIM_DIR=$(mktemp -d)
 trap 'rm -rf "$SIM_DIR"' EXIT
 test_core_delivers_a_short_steer_and_leaves_no_residue
 test_core_delivers_a_self_proving_steer_untouched
-test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals
+test_core_keeps_every_post_write_refusal_typed_unproven
+test_core_refuses_unchanged_visible_tail_as_typed_unproven
 test_core_preserves_wrapped_payload_when_added_rows_omit_anchor
 test_core_refuses_a_scrollback_copy_of_the_payload
 test_core_refuses_a_gated_pane_without_typing
