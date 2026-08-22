@@ -1303,15 +1303,19 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <wire-t
   added=$(printf '%s\n' "$added" | LC_ALL=C sed -n 's/^> //p' | LC_ALL=C tr -d '\n')
   before_joined=$(printf '%s' "$before_rows" | LC_ALL=C tr -d '\n')
   after_joined=$(printf '%s' "$after_rows" | LC_ALL=C tr -d '\n')
+  cb=$(fm_composer_count_occurrences "$before_joined" "$anchor")
+  ca=$(fm_composer_count_occurrences "$after_joined" "$anchor")
   case "$added" in
     *"$anchor"*) ;;
     *)
-      printf 'not-accepted:absent-from-added'
+      if [ "$ca" -gt "$cb" ]; then
+        printf 'not-accepted:absent-from-added-with-new-occurrence(before=%s after=%s)' "$cb" "$ca"
+      else
+        printf 'not-accepted:absent-from-added'
+      fi
       return 1
       ;;
   esac
-  cb=$(fm_composer_count_occurrences "$before_joined" "$anchor")
-  ca=$(fm_composer_count_occurrences "$after_joined" "$anchor")
   if [ "$ca" -le "$cb" ]; then
     printf 'not-accepted:no-new-occurrence(before=%s after=%s)' "$cb" "$ca"
     return 1
@@ -1553,6 +1557,11 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     else
       case "$verdict" in
         not-accepted:absent-from-added) printf '%s' "$verdict" ;;
+        not-accepted:absent-from-added-with-new-occurrence*)
+          printf 'warning: %s at %s; the text is visible but its row-delta proof is ambiguous. Do not retype or resend.\n' \
+            "$verdict" "$target" >&2
+          printf 'typed-unproven'
+          ;;
         *) printf 'typed-unproven' ;;
       esac
     fi

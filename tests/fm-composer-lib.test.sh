@@ -922,6 +922,14 @@ sim_capture() {
     printf '%s' "$SIM_SCROLLBACK"
     return 0
   fi
+  if [ "$SIM_MODE" = wrapped-footer-ambiguous ]; then
+    if [ -s "$SIM_FILE" ]; then
+      printf '%s\n%s\n%s\n%s' "$SIM_WRAP_X" "$SIM_WRAP_Y" "$SIM_WRAP_X" "$SIM_SCROLLBACK"
+    else
+      printf '%s\n%s' "$SIM_WRAP_X" "$SIM_SCROLLBACK"
+    fi
+    return 0
+  fi
   if [ -s "$SIM_FILE" ]; then
     case "$SIM_MODE" in
       capture-after-write-fails) return 1 ;;
@@ -1042,7 +1050,41 @@ test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals() {
     || fail "a post-write diff failure must report typed-unproven, got '$scrolloff'"
   [ "$swallowed" != "$scrolloff" ] \
     || fail "the retryable swallow must remain distinct from infrastructure failure"
-  pass "fm_composer_typed_delivery_core: only absent-from-added remains a retryable post-write refusal"
+  pass "fm_composer_typed_delivery_core: only a genuine swallow remains a retryable post-write refusal"
+}
+
+test_core_preserves_wrapped_payload_when_added_rows_omit_anchor() {
+  local anchor before after before_rows after_rows added before_count after_count verdict err
+  anchor=$(fm_composer_payload_tail_anchor "$DELTA_PAYLOAD") || fail "wrapped-footer fixture needs a valid anchor"
+  SIM_WRAP_X=${anchor:0:12}
+  SIM_WRAP_Y=${anchor:12}
+  sim_reset wrapped-footer-ambiguous 'persistent footer'
+  before=$(sim_capture pane '')
+  sim_literal pane "$DELTA_PAYLOAD" '' || fail "wrapped-footer fixture write failed"
+  after=$(sim_capture pane '')
+  before_rows=$(fm_composer_delta_rows "$before")
+  after_rows=$(fm_composer_delta_rows "$after")
+  added=$(diff <(printf '%s\n' "$before_rows") <(printf '%s\n' "$after_rows") \
+    | LC_ALL=C sed -n 's/^> //p' | LC_ALL=C tr -d '\n' || true)
+  case "$added" in
+    *"$anchor"*) fail "wrapped-footer fixture unexpectedly retained the anchor in its added rows" ;;
+  esac
+  before_count=$(fm_composer_count_occurrences "$(printf '%s' "$before_rows" | tr -d '\n')" "$anchor")
+  after_count=$(fm_composer_count_occurrences "$(printf '%s' "$after_rows" | tr -d '\n')" "$anchor")
+  [ "$after_count" -gt "$before_count" ] \
+    || fail "wrapped-footer fixture must increase the whole-screen anchor count"
+
+  sim_reset wrapped-footer-ambiguous 'persistent footer'
+  verdict=$(sim_send "$DELTA_PAYLOAD" 2>"$SIM_DIR/wrapped-footer-ambiguous.err") \
+    && fail "an anchor omitted only by row diff must not be accepted"
+  err=$(cat "$SIM_DIR/wrapped-footer-ambiguous.err")
+  [ "$verdict" = typed-unproven ] \
+    || fail "a visible payload omitted by row diff must report typed-unproven, got '$verdict'"
+  assert_contains "$err" 'absent-from-added-with-new-occurrence' \
+    "the ambiguous wrapped-footer refusal must name both delta facts"
+  [ "$(cat "$SIM_FILE")" = "$DELTA_PAYLOAD" ] \
+    || fail "the ambiguous wrapped-footer fixture must leave the complete payload typed"
+  pass "fm_composer_typed_delivery_core: a rising count prevents ambiguous row diff from inviting retry"
 }
 
 # The round-1 false pass: the payload is already on screen from an earlier
@@ -1252,6 +1294,7 @@ trap 'rm -rf "$SIM_DIR"' EXIT
 test_core_delivers_a_short_steer_and_leaves_no_residue
 test_core_delivers_a_self_proving_steer_untouched
 test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals
+test_core_preserves_wrapped_payload_when_added_rows_omit_anchor
 test_core_refuses_a_scrollback_copy_of_the_payload
 test_core_refuses_a_gated_pane_without_typing
 test_core_refuses_when_no_absent_boundary_probe_exists
