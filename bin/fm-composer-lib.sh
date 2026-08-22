@@ -1412,7 +1412,7 @@ fm_composer_envelope_prepare() {  # <payload> <before>
   FM_COMPOSER_ENVELOPE_WIRE=$payload
   FM_COMPOSER_ENVELOPE_NONCE=
   FM_COMPOSER_ENVELOPE_ERASE=0
-  FM_COMPOSER_ENVELOPE_ERROR=payload-not-provable
+  FM_COMPOSER_ENVELOPE_ERROR='payload-not-provable'
   norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
   [ -n "$norm" ] || return 1
   [ "${#norm}" -lt "$FM_COMPOSER_DELTA_ANCHOR_MIN" ] || return 0

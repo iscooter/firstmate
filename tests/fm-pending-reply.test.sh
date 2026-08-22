@@ -1508,6 +1508,9 @@ test_typed_abandon_serializes_with_watcher_escalation() {
   rm -f "$entered" "$release"
 
   (
+    # Shadows the library function so the fixture can hold the call open; the
+    # code under test invokes it indirectly, which shellcheck cannot see.
+    # shellcheck disable=SC2329
     fm_pending_reply_settle_typed_escalation() {
       : > "$entered"
       while [ ! -f "$release" ]; do sleep 0.01; done

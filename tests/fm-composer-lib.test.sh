@@ -862,6 +862,9 @@ test_envelope_randomizes_a_single_character_suffix() {
   printf '0\n' > "$draw_dir/index"
 
   (
+    # Shadows the library's own draw so the fixture controls it; the code
+    # under test calls it indirectly, which shellcheck cannot see.
+    # shellcheck disable=SC2329
     fm_composer_random_from_pool() {
       local pool=$1 want=$2 index
       [ "$want" -eq 1 ] || fail "the single-character fixture must request one random character"
@@ -994,7 +997,6 @@ sim_capture() {
   printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
 }
 sim_literal() {
-  SIM_WIRE=$2
   printf '%s' "$2" > "$SIM_FILE.wire"
   case "$SIM_MODE" in
     swallow) return 0 ;;
@@ -1023,7 +1025,6 @@ sim_reset() {  # <mode> [scrollback]
   SIM_SCROLLBACK=${2:-'agent idle'}
   SIM_FILE="$SIM_DIR/composer"
   SIM_ERASE_CALLS=0
-  SIM_WIRE=
   rm -f "$SIM_FILE.wire"
   : > "$SIM_FILE"
 }
@@ -1033,6 +1034,8 @@ sim_send() {  # <text> -> the core's verdict on stdout, its return code preserve
 }
 
 sim_send_with_broken_diff() {
+  # Shadows diff for the code under test, which calls it indirectly.
+  # shellcheck disable=SC2329
   diff() { return 2; }
   sim_send "$1"
 }
