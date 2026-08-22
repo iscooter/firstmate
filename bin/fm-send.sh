@@ -646,6 +646,7 @@ else
     elif [ "$send_rc" -eq 4 ]; then
       verdict='typed-unproven'
       send_rc=0
+      [ -z "$remote_err" ] || printf '%s\n' "$remote_err" >&2
     else
       verdict=send-failed
       [ -z "$remote_err" ] || printf '%s\n' "$remote_err" >&2

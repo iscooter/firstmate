@@ -62,14 +62,18 @@ case "${1:-}" in
     done
     if [ "$literal" = 1 ]; then
       printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+      printf '%s' "${1:-}" > "$FM_SEND_LOG.typed"
+      rm -f "$FM_SEND_LOG.entered"
+    elif [ "${1:-}" = Enter ]; then
+      : > "$FM_SEND_LOG.entered"
     fi
     exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
-    if [ "${FM_FAKE_TMUX_PENDING:-0}" = 1 ]; then
-      printf '╭────────────╮\n│ > steer    │\n╰────────────╯\n'
+    if [ -f "$FM_SEND_LOG.typed" ] && { [ ! -f "$FM_SEND_LOG.entered" ] || [ "${FM_FAKE_TMUX_PENDING:-0}" = 1 ]; }; then
+      printf '❯ %s\n' "$(cat "$FM_SEND_LOG.typed")"
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
@@ -127,7 +131,7 @@ EOF
 
 # The single non-dot pending-reply record in <home>, or empty.
 pending_record() {  # <home>
-  find "$1/state/pending-replies" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | head -1
+  find "$1/state/pending-replies" -maxdepth 1 -type f ! -name '.*' ! -name '*.request' 2>/dev/null | head -1
 }
 
 drain_out() {  # <home>
@@ -164,6 +168,34 @@ test_remote_delivered_unconfirmed_is_not_failure() {
   [ "$(grep '^phase=' "$rec" | tail -1 | cut -d= -f2-)" = awaiting_report ] \
     || fail "a delivered-unconfirmed send must leave the expectation awaiting its report: $(cat "$rec")"
   pass "fm-send remote: delivered-unconfirmed reports delivered, exits 0, keeps the expectation armed"
+}
+
+test_remote_typed_unproven_replays_stranded_suffix_warning() {
+  local dir fb log ssh_log home rc err rec warning
+  dir="$TMP_ROOT/remote-typed-unproven"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; ssh_log="$dir/ssh.log"; : > "$ssh_log"
+  home=$(setup_remote_home remote-typed-unproven)
+  warning='warning: the pane could not be captured after typing at fm-remote:w1:p1; the composer may still hold the verification suffix. Expected text: 2abcdefghijklmnopqrstuvw (the last 23 characters are the suffix and are NOT part of the message). Clear the composer before sending anything else.'
+
+  : > "$log"
+  env PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=4 \
+    FM_FAKE_SSH_STDERR="$warning" \
+    "$SEND" rsm "2" >"$dir/out" 2>"$dir/err"; rc=$?
+  err=$(cat "$dir/err")
+  expect_code 4 "$rc" "a remote typed-unproven send must preserve exit 4"
+  assert_contains "$err" 'Expected text: 2abcdefghijklmnopqrstuvw' \
+    "the parent must replay the exact stranded remote wire"
+  assert_contains "$err" 'last 23 characters are the suffix' \
+    "the parent must replay the remote suffix length"
+  assert_contains "$err" '--typed-confirm' \
+    "the parent must retain its operator confirmation guidance"
+  rec=$(pending_record "$home")
+  [ -n "$rec" ] || fail "remote typed-unproven must retain its pending record"
+  [ "$(fm_pending_reply_get "$rec" phase)" = typed_unproven ] \
+    || fail "remote typed-unproven must persist its unresolved phase"
+  pass "fm-send remote: typed-unproven replays exact stranded-suffix guidance"
 }
 
 test_remote_real_failure_still_fails() {
@@ -244,7 +276,7 @@ test_local_secondmate_pending_keeps_expectation_armed() {
   : > "$log"
   env PATH="$fb:$PATH" FM_FAKE_TMUX_PENDING=1 \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" lsm "audit the ledger" >/dev/null 2>&1; rc=$?
+    "$SEND" lsm "audit the ledger and report every discrepancy" >/dev/null 2>&1; rc=$?
   expect_code 3 "$rc" "an unconfirmed local secondmate submit must exit delivered-unconfirmed"
   rec=$(pending_record "$home")
   [ -n "$rec" ] \
@@ -264,12 +296,12 @@ test_local_pending_reports_delivered_unconfirmed() {
   dir="$TMP_ROOT/local-pending"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); log="$dir/send.log"
   home=$(setup_home local-pending)
-  fm_write_meta "$home/state/t1.meta" "window=sess:fm-t1" "kind=ship"
+  fm_write_meta "$home/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=claude"
 
   : > "$log"
   env PATH="$fb:$PATH" FM_FAKE_TMUX_PENDING=1 \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" t1 "steer text" >"$dir/out" 2>"$dir/err"; rc=$?
+    "$SEND" t1 "steer text with enough proof entropy" >"$dir/out" 2>"$dir/err"; rc=$?
   err=$(cat "$dir/err")
   expect_code 3 "$rc" "an unconfirmed local submit must exit with the delivered-unconfirmed status"
   assert_contains "$err" "submission is unconfirmed" \
@@ -286,13 +318,13 @@ test_local_pending_does_not_close_resolve_key() {
   dir="$TMP_ROOT/local-pending-key"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); log="$dir/send.log"
   home=$(setup_home local-pending-key)
-  fm_write_meta "$home/state/t2.meta" "window=sess:fm-t2" "kind=ship"
+  fm_write_meta "$home/state/t2.meta" "window=sess:fm-t2" "kind=ship" "harness=claude"
   printf 'blocked [key=creds]: need the deploy token\n' > "$home/state/t2.status"
 
   : > "$log"
   env PATH="$fb:$PATH" FM_FAKE_TMUX_PENDING=1 \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" t2 --resolve-key creds "token is in the vault now" >/dev/null 2>&1; rc=$?
+    "$SEND" t2 --resolve-key creds "token is securely stored in the deployment vault now" >/dev/null 2>&1; rc=$?
   expect_code 3 "$rc" "an unconfirmed local answer must exit with the delivered-unconfirmed status"
   if grep -F 'resolved' "$home/state/t2.status" >/dev/null; then
     fail "an unconfirmed local answer must not close the decision: $(cat "$home/state/t2.status")"
@@ -304,6 +336,7 @@ test_local_pending_does_not_close_resolve_key() {
 }
 
 test_remote_delivered_unconfirmed_is_not_failure
+test_remote_typed_unproven_replays_stranded_suffix_warning
 test_remote_real_failure_still_fails
 test_remote_transport_unknown_preserves_expectation
 test_remote_delivered_unconfirmed_closes_resolve_key

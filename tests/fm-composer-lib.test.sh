@@ -810,8 +810,9 @@ test_delta_verdict_refuses_short_collision_anchor() {
 # The envelope is what lets a one-character steer reach the proof above with a
 # full-length anchor, instead of being refused or given a weaker test.
 test_envelope_gives_a_short_payload_a_full_length_anchor() {
-  local wire_a erase_a wire_b norm i ch
-  fm_composer_envelope_prepare '2' || fail "a short payload must be envelopable"
+  local wire_a erase_a wire_b norm i ch before probe
+  before='transcript contains the first candidate 2a already'
+  fm_composer_envelope_prepare '2' "$before" || fail "a short payload must be envelopable"
   wire_a=$FM_COMPOSER_ENVELOPE_WIRE
   erase_a=$FM_COMPOSER_ENVELOPE_ERASE
 
@@ -839,10 +840,13 @@ test_envelope_gives_a_short_payload_a_full_length_anchor() {
   done
   [ "$FM_COMPOSER_ENVELOPE_NONCE" = "${wire_a:1}" ] \
     || fail "the published suffix must be exactly the wire's tail past the payload"
+  probe="2${FM_COMPOSER_ENVELOPE_NONCE:0:1}"
+  [ "$(fm_composer_count_occurrences "$(fm_composer_delta_rows "$before" | tr -d '\n')" "$probe")" -eq 0 ] \
+    || fail "the selected boundary probe must be absent before typing, got '$probe' in '$before'"
 
   # A fresh suffix per send: a reused one would be screen content a later send
   # could match against.
-  fm_composer_envelope_prepare '2' || fail "second prepare failed"
+  fm_composer_envelope_prepare '2' "$before" || fail "second prepare failed"
   wire_b=$FM_COMPOSER_ENVELOPE_WIRE
   [ "$wire_a" != "$wire_b" ] || fail "the verification suffix must be fresh per send, got '$wire_a' twice"
   pass "fm_composer_envelope_prepare: a short payload gets a fresh full-length anchor and an exact erase count"
@@ -852,12 +856,12 @@ test_envelope_gives_a_short_payload_a_full_length_anchor() {
 # the wire byte-identical to the payload including whitespace the anchor
 # normalization would have dropped.
 test_envelope_leaves_a_self_proving_payload_alone() {
-  fm_composer_envelope_prepare "$DELTA_PAYLOAD" || fail "a long payload must prepare cleanly"
+  fm_composer_envelope_prepare "$DELTA_PAYLOAD" 'idle pane' || fail "a long payload must prepare cleanly"
   [ "$FM_COMPOSER_ENVELOPE_ERASE" -eq 0 ] \
     || fail "a self-proving payload must need no erase, got '$FM_COMPOSER_ENVELOPE_ERASE'"
   [ "$FM_COMPOSER_ENVELOPE_WIRE" = "$DELTA_PAYLOAD" ] \
     || fail "a self-proving payload must be typed exactly as given"
-  fm_composer_envelope_prepare "$DELTA_PAYLOAD"$'  \n' || fail "trailing whitespace must still prepare"
+  fm_composer_envelope_prepare "$DELTA_PAYLOAD"$'  \n' 'idle pane' || fail "trailing whitespace must still prepare"
   [ "$FM_COMPOSER_ENVELOPE_WIRE" = "$DELTA_PAYLOAD"$'  \n' ] \
     || fail "the wire must preserve trailing whitespace the caller meant to type"
   pass "fm_composer_envelope_prepare: a self-proving payload is typed verbatim with no envelope"
@@ -867,9 +871,9 @@ test_envelope_leaves_a_self_proving_payload_alone() {
 # others, so a short multi-row payload is refused rather than guessed at. No
 # real steer is both multi-row and this short.
 test_envelope_refuses_a_short_multi_row_payload() {
-  fm_composer_envelope_prepare $'a\nb' \
+  fm_composer_envelope_prepare $'a\nb' 'idle pane' \
     && fail "a short multi-row payload must not be envelopable"
-  fm_composer_envelope_prepare '   ' \
+  fm_composer_envelope_prepare '   ' 'idle pane' \
     && fail "a payload that normalizes to nothing must not be envelopable"
   pass "fm_composer_envelope_prepare: an unerasable short payload is refused, not guessed at"
 }
@@ -878,10 +882,12 @@ test_envelope_refuses_a_short_multi_row_payload() {
 # an under-erase leaves the suffix behind, and an over-erase eats the payload.
 test_envelope_erase_verdict_pins_both_directions() {
   local before typed erased verdict wire nonce
-  before='idle pane'
-  fm_composer_envelope_prepare 'ok' || fail "prepare failed"
+  before=$'idle pane\nunrelated old boundary oka'
+  fm_composer_envelope_prepare 'ok' "$before" || fail "prepare failed"
   wire=$FM_COMPOSER_ENVELOPE_WIRE
   nonce=$FM_COMPOSER_ENVELOPE_NONCE
+  [ "${nonce:0:1}" != a ] \
+    || fail "prepare must skip a boundary probe already present before typing"
   typed="idle pane
 > $wire"
 
@@ -912,6 +918,16 @@ test_envelope_erase_verdict_pins_both_directions() {
   verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
     && fail "a partial suffix must not be accepted"
 
+  erased="idle pane
+> ok
+new unrelated row ok${nonce:0:1}"
+  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+    && fail "a boundary occurrence appearing during screen churn must fail safe"
+  case "$verdict" in
+    not-accepted:envelope-not-erased*) ;;
+    *) fail "an appearing unrelated boundary must refuse by name, got '$verdict'" ;;
+  esac
+
   # Over-erase: the suffix went, and took the payload's tail with it. This is
   # the silent partial send the whole design exists to prevent.
   erased='idle pane
@@ -939,6 +955,12 @@ sim_capture() {
   if [ "$SIM_MODE" = gated ]; then
     printf '%s' "$SIM_SCROLLBACK"
     return 0
+  fi
+  if [ -s "$SIM_FILE" ]; then
+    case "$SIM_MODE" in
+      capture-after-write-fails) return 1 ;;
+      delta-refuse) printf '%s' "$SIM_SCROLLBACK"; return 0 ;;
+    esac
   fi
   printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
 }
@@ -1045,6 +1067,22 @@ Enter to confirm"
 # A backend with no erase primitive cannot take a suffix back off, so it must
 # refuse a short payload before typing rather than strand one. A long payload
 # needs no erase and still works there.
+test_core_refuses_when_no_absent_boundary_probe_exists() {
+  local verdict before='' ch i
+  i=0
+  while [ "$i" -lt "${#FM_COMPOSER_ENVELOPE_ALPHABET}" ]; do
+    ch=${FM_COMPOSER_ENVELOPE_ALPHABET:i:1}
+    i=$((i + 1))
+    [ "$ch" = 2 ] || before="$before 2$ch"
+  done
+  sim_reset healthy "$before"
+  verdict=$(sim_send '2') && fail "a short steer with no absent boundary probe must refuse"
+  [ "$verdict" = not-accepted:envelope-boundary-probe-unavailable ] \
+    || fail "the refusal must name the unavailable boundary probe, got '$verdict'"
+  [ ! -s "$SIM_FILE" ] || fail "probe selection failure must happen before typing"
+  pass "fm_composer_typed_delivery_core: unavailable boundary probes refuse before typing"
+}
+
 test_core_refuses_a_short_steer_when_the_backend_cannot_erase() {
   local verdict
   sim_reset healthy
@@ -1077,14 +1115,21 @@ test_core_reports_a_failed_erase_as_typed_unproven() {
 # The operator settling a typed-unproven request needs the literal text to look
 # for; a verdict token alone cannot carry it.
 test_core_names_the_stranded_suffix_on_stderr() {
-  local err
-  sim_reset erase-noop
-  err=$(sim_send '2' 2>&1 >/dev/null)
-  assert_contains "$err" "$(cat "$SIM_FILE")" \
-    "the warning must quote the exact text left in the composer"
-  assert_contains "$err" 'NOT part of the message' \
-    "the warning must say which part of that text is the suffix"
-  pass "fm_composer_typed_delivery_core: a stranded suffix is named on stderr so it can be cleared"
+  local err mode wire
+  for mode in erase-noop capture-after-write-fails delta-refuse; do
+    sim_reset "$mode"
+    err=$(sim_send '2' 2>&1 >/dev/null)
+    wire=$(cat "$SIM_FILE")
+    assert_contains "$err" "$wire" \
+      "the $mode warning must quote the exact text that may remain in the composer"
+    assert_contains "$err" 'NOT part of the message' \
+      "the $mode warning must say which part of that text is the suffix"
+  done
+  sim_reset capture-after-write-fails
+  err=$(sim_send "$DELTA_PAYLOAD" 2>&1 >/dev/null)
+  assert_not_contains "$err" 'verification suffix' \
+    "a self-proving payload failure must not claim that a suffix was stranded"
+  pass "fm_composer_typed_delivery_core: every stranded suffix path is named on stderr"
 }
 
 test_delta_verdict_normalizes_payload_and_screen_identically() {
@@ -1143,6 +1188,7 @@ test_core_delivers_a_self_proving_steer_untouched
 test_core_refuses_a_swallowed_send
 test_core_refuses_a_scrollback_copy_of_the_payload
 test_core_refuses_a_gated_pane_without_typing
+test_core_refuses_when_no_absent_boundary_probe_exists
 test_core_refuses_a_short_steer_when_the_backend_cannot_erase
 test_core_reports_a_failed_erase_as_typed_unproven
 test_core_names_the_stranded_suffix_on_stderr

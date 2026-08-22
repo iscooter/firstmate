@@ -1375,11 +1375,16 @@ fm_composer_envelope_nonce() {  # <payload-norm> <length>
   printf '%s' "$out"
 }
 
-# fm_composer_envelope_prepare: decide the wire text for <payload> and publish
+# fm_composer_envelope_prepare: decide the wire text for <payload> against the
+# pre-type <before> capture and publish
 #   FM_COMPOSER_ENVELOPE_WIRE   the text to type
 #   FM_COMPOSER_ENVELOPE_NONCE  the verification suffix alone (empty = none)
 #   FM_COMPOSER_ENVELOPE_ERASE  how many characters to erase afterwards (0 = none)
-# Returns 1 when the payload cannot be enveloped at all.
+#   FM_COMPOSER_ENVELOPE_ERROR  the named refusal when preparation fails
+# Returns 1 when the payload cannot be enveloped at all. For a short payload,
+# the suffix's first character is selected so the payload/character boundary
+# has zero occurrences before typing; this makes any later occurrence fail
+# safe under unrelated pane churn.
 #
 # It publishes variables rather than printing, because the wire is arbitrary
 # caller text: command substitution would eat a trailing newline the caller
@@ -1392,18 +1397,39 @@ fm_composer_envelope_nonce() {  # <payload-norm> <length>
 # A SHORT payload spanning more than one row is refused rather than enveloped:
 # erasing across a row boundary is a line-join on some composers and a no-op on
 # others, and no real steer is both multi-row and under two dozen characters.
-fm_composer_envelope_prepare() {  # <payload>
-  local payload=$1 norm nonce
+fm_composer_envelope_prepare() {  # <payload> <before>
+  local payload=$1 before=${2-} norm before_joined nonce first='' rest want ch i probe
   FM_COMPOSER_ENVELOPE_WIRE=$payload
   FM_COMPOSER_ENVELOPE_NONCE=
   FM_COMPOSER_ENVELOPE_ERASE=0
+  FM_COMPOSER_ENVELOPE_ERROR=payload-not-provable
   norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
   [ -n "$norm" ] || return 1
   [ "${#norm}" -lt "$FM_COMPOSER_DELTA_ANCHOR_MIN" ] || return 0
   case "$payload" in
     *$'\n'*) return 1 ;;
   esac
-  nonce=$(fm_composer_envelope_nonce "$norm" "$((FM_COMPOSER_DELTA_ANCHOR_MIN - ${#norm}))") || return 1
+  before_joined=$(fm_composer_delta_rows "$before" | LC_ALL=C tr -d '\n')
+  i=0
+  while [ "$i" -lt "${#FM_COMPOSER_ENVELOPE_ALPHABET}" ]; do
+    ch=${FM_COMPOSER_ENVELOPE_ALPHABET:i:1}
+    i=$((i + 1))
+    case "$norm" in *"$ch"*) continue ;; esac
+    probe="$norm$ch"
+    [ "$(fm_composer_count_occurrences "$before_joined" "$probe")" -eq 0 ] || continue
+    first=$ch
+    break
+  done
+  if [ -z "$first" ]; then
+    FM_COMPOSER_ENVELOPE_ERROR=envelope-boundary-probe-unavailable
+    return 1
+  fi
+  want=$((FM_COMPOSER_DELTA_ANCHOR_MIN - ${#norm}))
+  rest=
+  if [ "$want" -gt 1 ]; then
+    rest=$(fm_composer_envelope_nonce "$norm" "$((want - 1))") || return 1
+  fi
+  nonce="$first$rest"
   FM_COMPOSER_ENVELOPE_WIRE="$payload$nonce"
   FM_COMPOSER_ENVELOPE_NONCE=$nonce
   FM_COMPOSER_ENVELOPE_ERASE=${#nonce}
@@ -1418,10 +1444,10 @@ fm_composer_envelope_prepare() {  # <payload>
 #      erase can only ever leave `<payload><nonce-prefix>` in the composer -
 #      and every such leftover, down to a single character, still has the
 #      nonce's FIRST character sitting immediately after the payload. So the
-#      test is whether that two-part boundary string appears more often than it
-#      did before the send. Testing the whole suffix instead would miss this
-#      completely: dropping one character from the tail already destroys the
-#      full-length string, so its absence proves nothing.
+#      boundary string was selected to have zero occurrences before the send,
+#      so the after-erase count must also be zero. Testing the whole suffix
+#      instead would miss this completely: dropping one character from the tail
+#      already destroys the full-length string, so its absence proves nothing.
 #   B) NO PAYLOAD LOSS. The payload's own count is unchanged from the
 #      just-typed capture. An over-erase consumes the payload's last characters
 #      and drops that count. Because the nonce shares no character with the
@@ -1429,25 +1455,22 @@ fm_composer_envelope_prepare() {  # <payload>
 #      this count on its own - which is what makes an unchanged count
 #      meaningful rather than merely likely.
 #
-# Both are counts, both are compared against a capture taken in the same send,
-# and both fail toward refusal - so the worst outcome of screen churn here is a
+# Both fail toward refusal, so the worst outcome of screen churn here is a
 # typed-unproven a human settles, never a silent partial send.
 fm_composer_envelope_erase_verdict() {  # <before> <after-typed> <after-erased> <payload> <nonce>
-  local before=$1 typed=$2 erased=$3 payload=$4 nonce=$5
-  local payload_norm probe before_joined typed_joined erased_joined cb ce pt pe
+  local typed=$2 erased=$3 payload=$4 nonce=$5
+  local payload_norm probe typed_joined erased_joined ce pt pe
   payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
   if [ -z "$payload_norm" ] || [ -z "$nonce" ]; then
     printf 'not-accepted:envelope-erase-unverifiable'
     return 1
   fi
   probe="$payload_norm${nonce:0:1}"
-  before_joined=$(fm_composer_delta_rows "$before" | LC_ALL=C tr -d '\n')
   typed_joined=$(fm_composer_delta_rows "$typed" | LC_ALL=C tr -d '\n')
   erased_joined=$(fm_composer_delta_rows "$erased" | LC_ALL=C tr -d '\n')
-  cb=$(fm_composer_count_occurrences "$before_joined" "$probe")
   ce=$(fm_composer_count_occurrences "$erased_joined" "$probe")
-  if [ "$ce" -gt "$cb" ]; then
-    printf 'not-accepted:envelope-not-erased(before=%s after-erase=%s)' "$cb" "$ce"
+  if [ "$ce" -ne 0 ]; then
+    printf 'not-accepted:envelope-not-erased(after-erase=%s)' "$ce"
     return 1
   fi
   pt=$(fm_composer_count_occurrences "$typed_joined" "$payload_norm")
@@ -1488,8 +1511,8 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     printf '%s' "$verdict"
     return 1
   fi
-  if ! fm_composer_envelope_prepare "$text"; then
-    printf 'not-accepted:payload-not-provable'
+  if ! fm_composer_envelope_prepare "$text" "$before"; then
+    printf 'not-accepted:%s' "$FM_COMPOSER_ENVELOPE_ERROR"
     return 1
   fi
   wire=$FM_COMPOSER_ENVELOPE_WIRE
@@ -1501,8 +1524,13 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
   fi
   "$lit_fn" "$target" "$wire" "$label" || { printf 'send-failed'; return 1; }
   sleep "$settle"
-  typed=$("$cap_fn" "$target" "$label") || { printf 'typed-unproven'; return 1; }
+  typed=$("$cap_fn" "$target" "$label") || {
+    [ "$erase_n" -eq 0 ] || fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured after typing'
+    printf 'typed-unproven'
+    return 1
+  }
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$typed" "$wire"); then
+    [ "$erase_n" -eq 0 ] || fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
     printf '%s' "$verdict"
     return 1
   fi

@@ -38,6 +38,7 @@
 #   created_epoch=          when the expectation was created
 #   delivered_epoch=        when the marked request was confirmed delivered
 #                           (empty until delivery; delivery never resolves)
+#   typed_unproven_epoch=   when typed input first became operator-settleable
 #   phase=                  awaiting_report | typed_unproven | delivery_unknown |
 #                           recovery_sending |
 #                           recovery_sent | recovery_failed | recovery_unknown |
@@ -330,6 +331,7 @@ request_bytes=$body_bytes
 request_sha256=$body_hash
 created_epoch=$now
 delivered_epoch=
+typed_unproven_epoch=
 phase=awaiting_report
 turn_seen_busy=0
 request_turn_completed_epoch=
@@ -405,6 +407,7 @@ fm_pending_reply_confirm_typed() {  # <state-dir> <corr_id>
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   [ "$phase" = typed_unproven ] || return 1
+  fm_pending_reply_settle_typed_escalation "$state" "$corr" confirmed || return 1
   fm_pending_reply_mark_delivered "$state" "$corr"
 }
 
@@ -416,6 +419,7 @@ fm_pending_reply_abandon_typed() {  # <state-dir> <corr_id>
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   [ "$phase" = typed_unproven ] || return 1
+  fm_pending_reply_settle_typed_escalation "$state" "$corr" abandoned || return 1
   fm_pending_reply_discard_undelivered "$state" "$corr"
 }
 
@@ -462,7 +466,7 @@ fm_pending_reply_confirm_delivery() {  # <state-dir> <corr_id>
 }
 
 fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase delivered
+  local state=$1 corr=$2 rec phase delivered typed_epoch
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
@@ -471,6 +475,10 @@ fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
   esac
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
   [ -z "$delivered" ] || return 1
+  typed_epoch=$(fm_pending_reply_get "$rec" typed_unproven_epoch)
+  if [ -z "$typed_epoch" ]; then
+    fm_pending_reply_set "$rec" typed_unproven_epoch "$(fm_pending_reply_now)" || return 1
+  fi
   fm_pending_reply_set "$rec" phase typed_unproven
 }
 
@@ -1060,9 +1068,32 @@ fm_pending_reply_escalation_payload() {  # <record-path> <kind>
       case "$outcome" in failed|unknown) ;; *) return 1 ;; esac
       token="pending-reply-recovery-delivery-$outcome"
       ;;
+    typed-unproven)
+      printf 'pending-reply-typed-unproven: task=%s pending-reply-id=%s request=%s inspect the pane, then run fm-send.sh --typed-confirm %s after submitting the complete text, or fm-send.sh --typed-abandon %s after clearing it' \
+        "$task_id" "$corr" "$summary" "$corr" "$corr"
+      return 0
+      ;;
     *) return 1 ;;
   esac
   printf '%s: task=%s pending-reply-id=%s request=%s' "$token" "$task_id" "$corr" "$summary"
+}
+
+fm_pending_reply_settle_typed_escalation() {  # <state-dir> <corr_id> <confirmed|abandoned>
+  local state=$1 corr=$2 outcome=$3 rec escalated parent_status line key close_line
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 1
+  escalated=$(fm_pending_reply_get "$rec" escalated_epoch)
+  [ -n "$escalated" ] || return 0
+  parent_status=$(fm_pending_reply_get "$rec" parent_status)
+  [ -n "$parent_status" ] || return 1
+  line=$(fm_pending_reply_escalation_line "$parent_status" "$rec" "$corr")
+  [ -n "$line" ] || return 0
+  key=$(fm_pending_reply_escalation_key "$corr")
+  close_line="resolved [key=$key]: pending-reply-typed-$outcome: task=$(fm_pending_reply_get "$rec" task_id) pending-reply-id=$corr"
+  grep -Fqx "$close_line" "$parent_status" 2>/dev/null \
+    || printf '%s\n' "$close_line" >> "$parent_status" 2>/dev/null \
+    || return 1
+  return 0
 }
 
 # The escalation line this library published for <corr_id>, or empty. A legacy
@@ -1076,7 +1107,7 @@ fm_pending_reply_escalation_line() {  # <status-file> <record-path> <corr_id>
   own_key=$(fm_pending_reply_escalation_key "$corr")
   while IFS= read -r line || [ -n "$line" ]; do
     [ "$(status_line_verb "$line")" = blocked ] || continue
-    for kind in missed delivery-unknown recovery-delivery; do
+    for kind in missed delivery-unknown recovery-delivery typed-unproven; do
       payload=$(fm_pending_reply_escalation_payload "$rec" "$kind") || continue
       case "$line" in
         "blocked [key=$own_key]: $payload"|"blocked: $payload") found=$line; break ;;
@@ -1178,7 +1209,7 @@ fm_pending_reply_maybe_escalate() {  # <state-dir> <corr_id>
 
 _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
   local state=$1 corr=$2
-  local rec phase completed now payload parent_status line kind
+  local rec phase completed now payload parent_status line kind created grace age escalated
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
@@ -1188,6 +1219,18 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
     [ "$phase" = delivery_unknown ] || return 0
   fi
   case "$phase" in
+    typed_unproven)
+      escalated=$(fm_pending_reply_get "$rec" escalated_epoch)
+      [ -z "$escalated" ] || return 0
+      created=$(fm_pending_reply_get "$rec" typed_unproven_epoch)
+      [ -n "$created" ] || created=$(fm_pending_reply_get "$rec" created_epoch)
+      grace=$(fm_pending_reply_get "$rec" grace_secs)
+      now=$(fm_pending_reply_now)
+      case "$created" in ''|*[!0-9]*) return 1 ;; esac
+      case "$grace" in ''|*[!0-9]*) grace=$(fm_pending_reply_grace_secs) ;; esac
+      age=$((now - created))
+      [ "$age" -ge "$grace" ] || return 1
+      ;;
     recovery_sent)
       completed=$(fm_pending_reply_get "$rec" recovery_turn_completed_epoch)
       [ -n "$completed" ] || return 1
@@ -1205,6 +1248,7 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
   fi
   parent_status=$(fm_pending_reply_get "$rec" parent_status)
   case "$phase" in
+    typed_unproven) kind=typed-unproven ;;
     delivery_unknown) kind=delivery-unknown ;;
     recovery_failed|recovery_unknown) kind=recovery-delivery ;;
     *) kind=missed ;;
@@ -1218,7 +1262,7 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
   fi
   now=$(fm_pending_reply_now)
   fm_pending_reply_set "$rec" escalated_epoch "$now" || return 1
-  fm_pending_reply_set "$rec" phase escalated || return 1
+  [ "$phase" = typed_unproven ] || fm_pending_reply_set "$rec" phase escalated || return 1
   return 0
 }
 
@@ -1371,7 +1415,7 @@ fm_pending_reply_tick() {  # <state-dir>
     delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
     if [ -z "$delivered" ]; then
       case "$phase" in
-        delivery_unknown|escalated)
+        typed_unproven|delivery_unknown|escalated)
           fm_pending_reply_tick_one "$state" "$corr" unknown "" || true
           ;;
       esac

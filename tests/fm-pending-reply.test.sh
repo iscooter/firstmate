@@ -1164,6 +1164,56 @@ test_mirrored_remote_reply_never_triggers_a_repost() {
   pass "a mirrored correlated remote reply resolves without any repost"
 }
 
+test_typed_unproven_escalates_through_real_scan() {
+  local home state corr rec status escalations corr2 rec2
+  home=$(setup_parent typed-unproven-escalation)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=9000
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "typed request awaiting inspection")
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_mark_typed_unproven "$state" "$corr" || fail "typed-unproven fixture should persist"
+  fm_pending_reply_set "$rec" grace_secs 10 || fail "typed-unproven grace should persist"
+
+  fm_pending_reply_tick "$state" || fail "pre-grace real scan should succeed"
+  [ "$(phase_of "$state" "$corr")" = typed_unproven ] || fail "pre-grace scan must preserve typed-unproven"
+  [ -z "$(fm_pending_reply_get "$rec" escalated_epoch)" ] || fail "typed-unproven must not escalate before grace"
+
+  export FM_PENDING_REPLY_NOW=9010
+  fm_pending_reply_tick "$state" || fail "post-grace real scan should escalate"
+  status=$(cat "$state/hibit.status")
+  assert_contains "$status" "fm-send.sh --typed-confirm $corr" \
+    "typed-unproven escalation must name the concrete confirm command"
+  assert_contains "$status" "fm-send.sh --typed-abandon $corr" \
+    "typed-unproven escalation must name the concrete abandon command"
+  [ "$(phase_of "$state" "$corr")" = typed_unproven ] \
+    || fail "escalation must keep the record operator-settleable"
+  fm_pending_reply_tick "$state" || fail "repeated real scan should be idempotent"
+  escalations=$(grep -Fc "blocked [key=pending-reply-$corr]:" "$state/hibit.status")
+  [ "$escalations" -eq 1 ] || fail "typed-unproven must escalate exactly once, got $escalations"
+
+  fm_pending_reply_confirm_typed "$state" "$corr" || fail "escalated typed request should remain confirmable"
+  [ "$(phase_of "$state" "$corr")" = awaiting_report ] || fail "confirmation must re-arm reply tracking"
+  grep -Fq "resolved [key=pending-reply-$corr]: pending-reply-typed-confirmed" "$state/hibit.status" \
+    || fail "confirmation must close its operator blocker"
+  fm_pending_reply_tick "$state" || fail "confirmed record should not re-escalate as typed-unproven"
+  [ "$(grep -Fc "blocked [key=pending-reply-$corr]:" "$state/hibit.status")" -eq 1 ] \
+    || fail "confirmed record re-escalated"
+
+  corr2=$(fm_pending_reply_create "$home" "$state" hibit "typed request to abandon")
+  rec2=$(fm_pending_reply_path "$state" "$corr2")
+  fm_pending_reply_mark_typed_unproven "$state" "$corr2" || fail "abandon fixture should persist"
+  fm_pending_reply_set "$rec2" grace_secs 0 || fail "abandon fixture grace should persist"
+  fm_pending_reply_tick "$state" || fail "abandon fixture should escalate through real scan"
+  fm_pending_reply_abandon_typed "$state" "$corr2" || fail "escalated typed request should remain abandonable"
+  [ ! -f "$rec2" ] || fail "abandoned typed request must be removed"
+  grep -Fq "resolved [key=pending-reply-$corr2]: pending-reply-typed-abandoned" "$state/hibit.status" \
+    || fail "abandonment must close its operator blocker"
+  fm_pending_reply_tick "$state" || fail "scan after abandonment should remain inert"
+  [ "$(grep -Fc "blocked [key=pending-reply-$corr2]:" "$state/hibit.status")" -eq 1 ] \
+    || fail "abandoned record re-escalated"
+  pass "typed-unproven records escalate once through the real scan and remain settleable"
+}
+
 test_failed_send_discards_undelivered_expectation() {
   local home state corr
   home=$(setup_parent discard)
@@ -1263,6 +1313,7 @@ test_kimi_capture_fallback_uses_recorded_harness
 test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
+test_typed_unproven_escalates_through_real_scan
 test_failed_send_discards_undelivered_expectation
 test_remote_repost_waits_for_the_reply_channel
 test_mirrored_remote_reply_never_triggers_a_repost
