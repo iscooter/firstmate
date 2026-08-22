@@ -516,6 +516,7 @@ fm_pending_reply_reconcile_delivery() {  # <state-dir> <corr_id>
   local grace now age phase
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
+  [ "$(fm_pending_reply_get "$rec" phase)" != typed_unproven ] || return 1
   marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
   if [ -n "$delivered" ]; then
@@ -659,6 +660,7 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
+  [ "$phase" != typed_unproven ] || return 1
   if [ "$phase" = resolved ]; then
     rm -f -- "$(fm_pending_reply_request_path "$state" "$corr")" 2>/dev/null || true
     _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
@@ -1257,8 +1259,7 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
     delivery_unknown|recovery_failed|recovery_unknown) ;;
     *) return 1 ;;
   esac
-  # Resolve wins if a late report arrived between completion and this call.
-  if _fm_pending_reply_try_resolve_locked "$state" "$corr"; then
+  if [ "$phase" != typed_unproven ] && _fm_pending_reply_try_resolve_locked "$state" "$corr"; then
     return 0
   fi
   parent_status=$(fm_pending_reply_get "$rec" parent_status)

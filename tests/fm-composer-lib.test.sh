@@ -878,67 +878,33 @@ test_envelope_refuses_a_short_multi_row_payload() {
   pass "fm_composer_envelope_prepare: an unerasable short payload is refused, not guessed at"
 }
 
-# The erase proof's two halves fail in different directions, so both are pinned:
-# an under-erase leaves the suffix behind, and an over-erase eats the payload.
-test_envelope_erase_verdict_pins_both_directions() {
-  local before typed erased verdict wire nonce
+test_envelope_boundary_verdict_pins_both_checkpoints() {
+  local before checkpoint erased verdict nonce
   before=$'idle pane\nunrelated old boundary oka'
   fm_composer_envelope_prepare 'ok' "$before" || fail "prepare failed"
-  wire=$FM_COMPOSER_ENVELOPE_WIRE
   nonce=$FM_COMPOSER_ENVELOPE_NONCE
   [ "${nonce:0:1}" != a ] \
     || fail "prepare must skip a boundary probe already present before typing"
-  typed="idle pane
-> $wire"
-
-  # Clean erase: the suffix is gone and the payload survives.
+  checkpoint="idle pane
+> ok${nonce:0:1}"
   erased='idle pane
 > ok'
-  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
-    || fail "a clean erase must be accepted, got '$verdict'"
-
-  # Under-erase, and deliberately the HARDEST one: all but a single suffix
-  # character is gone, so the full-length suffix no longer appears anywhere on
-  # screen. A check that looked for the whole suffix would pass this and let
-  # Enter send a character of noise to the agent.
-  erased="idle pane
-> ok${nonce:0:1}"
-  assert_not_contains "$erased" "$nonce" \
-    "this case is only meaningful while the whole suffix is absent from the screen"
-  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+  verdict=$(fm_composer_envelope_boundary_verdict "$checkpoint" 'ok' "$nonce" present) \
+    || fail "the exact boundary checkpoint must be accepted, got '$verdict'"
+  verdict=$(fm_composer_envelope_boundary_verdict "$erased" 'ok' "$nonce" absent) \
+    || fail "the clean final erase must be accepted, got '$verdict'"
+  verdict=$(fm_composer_envelope_boundary_verdict "$checkpoint" 'ok' "$nonce" absent) \
     && fail "a single leftover suffix character must not be accepted"
   case "$verdict" in
     not-accepted:envelope-not-erased*) ;;
     *) fail "an under-erase must name itself, got '$verdict'" ;;
   esac
-
-  # A larger leftover refuses for the same reason.
-  erased="idle pane
-> ok${nonce:0:5}"
-  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
-    && fail "a partial suffix must not be accepted"
-
-  erased="idle pane
-> ok
-new unrelated row ok${nonce:0:1}"
-  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
-    && fail "a boundary occurrence appearing during screen churn must fail safe"
-  case "$verdict" in
-    not-accepted:envelope-not-erased*) ;;
-    *) fail "an appearing unrelated boundary must refuse by name, got '$verdict'" ;;
-  esac
-
-  # Over-erase: the suffix went, and took the payload's tail with it. This is
-  # the silent partial send the whole design exists to prevent.
-  erased='idle pane
-> o'
-  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
-    && fail "an erase that consumed the payload must not be accepted"
-  case "$verdict" in
-    not-accepted:envelope-erase-consumed-payload*) ;;
-    *) fail "an over-erase must name itself, got '$verdict'" ;;
-  esac
-  pass "fm_composer_envelope_erase_verdict: a single leftover suffix character and an over-erase are both refused by name"
+  checkpoint=$'idle pane\n> o\nunrelated payload redraw: ok'
+  verdict=$(fm_composer_envelope_boundary_verdict "$checkpoint" 'ok' "$nonce" present) \
+    && fail "an over-erase must not be offset by an unrelated payload occurrence"
+  [ "$verdict" = not-accepted:envelope-erase-overran-boundary ] \
+    || fail "an over-erase must name the destroyed boundary, got '$verdict'"
+  pass "fm_composer_envelope_boundary_verdict: opposite checkpoints pin both erase directions"
 }
 
 # --- the shared type-and-prove core, driven through a real pane simulator ----
@@ -962,6 +928,10 @@ sim_capture() {
       delta-refuse) printf '%s' "$SIM_SCROLLBACK"; return 0 ;;
     esac
   fi
+  if [ "$SIM_MODE" = erase-greedy-churn ] && [ "$SIM_ERASE_CALLS" -gt 0 ]; then
+    printf '%s\n%s\n%s' "$SIM_SCROLLBACK" 'unrelated token counter: 2' "> $(cat "$SIM_FILE")"
+    return 0
+  fi
   printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
 }
 sim_literal() {
@@ -969,16 +939,20 @@ sim_literal() {
     swallow) return 0 ;;
     write-fails) return 1 ;;
   esac
+  SIM_WIRE=$2
+  printf '%s' "$2" > "$SIM_FILE.wire"
   printf '%s' "$2" >> "$SIM_FILE"
 }
 sim_erase() {
   local cur take=1 keep
+  cur=$(cat "$SIM_FILE")
+  SIM_ERASE_CALLS=$((SIM_ERASE_CALLS + 1))
   case "$SIM_MODE" in
     erase-fails) return 1 ;;
     erase-noop) return 0 ;;
-    erase-greedy) take=2 ;;
+    erase-greedy|erase-greedy-churn) take=2 ;;
+    erase-last-noop) [ "${#cur}" -ne 2 ] || return 0 ;;
   esac
-  cur=$(cat "$SIM_FILE")
   keep=$((${#cur} - take))
   [ "$keep" -ge 0 ] || keep=0
   printf '%s' "${cur:0:keep}" > "$SIM_FILE"
@@ -988,6 +962,9 @@ sim_reset() {  # <mode> [scrollback]
   SIM_MODE=$1
   SIM_SCROLLBACK=${2:-'agent idle'}
   SIM_FILE="$SIM_DIR/composer"
+  SIM_ERASE_CALLS=0
+  SIM_WIRE=
+  rm -f "$SIM_FILE.wire"
   : > "$SIM_FILE"
 }
 
@@ -1101,6 +1078,39 @@ test_core_refuses_a_short_steer_when_the_backend_cannot_erase() {
 # When the erase does not happen, the text WAS typed. That is typed-unproven -
 # never retype - and it must never be reported as a refusal that implies
 # nothing went out.
+test_core_two_checkpoint_erase_refuses_both_directions() {
+  local verdict err wire payload23
+  sim_reset erase-greedy-churn
+  verdict=$(sim_send '2' 2>"$SIM_DIR/over.err") \
+    && fail "an over-erase hidden by unrelated payload churn must not be proven"
+  err=$(cat "$SIM_DIR/over.err")
+  wire=$(cat "$SIM_FILE.wire")
+  [ "$verdict" = typed-unproven ] || fail "an over-erase must report typed-unproven, got '$verdict'"
+  assert_contains "$err" 'envelope-erase-overran-boundary' \
+    "the stage-one refusal must name the destroyed boundary"
+  assert_contains "$err" "$wire" \
+    "the stage-one refusal must name the exact stranded wire"
+
+  sim_reset erase-last-noop
+  verdict=$(sim_send '2' 2>"$SIM_DIR/under.err") \
+    && fail "a final swallowed erase leaving one suffix character must not be proven"
+  err=$(cat "$SIM_DIR/under.err")
+  wire=$(cat "$SIM_FILE.wire")
+  [ "$verdict" = typed-unproven ] || fail "an under-erase must report typed-unproven, got '$verdict'"
+  assert_contains "$err" 'envelope-not-erased' \
+    "the stage-two refusal must name the leftover boundary"
+  assert_contains "$err" "$wire" \
+    "the stage-two refusal must name the exact stranded wire"
+
+  payload23=12345678901234567890123
+  sim_reset healthy
+  verdict=$(sim_send "$payload23") \
+    || fail "a one-character suffix must pass both erase checkpoints, got '$verdict'"
+  [ "$(cat "$SIM_FILE")" = "$payload23" ] \
+    || fail "the one-character suffix path must leave only its payload"
+  pass "fm_composer_typed_delivery_core: two erase checkpoints refuse both directions and support a one-character suffix"
+}
+
 test_core_reports_a_failed_erase_as_typed_unproven() {
   local verdict mode
   for mode in erase-fails erase-noop erase-greedy; do
@@ -1180,7 +1190,7 @@ test_delta_verdict_refuses_short_collision_anchor
 test_envelope_gives_a_short_payload_a_full_length_anchor
 test_envelope_leaves_a_self_proving_payload_alone
 test_envelope_refuses_a_short_multi_row_payload
-test_envelope_erase_verdict_pins_both_directions
+test_envelope_boundary_verdict_pins_both_checkpoints
 SIM_DIR=$(mktemp -d)
 trap 'rm -rf "$SIM_DIR"' EXIT
 test_core_delivers_a_short_steer_and_leaves_no_residue
@@ -1190,6 +1200,7 @@ test_core_refuses_a_scrollback_copy_of_the_payload
 test_core_refuses_a_gated_pane_without_typing
 test_core_refuses_when_no_absent_boundary_probe_exists
 test_core_refuses_a_short_steer_when_the_backend_cannot_erase
+test_core_two_checkpoint_erase_refuses_both_directions
 test_core_reports_a_failed_erase_as_typed_unproven
 test_core_names_the_stranded_suffix_on_stderr
 test_delta_verdict_normalizes_payload_and_screen_identically

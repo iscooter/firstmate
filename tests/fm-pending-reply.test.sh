@@ -1171,11 +1171,14 @@ test_typed_unproven_escalates_through_real_scan() {
   export FM_PENDING_REPLY_NOW=9000
   corr=$(fm_pending_reply_create "$home" "$state" hibit "typed request awaiting inspection")
   rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_prepare_delivery "$state" "$corr" || fail "typed-unproven delivery attempt should persist"
   fm_pending_reply_mark_typed_unproven "$state" "$corr" || fail "typed-unproven fixture should persist"
   fm_pending_reply_set "$rec" grace_secs 10 || fail "typed-unproven grace should persist"
+  printf 'done [corr=%s]: report arrived before operator settlement\n' "$corr" > "$state/hibit.status"
 
   fm_pending_reply_tick "$state" || fail "pre-grace real scan should succeed"
-  [ "$(phase_of "$state" "$corr")" = typed_unproven ] || fail "pre-grace scan must preserve typed-unproven"
+  [ "$(phase_of "$state" "$corr")" = typed_unproven ] \
+    || fail "a correlated report must not settle typed-unproven before operator action"
   [ -z "$(fm_pending_reply_get "$rec" escalated_epoch)" ] || fail "typed-unproven must not escalate before grace"
 
   export FM_PENDING_REPLY_NOW=9010
@@ -1186,7 +1189,7 @@ test_typed_unproven_escalates_through_real_scan() {
   assert_contains "$status" "fm-send.sh --typed-abandon $corr" \
     "typed-unproven escalation must name the concrete abandon command"
   [ "$(phase_of "$state" "$corr")" = typed_unproven ] \
-    || fail "escalation must keep the record operator-settleable"
+    || fail "escalation must ignore the correlated report and keep the record operator-settleable"
   fm_pending_reply_tick "$state" || fail "repeated real scan should be idempotent"
   escalations=$(grep -Fc "blocked [key=pending-reply-$corr]:" "$state/hibit.status")
   [ "$escalations" -eq 1 ] || fail "typed-unproven must escalate exactly once, got $escalations"
@@ -1195,7 +1198,9 @@ test_typed_unproven_escalates_through_real_scan() {
   [ "$(phase_of "$state" "$corr")" = awaiting_report ] || fail "confirmation must re-arm reply tracking"
   grep -Fq "resolved [key=pending-reply-$corr]: pending-reply-typed-confirmed" "$state/hibit.status" \
     || fail "confirmation must close its operator blocker"
-  fm_pending_reply_tick "$state" || fail "confirmed record should not re-escalate as typed-unproven"
+  fm_pending_reply_tick "$state" || fail "confirmed record should accept its correlated report"
+  [ "$(phase_of "$state" "$corr")" = resolved ] \
+    || fail "a correlated report must resolve normally after operator confirmation"
   [ "$(grep -Fc "blocked [key=pending-reply-$corr]:" "$state/hibit.status")" -eq 1 ] \
     || fail "confirmed record re-escalated"
 

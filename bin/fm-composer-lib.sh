@@ -1436,49 +1436,39 @@ fm_composer_envelope_prepare() {  # <payload> <before>
   return 0
 }
 
-# fm_composer_envelope_erase_verdict: prove the envelope came back off, and
-# that nothing else came off with it. Prints `accepted` (return 0) or
-# `not-accepted:<why>` (return 1). Two independent conditions:
-#
-#   A) NO SUFFIX RESIDUE. Erasing consumes from the tail, so an incomplete
-#      erase can only ever leave `<payload><nonce-prefix>` in the composer -
-#      and every such leftover, down to a single character, still has the
-#      nonce's FIRST character sitting immediately after the payload. So the
-#      boundary string was selected to have zero occurrences before the send,
-#      so the after-erase count must also be zero. Testing the whole suffix
-#      instead would miss this completely: dropping one character from the tail
-#      already destroys the full-length string, so its absence proves nothing.
-#   B) NO PAYLOAD LOSS. The payload's own count is unchanged from the
-#      just-typed capture. An over-erase consumes the payload's last characters
-#      and drops that count. Because the nonce shares no character with the
-#      payload (see fm_composer_envelope_nonce), removing the nonce cannot move
-#      this count on its own - which is what makes an unchanged count
-#      meaningful rather than merely likely.
-#
-# Both fail toward refusal, so the worst outcome of screen churn here is a
-# typed-unproven a human settles, never a silent partial send.
-fm_composer_envelope_erase_verdict() {  # <before> <after-typed> <after-erased> <payload> <nonce>
-  local typed=$2 erased=$3 payload=$4 nonce=$5
-  local payload_norm probe typed_joined erased_joined ce pt pe
+# The erase proof uses the payload/first-suffix-character boundary selected to
+# be absent before typing. After N-1 erase keys that probe must be present; an
+# over-erase destroys it. After the final erase key it must be absent; an
+# under-erase preserves it. The opposite checkpoints make unrelated probe churn
+# fail toward refusal in at least one stage.
+fm_composer_envelope_boundary_verdict() {  # <screen> <payload> <nonce> <present|absent>
+  local screen=$1 payload=$2 nonce=$3 expected=$4 payload_norm probe joined count
   payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
   if [ -z "$payload_norm" ] || [ -z "$nonce" ]; then
     printf 'not-accepted:envelope-erase-unverifiable'
     return 1
   fi
   probe="$payload_norm${nonce:0:1}"
-  typed_joined=$(fm_composer_delta_rows "$typed" | LC_ALL=C tr -d '\n')
-  erased_joined=$(fm_composer_delta_rows "$erased" | LC_ALL=C tr -d '\n')
-  ce=$(fm_composer_count_occurrences "$erased_joined" "$probe")
-  if [ "$ce" -ne 0 ]; then
-    printf 'not-accepted:envelope-not-erased(after-erase=%s)' "$ce"
-    return 1
-  fi
-  pt=$(fm_composer_count_occurrences "$typed_joined" "$payload_norm")
-  pe=$(fm_composer_count_occurrences "$erased_joined" "$payload_norm")
-  if [ "$pe" -ne "$pt" ]; then
-    printf 'not-accepted:envelope-erase-consumed-payload(typed=%s after-erase=%s)' "$pt" "$pe"
-    return 1
-  fi
+  joined=$(fm_composer_delta_rows "$screen" | LC_ALL=C tr -d '\n')
+  count=$(fm_composer_count_occurrences "$joined" "$probe")
+  case "$expected" in
+    present)
+      if [ "$count" -eq 0 ]; then
+        printf 'not-accepted:envelope-erase-overran-boundary'
+        return 1
+      fi
+      ;;
+    absent)
+      if [ "$count" -ne 0 ]; then
+        printf 'not-accepted:envelope-not-erased(after-erase=%s)' "$count"
+        return 1
+      fi
+      ;;
+    *)
+      printf 'not-accepted:envelope-erase-unverifiable'
+      return 1
+      ;;
+  esac
   printf 'accepted'
 }
 
@@ -1505,7 +1495,7 @@ fm_composer_envelope_erase_verdict() {  # <before> <after-typed> <after-erased> 
 # anything, so it can never strand an envelope it has no way to remove.
 fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <target> <text> <settle> [label]
   local cap_fn=$1 lit_fn=$2 erase_fn=$3 target=$4 text=$5 settle=$6 label=${7:-}
-  local before typed erased verdict wire nonce erase_n i
+  local before typed checkpoint erased verdict wire nonce erase_n i
   before=$("$cap_fn" "$target" "$label") || { printf 'send-failed'; return 1; }
   if ! verdict=$(fm_composer_pre_type_ok "$before"); then
     printf '%s' "$verdict"
@@ -1536,7 +1526,7 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
   fi
   [ "$erase_n" -gt 0 ] || return 0
   i=0
-  while [ "$i" -lt "$erase_n" ]; do
+  while [ "$i" -lt "$((erase_n - 1))" ]; do
     if ! "$erase_fn" "$target" "$label"; then
       fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the erase keystroke was refused'
       printf 'typed-unproven'
@@ -1545,12 +1535,28 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     i=$((i + 1))
   done
   sleep "$settle"
+  checkpoint=$("$cap_fn" "$target" "$label") || {
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured at the erase boundary'
+    printf 'typed-unproven'
+    return 1
+  }
+  if ! verdict=$(fm_composer_envelope_boundary_verdict "$checkpoint" "$text" "$nonce" present); then
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
+    printf 'typed-unproven'
+    return 1
+  fi
+  if ! "$erase_fn" "$target" "$label"; then
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the final erase keystroke was refused'
+    printf 'typed-unproven'
+    return 1
+  fi
+  sleep "$settle"
   erased=$("$cap_fn" "$target" "$label") || {
     fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured after the erase'
     printf 'typed-unproven'
     return 1
   }
-  if ! verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" "$text" "$nonce"); then
+  if ! verdict=$(fm_composer_envelope_boundary_verdict "$erased" "$text" "$nonce" absent); then
     fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
     printf 'typed-unproven'
     return 1
