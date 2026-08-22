@@ -79,14 +79,36 @@ case "\${1:-}" in
     case "\$*" in
       *'#{pane_current_path}'*) cut -d'|' -f2- "\$state" ;;
       *'#{pane_current_command}'*) printf 'codex\n' ;;
-      *'#{cursor_y}'*) printf '0\n' ;;
+      *'#{cursor_y}'*) printf '1\n' ;;
       *'#S'*) printf 'firstmate\n' ;;
       *) printf '%%1\n' ;;
     esac
     exit 0
     ;;
-  capture-pane) printf '❯\n'; exit 0 ;;
-  send-keys) [ ! -f "\$fail_send" ] || exit 1; exit 0 ;;
+  capture-pane)
+    . '$ROOT/tests/echoing-composer.inc.sh'
+    fm_test_tmux_echo_capture
+    exit 0
+    ;;
+  send-keys)
+    [ ! -f "\$fail_send" ] || exit 1
+    . '$ROOT/tests/echoing-composer.inc.sh'
+    shift
+    literal=0
+    while [ "\$#" -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+    fi
+    exit 0
+    ;;
   kill-window) rm -f -- "\$state"; exit 0 ;;
   list-panes) printf 'codex\n'; exit 0 ;;
 esac

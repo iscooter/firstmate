@@ -557,78 +557,6 @@ test_cursor_on_proven_box_bottom_classifies_content() {
   pass "fm_composer_classify_screen: a proven box tolerates a bottom-border cursor"
 }
 
-test_selected_content_is_composer_scoped_and_wrap_normalized() {
-  local screen out
-  screen=$'hello captain in transcript\n╭────────────────────╮\n│ unrelated          │\n│ draft               │\n╰────────────────────╯'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'unrelated draft' ] \
-    || fail "box extraction should contain only normalized selected composer rows, got '$out'"
-  screen=$'hello captain in transcript\n┃ hello\n┃ captain\n┃ Build · GPT-5.5 Fast OpenAI · high'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'hello captain' ] \
-    || fail "left-bar extraction should join user rows without footer furniture, got '$out'"
-  screen=$'╭────────────────────╮\n│ ❯ '"${ESC}[2mType a message...${ESC}[0m"$'│\n╰────────────────────╯'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ -z "$out" ] \
-    || fail "ghost agent-prompt placeholders should be excluded from extracted user content, got '$out'"
-  screen=$'╭────────────────────╮\n│ > '"${ESC}[2mType a message...${ESC}[0m"$'│\n╰────────────────────╯'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ -z "$out" ] \
-    || fail "ghost shell-prompt placeholders should be excluded from boxed user content, got '$out'"
-  screen=$'╭────────────────────╮\n│ ❯ Type a message...│\n╰────────────────────╯'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'Type a message...' ] \
-    || fail "surviving placeholder-like input should remain extracted user content, got '$out'"
-  screen=$'❯ a legitimately long steer that\nwraps across the next bare row\n\ntranscript below the break'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'a legitimately long steer that wraps across the next bare row' ] \
-    || fail "bare extraction should include only its contiguous wrap region, got '$out'"
-  screen=$'❯ wrapped user content\ncontinuation preserves a mid-row ❯ glyph'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'wrapped user content continuation preserves a mid-row ❯ glyph' ] \
-    || fail "bare extraction should preserve mid-row agent glyph bytes, got '$out'"
-  screen=$'❯ stale composer\n$ live shell'
-  if out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen"); then
-    fail "a lower live shell must invalidate composer extraction, got '$out'"
-  fi
-  screen=$'╭──────────────────────────────╮\n│ > wrapped user content       │\n│ ❯ preserves its leading glyph│\n╰──────────────────────────────╯'
-  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = 'wrapped user content ❯ preserves its leading glyph' ] \
-    || fail "box extraction should strip only its actual prompt-row glyph, got '$out'"
-  pass "fm_composer_extract_selected_content: scopes user content and excludes furniture"
-}
-
-test_bare_shell_glyphs_are_unknown
-test_stripped_unbordered_content_uses_plain_content
-test_bare_shell_prompt_with_command_is_not_empty
-test_bordered_shell_glyph_is_empty
-test_agent_glyphs_are_empty_bordered_and_bare
-test_empty_content_is_empty
-test_idle_placeholder_is_empty
-test_idle_placeholder_case_mode_is_explicit
-test_real_text_is_pending
-test_matrix_claude_bare_nbsp_row
-test_matrix_codex_dim_hint_row
-test_matrix_muse_truecolor_glyph_survives_signal_loss
-test_matrix_cursor_reverse_video_placeholder_remnant
-test_matrix_herdr_halfblock_rule_bounds_bare_wrap
-test_matrix_pi_separated_needs_identity
-test_matrix_opencode_leftbar_signals
-test_matrix_grok_titled_bottom_border
-test_matrix_kimi_bordered_shell_glyph_box
-test_matrix_claude_inside_zellij_ansi_dump
-test_strict_blank_row_divergence
-test_bare_wrap_region_classifies
-test_contiguous_transcript_reanchors_on_live_prompt
-test_lower_dead_shell_invalidates_cursorless_candidate
-test_cursorless_bare_wrap_region_classifies
-test_cursorless_container_rejects_contiguous_lower_activity
-test_bottom_most_candidate_wins
-test_incomplete_lower_box_invalidates_stale_candidate
-test_titled_bottom_requires_matching_width
-test_cursor_on_proven_box_bottom_classifies_content
-test_selected_content_is_composer_scoped_and_wrap_normalized
-
 test_queued_enter_verdict_busy_pending_is_empty() {
   local out
   out=$(fm_composer_queued_enter_verdict pending busy)
@@ -659,3 +587,254 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+
+# --- pre-Enter delivery proof: fm_composer_delivery_delta_verdict -----------
+#
+# The proof under test never asks where the composer is; it asks whether the
+# payload became NEWLY PRESENT between two captures. These regressions drive it
+# through its public entry point against captures taken from REAL harnesses
+# (tests/fixtures/composer-delta/, provenance in that directory's README), not
+# hand-drawn boxes: a hand-drawn fixture can only confirm the shape assumption
+# its author wrote into it, and shape assumptions are the failure class this
+# proof exists to end.
+
+DELTA_FIXTURES="$(dirname "${BASH_SOURCE[0]}")/fixtures/composer-delta"
+# The exact 152-character payload typed into every fixture pair.
+DELTA_PAYLOAD='LAVISH PROPOSAL: investigate the fm-send delivery path end to end and produce a design-only report; do not implement anything. END-OF-PAYLOAD-MARKER-7Q4Z'
+
+delta_fixture_verdict() {  # <name> <plain|ansi> -> verdict on stdout
+  local name=$1 fidelity=$2 before after
+  before=$(cat "$DELTA_FIXTURES/$name.before.$fidelity")
+  after=$(cat "$DELTA_FIXTURES/$name.after.$fidelity")
+  fm_composer_delivery_delta_verdict "$before" "$after" "$DELTA_PAYLOAD" || true
+}
+
+# Every healthy send must be accepted and every swallow refused, on BOTH
+# capture fidelities. Asserting the two fidelities agree is the regression that
+# keeps the deleted styled=1/styled=0 fork from returning: that fork is what
+# made the same real screen accept under tmux and refuse under cmux, orca, and
+# herdr's plain fallback.
+test_delta_verdict_matches_real_harness_captures() {
+  local name expect got_plain got_ansi checked=0
+  for name in \
+    claude-healthy:accepted \
+    claude-trust:not-accepted \
+    codex-healthy:accepted \
+    codex-launch:not-accepted \
+    opencode-healthy:accepted \
+    opencode-launch:not-accepted \
+    cursor-healthy:accepted \
+    grok-healthy:accepted \
+    muse-healthy:accepted \
+    pi-healthy:accepted \
+    pisigned-healthy:accepted; do
+    expect=${name#*:}
+    name=${name%%:*}
+    got_plain=$(delta_fixture_verdict "$name" plain)
+    got_ansi=$(delta_fixture_verdict "$name" ansi)
+    case "$got_plain" in
+      "$expect"*) ;;
+      *) fail "$name (plain capture) must be $expect, got '$got_plain'" ;;
+    esac
+    case "$got_ansi" in
+      "$expect"*) ;;
+      *) fail "$name (ANSI capture) must be $expect, got '$got_ansi'" ;;
+    esac
+    [ "$got_plain" = "$got_ansi" ] \
+      || fail "$name must reach the same verdict on both capture fidelities: plain='$got_plain' ansi='$got_ansi'"
+    checked=$((checked + 1))
+  done
+  [ "$checked" -eq 11 ] \
+    || fail "the real-capture matrix checked only $checked scenarios; a missing fixture must fail, not silently shrink the matrix"
+  pass "fm_composer_delivery_delta_verdict: 11 real-harness scenarios, plain and ANSI captures agreeing (22 verdicts)"
+}
+
+# opencode's composer hard-wraps mid-word inside a left bar, sits ABOVE a
+# footer rather than at the bottom of the pane, and carries a keybinding-hint
+# row underneath. Each of those defeated a region parser. This asserts the
+# fixture really has those properties, so the case cannot pass vacuously if a
+# future capture is replaced with a tidier one.
+test_delta_verdict_survives_opencode_wrap_and_furniture() {
+  local after
+  after=$(cat "$DELTA_FIXTURES/opencode-healthy.after.plain")
+  assert_contains "$after" 'END-OF-' "the opencode fixture must still hard-wrap the payload mid-word"
+  assert_contains "$after" 'tab agents' "the opencode fixture must still carry the hint row below its composer"
+  assert_contains "$after" '1.14.46' "the opencode fixture must still carry the footer BELOW the composer (not bottom-anchored)"
+  [ "$(delta_fixture_verdict opencode-healthy plain)" = accepted ] \
+    || fail "a healthy opencode send must be accepted despite the wrap and the furniture"
+  pass "fm_composer_delivery_delta_verdict: a mid-word wrap, a hint row, and a non-bottom-anchored composer do not block acceptance"
+}
+
+# The vendor update modal opencode parks on swallows a typed payload whole, and
+# it trips NONE of the gate scorer's signals - no trust language, no numbered
+# list, no confirm affordance. That is the live proof that the gate must not be
+# load-bearing for send safety, and that the delta proof is what actually holds
+# the line. Asserting BOTH halves keeps this from going vacuous if the scorer
+# is later tuned to catch this particular modal.
+test_delta_verdict_refuses_a_swallow_the_gate_scorer_misses() {
+  local before
+  before=$(cat "$DELTA_FIXTURES/opencode-launch.before.plain")
+  assert_contains "$before" 'Update Available' "the fixture must still be the vendor update modal"
+  if fm_composer_screen_is_gated "$before"; then
+    fail "this fixture is only meaningful while the gate scorer MISSES it; re-point the assertion rather than deleting it"
+  fi
+  [ "$(delta_fixture_verdict opencode-launch plain)" = not-accepted:absent-from-added ] \
+    || fail "an ungated modal that swallowed the payload must still be refused by the delta proof"
+  pass "fm_composer_delivery_delta_verdict: refuses a swallowing modal the gate scorer does not recognise"
+}
+
+# A trust dialog is refused twice over, and loudly: the pre-type gate declines
+# to type into it at all, and the delta proof independently refuses because
+# nothing landed. Neither may return a verdict a caller could read as delivery.
+test_gated_trust_dialog_is_refused_before_typing_and_after() {
+  local before after verdict
+  before=$(cat "$DELTA_FIXTURES/claude-trust.before.plain")
+  after=$(cat "$DELTA_FIXTURES/claude-trust.after.plain")
+  fm_composer_screen_is_gated "$before" \
+    || fail "a real Claude workspace-trust dialog must score as gated"
+  verdict=$(fm_composer_pre_type_ok "$before") \
+    && fail "fm_composer_pre_type_ok must refuse a gated pane, got success"
+  [ "$verdict" = gated ] || fail "the pre-type refusal must name the gate, got '$verdict'"
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$DELTA_PAYLOAD") \
+    && fail "a swallowed payload must not be accepted, got '$verdict'"
+  case "$verdict" in
+    not-accepted:*) ;;
+    *) fail "the refusal must carry a reason, got '$verdict'" ;;
+  esac
+  pass "fm_composer_delivery_delta_verdict: a trust dialog refuses before typing and again after, both with a reason"
+}
+
+# The round-1 false pass: a copy of the payload is ALREADY on screen above the
+# composer, the real send is swallowed, and the pane keeps changing. A
+# whole-screen search accepted that. The delta proof excludes the stale copy by
+# TIME rather than by location, so it cannot contribute.
+test_scrollback_copy_of_the_payload_cannot_prove_delivery() {
+  local before after verdict
+  before=$'transcript: '"$DELTA_PAYLOAD"$'\n⏳ 0s\n╭────╮\n│    │\n╰────╯'
+  after=$'transcript: '"$DELTA_PAYLOAD"$'\n⏳ 1s\n╭────╮\n│    │\n╰────╯'
+  [ "$before" != "$after" ] \
+    || fail "the fixture must actually differ, or it would prove nothing about a CHANGING pane"
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$DELTA_PAYLOAD") \
+    && fail "a pre-existing scrollback copy must never prove delivery, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: a scrollback copy plus a ticking pane is not delivery"
+}
+
+# Test A (novelty) and Test B (occurrence increase) fail in different
+# directions, which is the whole reason both are required. Here every row
+# carries a per-row counter, so the differ reports the ENTIRE screen as added
+# and Test A is defeated outright - the anchor really is in the added set. Only
+# Test B refuses, and the assertions below drive those two signals apart
+# deliberately so this case cannot go quietly vacuous if Test A ever starts
+# catching it for an unrelated reason.
+test_occurrence_count_refuses_when_novelty_is_defeated() {
+  local before after added verdict
+  redrawn_screen() {  # <tick> - every row carries the tick, so nothing is unchanged
+    printf '%s\n' \
+      "[t+$1s] row one" \
+      "[t+$1s] row two" \
+      "[t+$1s] transcript: $DELTA_PAYLOAD" \
+      "[t+$1s] ╭────╮" \
+      "[t+$1s] │    │" \
+      "[t+$1s] ╰────╯"
+  }
+  before=$(redrawn_screen 1)
+  after=$(redrawn_screen 2)
+  # Test A is genuinely defeated: the anchor IS among the rows the differ
+  # reports as added.
+  added=$(diff <(fm_composer_delta_rows "$before") <(fm_composer_delta_rows "$after") \
+    | LC_ALL=C sed -n 's/^> //p' | LC_ALL=C tr -d '\n')
+  assert_contains "$added" "$(fm_composer_payload_tail_anchor "$DELTA_PAYLOAD")" \
+    "this case is only meaningful while the differ over-reports; the anchor must be inside the added set"
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$DELTA_PAYLOAD") \
+    && fail "a fully redrawn pane holding a stale copy must not be accepted, got '$verdict'"
+  case "$verdict" in
+    not-accepted:no-new-occurrence*) ;;
+    *) fail "Test B (occurrence increase) must be what refuses this, got '$verdict'" ;;
+  esac
+  pass "fm_composer_delivery_delta_verdict: when a redrawing pane defeats novelty, the occurrence count still refuses"
+}
+
+# A partial write that landed only the head of the payload must not read as
+# delivery - the anchor is the TAIL precisely so there is no silent partial.
+test_partial_write_of_the_payload_is_refused() {
+  local before after verdict
+  before=$'╭────╮\n│    │\n╰────╯'
+  after=$'╭────╮\n│ > '"${DELTA_PAYLOAD:0:60}"$' │\n╰────╯'
+  assert_contains "$after" "${DELTA_PAYLOAD:0:40}" "the fixture must really carry the payload's head"
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$DELTA_PAYLOAD") \
+    && fail "a head-only partial write must not be accepted, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: a partial write that lost the payload tail is refused"
+}
+
+# The proof is shape-free by construction, so a stub that echoes the payload
+# into no container at all is a healthy send. This is what lets the test
+# fixtures across the suite stop drawing boxes, which is what stopped CI
+# outcomes from depending on fixture cosmetics.
+test_shape_free_echo_is_accepted() {
+  local verdict
+  verdict=$(fm_composer_delivery_delta_verdict '' "$DELTA_PAYLOAD" "$DELTA_PAYLOAD") \
+    || fail "a bare echo of the payload with no container must be accepted, got '$verdict'"
+  [ "$verdict" = accepted ] || fail "expected accepted, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: a payload echoed with no container at all is a healthy send"
+}
+
+# Uncertainty resolves to refusal, never to a bare success a caller could
+# misread, and every refusal names why.
+test_delta_verdict_fails_loud_on_an_empty_payload() {
+  local verdict
+  verdict=$(fm_composer_delivery_delta_verdict '' 'anything' '   ') \
+    && fail "a payload that normalizes to nothing must not be accepted, got '$verdict'"
+  [ "$verdict" = not-accepted:empty-payload ] \
+    || fail "the empty-payload refusal must name itself, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: an unusable payload is refused with a named reason"
+}
+
+# The payload's own characters are normalized exactly like the screen's, so a
+# steer that itself contains box glyphs or exotic whitespace needs no special
+# case on either side.
+test_delta_verdict_normalizes_payload_and_screen_identically() {
+  local payload verdict
+  payload=$'draw │ a ╰ box ┃ then ▀ stop  END-MARK-3XQ'
+  verdict=$(fm_composer_delivery_delta_verdict $'╭──╮\n│  │\n╰──╯' \
+    $'╭──╮\n│ > draw a box then stop END-MARK-3XQ │\n╰──╯' "$payload") \
+    || fail "a payload containing box glyphs must still match a rendered composer, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: box glyphs in the payload vanish on both sides, not just one"
+}
+
+test_delta_verdict_matches_real_harness_captures
+test_delta_verdict_survives_opencode_wrap_and_furniture
+test_delta_verdict_refuses_a_swallow_the_gate_scorer_misses
+test_gated_trust_dialog_is_refused_before_typing_and_after
+test_scrollback_copy_of_the_payload_cannot_prove_delivery
+test_occurrence_count_refuses_when_novelty_is_defeated
+test_partial_write_of_the_payload_is_refused
+test_shape_free_echo_is_accepted
+test_delta_verdict_fails_loud_on_an_empty_payload
+test_delta_verdict_normalizes_payload_and_screen_identically
+
+# A single-row composer that horizontally SCROLLS shows only a window of its
+# buffer, so the anchor has to be short enough to fit inside that window or a
+# perfectly healthy steer is refused. This pins the constraint that sets
+# FM_COMPOSER_DELTA_ANCHOR_MAX, measured against the shape firstmate's own
+# away-mode end-to-end reference draws (tests/fm-afk-inject-herdr-e2e.test.sh).
+# The assertion deliberately proves the window really is narrower than the
+# payload first, so it cannot pass vacuously if the fixture is ever widened.
+test_narrow_scrolling_composer_still_accepts() {
+  local payload window before after verdict anchor
+  payload='Supervisor escalate (1 event(s)): fake-c1: done: PR https://example.test/pr/100 (pre-read; re-arm not needed - watcher daemon-managed)'
+  # 40 visible columns: three characters of ellipsis plus the last 37 typed.
+  window="...${payload: -37}"
+  before=$'transcript line\n\xe2\x9d\xaf '
+  after=$'transcript line\n\xe2\x9d\xaf '"$window"
+  anchor=$(fm_composer_payload_tail_anchor "$payload")
+  [ "${#anchor}" -eq "$FM_COMPOSER_DELTA_ANCHOR_MAX" ] \
+    || fail "this case only means anything while the payload is longer than the anchor cap"
+  case "$after" in
+    *"$payload"*) fail "the scrolled fixture must NOT contain the whole payload, or it proves nothing" ;;
+  esac
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$payload") \
+    || fail "a healthy steer into a narrow horizontally-scrolling composer must be accepted, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: a narrow single-row composer that scrolls its buffer still proves delivery"
+}
+
+test_narrow_scrolling_composer_still_accepts

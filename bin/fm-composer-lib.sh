@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # bin/fm-composer-lib.sh - the ONE fleet-wide owner of composer classification:
 # every shape a verified harness draws, every glyph, every container proof, and
-# the empty|pending|pending-unproven|unknown verdict, shared by every
+# the empty|pending|pending-unproven|unknown|gated verdict, shared by every
 # session-provider adapter (tmux via bin/fm-tmux-lib.sh, and
-# bin/backends/{herdr,orca,cmux,zellij}.sh) and by fm-spawn.sh's kimi
-# launch-readiness check.
+# bin/backends/{herdr,orca,cmux,zellij}.sh) and by fm-spawn.sh's kimi and
+# claude launch-readiness checks. Gated is a full-screen modal (a numbered
+# selection list plus a confirm affordance) and is never an accepting composer.
+#
+# It is ALSO the one owner of the pre-Enter delivery proof, which deliberately
+# does none of the above: fm_composer_delivery_delta_verdict compares two whole
+# captures against the payload and never asks where the composer is. Every
+# adapter's obligation on the send path is reduced to capture, type, capture.
 #
 # WHY THIS EXISTS (tasks fm-composer-shellglyph-safety and
 # fm-composer-thin-adapter-refactor-r1): the adapters each carried their own
@@ -586,7 +592,7 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
-_fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
+_fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty>
   local pane=$1 cy=${2:-}
   local line indent left_stripped trimmed kind family side_family
   local top_inner top_spaces='' geometry_check=0 geometry_ambiguous=0
@@ -1107,80 +1113,233 @@ _fm_composer_select_cursorless() {
   [ -n "$FM_COMPOSER_SELECTED_KIND" ]
 }
 
-fm_composer_extract_selected_content() {  # <caps> <screen>
-  local caps=$1 screen=$2 styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
-  local leading_blank=1 placeholder_position=0 prompt_is_shell=0
-  footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
-  while IFS= read -r kv; do
-    [ "$kv" = styled=1 ] && styled=1
-  done <<EOF
-$caps
-EOF
-  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
-  _fm_composer_scan_screen "$plain" '' 1
-  _fm_composer_select_cursorless "$plain" || return 1
-  row=$FM_COMPOSER_SELECTED_FIRST
-  while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
-    raw=$(_fm_composer_screen_row "$row" "$screen")
-    content=$(_fm_composer_row_content "$raw" "$styled")
-    placeholder_position=0
-    case "$FM_COMPOSER_SELECTED_KIND" in
-      bare)
-        if [ "$row" -eq "$FM_COMPOSER_SELECTED_FIRST" ] \
-           && fm_composer_leading_agent_glyph_var glyph "$content"; then
-          content=${content#*"$glyph"}
-        fi
-        ;;
-      leftbar)
-        case "$content" in '┃'*) content=${content#┃} ;; esac
-        fm_composer_normalize_trim_var content
-        if [ -z "$content" ]; then
-          :
-        elif [ "$leading_blank" = 1 ] && [ "$row" -gt "$FM_COMPOSER_SELECTED_FIRST" ]; then
-          placeholder_position=1
-          leading_blank=0
-        else
-          leading_blank=0
-        fi
-        ;;
-      box)
-        if [ "$prompt_row" -lt 0 ] \
-           && fm_composer_leading_prompt_glyph_var glyph "$content"; then
-          prompt_row=$row
-          placeholder_position=1
-          if _fm_composer_is_prompt_glyph "$glyph" "$FM_COMPOSER_SHELL_PROMPT_GLYPHS"; then
-            prompt_is_shell=1
-          fi
-          content=${content#*"$glyph"}
-        elif [ "$prompt_row" -lt 0 ]; then
-          placeholder_position=1
-        fi
-        ;;
+# ---------------------------------------------------------------------------
+# The pre-Enter delivery proof (task remote-send-delivery-delta-r1).
+#
+# WHY THIS SHAPE: the composer region is not a fact the terminal carries. A
+# pane capture is a rectangle of cells and nothing in the pty stream marks
+# "these cells are the input buffer", so locating that buffer means inferring
+# it from one vendor's current drawing conventions - a bet that has to be
+# re-placed for every harness x version x width x capture fidelity. Two
+# successive attempts to hold that bet accumulated twenty review rounds of
+# narrow shape fixes without converging, and a single cosmetic keybinding-hint
+# row under opencode's composer was enough to make the region parser answer
+# "no composer here" for a perfectly healthy steer.
+#
+# So this proof never asks WHERE the composer is. It asks whether the exact
+# text we just typed became NEWLY PRESENT on the screen: a question about the
+# DIFFERENCE between two captures, answered with the payload we already hold.
+# Location is a shape question; time is not. That substitution is what removes
+# the whole class, and it is why the round-1 scrollback false pass (a stale
+# copy of the payload already visible above the composer, with the real send
+# swallowed) is impossible here by construction rather than filtered: a copy
+# that was already on screen is in the BEFORE capture, so it can neither be an
+# addition nor raise an occurrence count.
+
+# U+2500-U+259F (box drawing plus block elements) as UTF-8 byte ranges, and the
+# OSC forms tmux/herdr/zellij can pass through, written as octal escapes so
+# every boundary stays reviewable in source. LC_ALL=C makes sed walk bytes, so
+# this is one locale-independent deletion rather than a hand-enumerated glyph
+# list that the next vendor border would escape - opencode alone draws its
+# composer with U+2503, U+2579 and U+2580.
+printf -v _FM_COMPOSER_DELTA_SED '%b' \
+  's|\0033\0135[^\0007\0033]*\0007||g;' \
+  's|\0033\0135[^\0007\0033]*\0033\0134\0134||g;' \
+  's/\0342[\0224\0225][\0200-\0277]//g;' \
+  's/\0342\0226[\0200-\0237]//g;' \
+  's/[[:space:]]//g'
+readonly _FM_COMPOSER_DELTA_SED
+
+# The delta proof subtracts pre-existing screen content by TIME rather than
+# avoiding it by LOCATION, so its capture window is no longer a hazard to be
+# kept small the way the classifier's FM_COMPOSER_CAPTURE_LINES is: it only has
+# to be the SAME window on both sides, and wide enough to contain the composer
+# wherever the harness drew it. Bottom-anchoring is not safe to assume here -
+# opencode's composer sits above a path/version footer with blank rows below.
+# tmux and zellij capture the whole visible pane natively; the backends whose
+# capture primitive is bounded by a line count use this.
+FM_COMPOSER_DELTA_LINES=${FM_COMPOSER_DELTA_LINES:-200}
+
+# fm_composer_delta_rows: the ONE normalization both sides of the proof and the
+# payload itself pass through, so a payload that contains a box glyph or an
+# exotic space needs no special case - its characters vanish identically on
+# every side. Per row: strip ANSI (the shared owner above), map Unicode
+# whitespace onto ASCII, then delete OSC runs, box/block glyphs, and all
+# remaining whitespace; rows that normalize to nothing are dropped. Row
+# STRUCTURE survives and only intra-row noise is erased, which is what makes
+# the proof invariant to wrapping, indentation, padding, borders, and column
+# width. Residual escape data this misses can only make the anchor fail to
+# match, which is a refusal - never a false accept.
+fm_composer_delta_rows() {  # <screen> -> normalized rows, one per line
+  local text
+  text=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
+  fm_composer_normalize_spaces_var text
+  printf '%s\n' "$text" | LC_ALL=C sed "$_FM_COMPOSER_DELTA_SED" | LC_ALL=C grep -v '^$' || true
+}
+
+# How many normalized characters of the payload's tail the anchor uses.
+#
+# The bound is set by the NARROWEST composer a steer has to land in, not by how
+# much uniqueness the proof would like. A single-row composer that horizontally
+# scrolls shows only a window of its buffer, and firstmate's own away-mode
+# end-to-end reference draws exactly that shape: measured against it, a 40-column
+# window leaves 33 normalized payload characters visible
+# (tests/fm-afk-inject-herdr-e2e.test.sh, scenario A). An anchor longer than
+# that can never match there, which turns a perfectly healthy steer into a
+# refusal - the failure this whole design exists to stop having.
+#
+# Shortening the anchor does NOT trade safety for reach, because the anchor is
+# not doing the work alone: acceptance additionally requires that this exact
+# string was ABSENT from the before-capture's added set and that its whole-screen
+# occurrence count strictly ROSE, in the same instant we typed it. Screen churn
+# cannot manufacture that, so the only remaining question is accidental
+# collision, and 24 exact consecutive characters is far above where that is
+# plausible. 24 also leaves nine characters of margin against the narrowest
+# composer measured, rather than sitting one character from a refusal.
+FM_COMPOSER_DELTA_ANCHOR_MAX=24
+
+# fm_composer_payload_tail_anchor: the payload's own TAIL in normalized form,
+# capped at FM_COMPOSER_DELTA_ANCHOR_MAX. The tail and never the head: a
+# composer scrolls its head out of view while the insertion point - and
+# therefore the last thing typed - stays visible. A partial write that landed
+# only the head cannot show this anchor, so there is no silent partial accept.
+fm_composer_payload_tail_anchor() {  # <text>
+  local norm
+  norm=$(fm_composer_delta_rows "$1" | LC_ALL=C tr -d '\n')
+  [ -n "$norm" ] || return 1
+  if [ "${#norm}" -le "$FM_COMPOSER_DELTA_ANCHOR_MAX" ]; then
+    printf '%s' "$norm"
+  else
+    printf '%s' "${norm: -FM_COMPOSER_DELTA_ANCHOR_MAX}"
+  fi
+}
+
+# fm_composer_count_occurrences: non-overlapping occurrences of <needle> in
+# <haystack>. Bash suffix removal, so no external process and no regex
+# metacharacter hazard from a payload that contains one.
+fm_composer_count_occurrences() {  # <haystack> <needle>
+  local hay=$1 needle=$2 n=0
+  if [ -z "$needle" ]; then
+    printf '0'
+    return 0
+  fi
+  while [ -n "$hay" ]; do
+    case "$hay" in
+      *"$needle"*) ;;
+      *) break ;;
     esac
-    fm_composer_normalize_spaces_var content
-    fm_composer_normalize_trim_var content
-    # A styled agent-glyph placeholder disappears above when ghost stripping
-    # proves it is furniture. If the same placeholder-looking bytes survive
-    # styling, they are real user input and must remain in the extracted content
-    # (the zellij paste proof depends on observing exactly what was typed).
-    # OpenCode's left-bar hint and legacy shell-glyph boxed placeholders have no
-    # such styling proof, so their structurally fixed positions remain the two
-    # idle-regex exceptions here.
-    if [ -z "$content" ] \
-       || { { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
-              || { [ "$FM_COMPOSER_SELECTED_KIND" = box ] && [ "$prompt_is_shell" = 1 ]; }; } \
-            && [ "$placeholder_position" = 1 ] \
-            && fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; } \
-       || { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
-            && [ "$row" -eq "$FM_COMPOSER_SELECTED_LAST" ] \
-            && fm_composer_idle_matches "$content" "$footer_re" sensitive; }; then
-      row=$((row + 1))
-      continue
-    fi
-    joined="${joined}${joined:+ }$content"
-    row=$((row + 1))
+    hay=${hay#*"$needle"}
+    n=$((n + 1))
   done
-  printf '%s\n' "$joined" | LC_ALL=C awk '{$1=$1; printf "%s", $0}'
+  printf '%s' "$n"
+}
+
+# fm_composer_delivery_delta_verdict: the ONE pre-Enter delivery proof, shared
+# by every backend. Three strings in - no capability descriptor, no cursor row,
+# no identity probe, no harness name, no composer region - and one of
+#   accepted            (return 0)
+#   not-accepted:<why>  (return 1)
+# out. Accepted requires BOTH of:
+#   A) NOVELTY - the anchor appears among the rows the differ reports as ADDED.
+#      LCS diffing is invariant under pure line shifts, so a long payload that
+#      grows the composer and pushes the transcript up produces no additions of
+#      its own; that invariance is what region extraction was trying to buy
+#      with borders and cursor rows.
+#   B) OCCURRENCE INCREASE - the anchor's whole-screen count strictly rose.
+# They fail in DIFFERENT directions, which is why both are required: a pane
+# that redraws every row (a per-row clock, a resize) defeats A by reporting
+# everything as added, and B still refuses because a pre-existing copy cannot
+# raise a count. Their conjunction can only ever move toward refusal.
+#
+# Callers must not send Enter on a nonzero return. A modal that swallowed the
+# keystrokes reads Enter as "confirm", which is the false-delivery hole this
+# closes; and this proof only gates PRESSING Enter - delivery is still only
+# REPORTED after the untouched post-Enter submit confirmation, so the two
+# proofs bracket the Enter.
+#
+# The adapters share one rule for a capture that fails outright, because the
+# two sides mean different things: a failed BEFORE capture means nothing was
+# ever typed, so it reports `send-failed`; a failed AFTER capture means the
+# text WAS typed and cannot be proven, so it reports `unknown` - the verdict
+# that tells a caller never to retype.
+fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payload>
+  local before=$1 after=$2 payload=$3
+  local anchor before_rows after_rows added before_joined after_joined cb ca rc=0
+  anchor=$(fm_composer_payload_tail_anchor "$payload") || {
+    printf 'not-accepted:empty-payload'
+    return 1
+  }
+  before_rows=$(fm_composer_delta_rows "$before")
+  after_rows=$(fm_composer_delta_rows "$after")
+  added=$(diff <(printf '%s\n' "$before_rows") <(printf '%s\n' "$after_rows") 2>/dev/null) || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'not-accepted:diff-failed'
+    return 1
+  fi
+  added=$(printf '%s\n' "$added" | LC_ALL=C sed -n 's/^> //p' | LC_ALL=C tr -d '\n')
+  before_joined=$(printf '%s' "$before_rows" | LC_ALL=C tr -d '\n')
+  after_joined=$(printf '%s' "$after_rows" | LC_ALL=C tr -d '\n')
+  case "$added" in
+    *"$anchor"*) ;;
+    *)
+      printf 'not-accepted:absent-from-added'
+      return 1
+      ;;
+  esac
+  cb=$(fm_composer_count_occurrences "$before_joined" "$anchor")
+  ca=$(fm_composer_count_occurrences "$after_joined" "$anchor")
+  if [ "$ca" -le "$cb" ]; then
+    printf 'not-accepted:no-new-occurrence(before=%s after=%s)' "$cb" "$ca"
+    return 1
+  fi
+  printf 'accepted'
+}
+
+# fm_composer_screen_is_gated: 0 when <screen> is a modal/gated prompt rather
+# than an accepting composer. A positive verdict needs at least two independent
+# signals so no single vendor string is load-bearing: a numbered selection
+# list, an Enter-to-confirm affordance, a trust/directory prompt, a safety
+# check, or an Esc-to-cancel affordance. Claude Code's workspace-trust dialog
+# trips several of these at once; a bare `❯` composer trips none.
+#
+# This scorer is deliberately NOT load-bearing for send safety - a modal that
+# swallows the payload produces no delta, so the delta proof above refuses it
+# regardless of what this thinks (measured: opencode's own update modal
+# swallowed a 152-character payload whole and scored zero here). Its remaining
+# jobs are to refuse to TYPE into a modal at all, because typed digits act as
+# control input on a numbered list and one such list offers a package upgrade;
+# to give a specific diagnostic instead of the generic missing-payload one; and
+# to answer the spawn-time readiness question, where there is no payload to
+# diff against. That demotion is the point: the tuning target is specificity
+# only, not sensitivity.
+fm_composer_screen_is_gated() {  # <screen>
+  local plain n=0 confirm=0 trust=0 safety=0 esc=0 score=0
+  plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
+  n=$(printf '%s\n' "$plain" | grep -cE '^[[:space:]]*(❯|›|⟩|→|>)?[[:space:]]*[0-9]+\.[[:space:]]+[^[:space:]]' || true)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$plain" | grep -qiE 'enter to confirm|press enter to (confirm|continue|accept)' && confirm=1
+  printf '%s\n' "$plain" | grep -qiE 'trust this folder|trust the contents of this directory|do you trust' && trust=1
+  printf '%s\n' "$plain" | grep -qiE 'quick safety check|[[:space:]]safety check' && safety=1
+  printf '%s\n' "$plain" | grep -qiE 'esc to cancel' && esc=1
+  [ "$n" -ge 2 ] && score=$((score + 1))
+  [ "$confirm" = 1 ] && score=$((score + 1))
+  [ "$trust" = 1 ] && score=$((score + 1))
+  [ "$safety" = 1 ] && score=$((score + 1))
+  [ "$esc" = 1 ] && score=$((score + 1))
+  [ "$score" -ge 2 ]
+}
+
+# fm_composer_pre_type_ok: refuse to type at all when the pane is a gated
+# modal. Prints `gated` and returns 1; returns 0 with no output otherwise.
+# One argument, and no classification: whether the composer is empty is not
+# this gate's question, because the delta proof answers the real one after the
+# text is typed.
+fm_composer_pre_type_ok() {  # <screen>
+  if fm_composer_screen_is_gated "$1"; then
+    printf 'gated'
+    return 1
+  fi
+  return 0
 }
 
 fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
@@ -1200,6 +1359,10 @@ EOF
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
   fi
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  if fm_composer_screen_is_gated "$plain"; then
+    printf 'gated'
+    return 0
+  fi
   _fm_composer_scan_screen "$plain" "$cy"
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.

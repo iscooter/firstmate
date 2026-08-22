@@ -101,8 +101,16 @@ The daemon escalates captain-relevant events, plus a bounded recheck for a decla
 Its supervisor injection path supports tmux and herdr panes, with `FM_SUPERVISOR_BACKEND` and `FM_SUPERVISOR_TARGET` resolved independently from the task-spawn backend.
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr uses native agent-state submit confirmation on idle baselines, a composer empty fallback when native stays idle, and a pre-Enter rendered-footer transition when that baseline is unavailable.
 The retries-exhausted queued-Enter decision is owned by `fm_composer_queued_enter_verdict` in `bin/fm-composer-lib.sh`; tmux and herdr provide only their backend-specific busy signals.
-Composer classification has one shared owner, `bin/fm-composer-lib.sh`: tmux, herdr, Zellij, Orca, and cmux contribute only a screen capture plus declarative styled, cursor, identity, and row capabilities, while the shared classifier owns every shape and the `empty`/`pending`/`pending-unproven`/`unknown` verdict.
-`fm-spawn.sh` also routes Kimi launch readiness through that classifier instead of carrying another shape copy.
+Composer classification has one shared owner, `bin/fm-composer-lib.sh`: tmux, herdr, Zellij, Orca, and cmux contribute only a screen capture plus declarative styled, cursor, identity, and row capabilities, while the shared classifier owns every shape and the `empty`/`pending`/`pending-unproven`/`gated`/`unknown` verdict.
+`fm-spawn.sh` also routes Kimi and Claude launch readiness through that classifier instead of carrying another shape copy.
+
+Delivery is proven twice, either side of the Enter, and the two halves ask deliberately different questions.
+Before Enter, every backend's submit path calls `fm_composer_delivery_delta_verdict` in that same owner, which is given two whole captures and the payload and asks only whether the payload became newly present between them - never where the composer is.
+That substitution is the point: locating the input buffer inside a pane capture is an inference about one vendor's current drawing conventions, and two successive attempts to hold that inference accumulated twenty review rounds of narrow shape fixes without converging.
+A stale copy of the payload already on screen cannot satisfy the proof, because it is in the before capture and can therefore neither be an addition nor raise an occurrence count; a modal that swallowed the keystrokes cannot either, so Enter is never delivered into a dialog where it would read as "confirm".
+Each adapter's whole obligation on that path is capture, type, capture, which is why the capability descriptor, cursor row, and identity probe are all absent from it.
+There is deliberately no bypass: a harness whose composer cannot be proven is refused rather than steered blind, and pinning a new harness means running the live guard in [runtime-backends.md](verification/runtime-backends.md#pre-enter-delivery-proof).
+After Enter, the shape-aware post-Enter confirmation above is unchanged, so the pre-Enter half never has to be independently airtight.
 The daemon injects only into an affirmatively `empty` composer, so every other or future verdict defers; positive container proof is required, and a blank unidentified row or bare dead-shell prompt cannot receive an escalation.
 The current operator boundary is in [Composer and injection safety](herdr-backend.md#composer-and-injection-safety).
 Unsupported supervisor backends refuse at daemon startup.

@@ -14,13 +14,23 @@
 #   - the zellij false-positive regression live (when zellij is installed): a
 #     pane whose content changes for reasons unrelated to submission must NOT
 #     report a delivered send, and a real claude-in-zellij `dump-screen
-#     --ansi` capture must classify empty through the zellij thin adapter.
+#     --ansi` capture must classify empty through the zellij thin adapter;
+#   - the PRE-ENTER DELIVERY PROOF live (fm_composer_delivery_delta_verdict):
+#     for every installed harness, a payload really typed into the real
+#     composer must be ACCEPTED, and the same two captures with nothing typed
+#     between them must be REFUSED. This is the tier that catches a vendor
+#     release masking, reflowing, or scrolling typed input out of view - the
+#     one genuinely new false-refusal class the delta proof introduces - and
+#     it is checked on both capture fidelities so the deleted styled/plain
+#     fork cannot quietly return.
 #
 # Run explicitly with FM_COMPOSER_MATRIX_LIVE=1. No prompt is ever submitted
-# to any harness, so no model tokens are spent. An absent harness is reported
-# explicitly and skipped; a run that verified nothing fails rather than
-# passing vacuously. Refresh docs/verification/runtime-backends.md ("Composer
-# classification matrix") from this guard's output after any harness upgrade.
+# to any harness (the delivery proof gates Enter and this guard never sends
+# it), so no model tokens are spent. An absent harness is reported explicitly
+# and skipped; a run that verified nothing fails rather than passing
+# vacuously. Refresh docs/verification/runtime-backends.md ("Composer
+# classification matrix" and "Pre-Enter delivery proof") from this guard's
+# output after any harness upgrade.
 #
 # Folder trust: harnesses are launched with the repo root as cwd, which the
 # operator's machine has normally already trusted; a trust dialog is a real
@@ -74,6 +84,49 @@ harness_version() {  # <binary>
   "$1" --version 2>/dev/null | head -1 || printf 'version-unknown'
 }
 
+# The 152-character steer this guard types into every real composer. Long
+# enough to wrap at any realistic pane width, and marked so it is obvious in a
+# pane tail that it came from this guard and was never submitted.
+DELTA_PAYLOAD='fm live delivery-proof probe: this text is typed once and never submitted, only captured either side of the write. END-OF-PROBE-MARKER-7Q4Z'
+
+# check_harness_delta: capture, type, capture, and require the shared pre-Enter
+# proof to ACCEPT - then require it to REFUSE the same pair with nothing typed,
+# so a harness that simply always accepts cannot pass. Both capture fidelities
+# are checked and must agree.
+check_harness_delta() {  # <name> <version> <target>
+  local name=$1 version=$2 target=$3
+  local before_p before_a after_p after_a idle_p verdict_p verdict_a refuse
+  before_p=$(tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null)
+  before_a=$(tmux -L "$SOCKET" capture-pane -p -e -t "$target" 2>/dev/null)
+  # The refuse direction FIRST, while nothing has been typed: two captures of a
+  # settled pane must never prove a delivery, however much the pane churns.
+  sleep 1
+  idle_p=$(tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null)
+  if refuse=$(fm_composer_delivery_delta_verdict "$before_p" "$idle_p" "$DELTA_PAYLOAD"); then
+    FAILED=1
+    printf 'not ok - %s (%s): the delivery proof accepted a pane nothing was typed into (verdict: %s)\n' \
+      "$name" "$version" "$refuse" >&2
+    return
+  fi
+  tmux -L "$SOCKET" send-keys -t "$target" -l "$DELTA_PAYLOAD" 2>/dev/null \
+    || { FAILED=1; printf 'not ok - %s (%s): could not type the delivery-proof probe\n' "$name" "$version" >&2; return; }
+  sleep 3
+  after_p=$(tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null)
+  after_a=$(tmux -L "$SOCKET" capture-pane -p -e -t "$target" 2>/dev/null)
+  verdict_p=$(fm_composer_delivery_delta_verdict "$before_p" "$after_p" "$DELTA_PAYLOAD") || true
+  verdict_a=$(fm_composer_delivery_delta_verdict "$before_a" "$after_a" "$DELTA_PAYLOAD") || true
+  if [ "$verdict_p" != accepted ] || [ "$verdict_a" != accepted ]; then
+    printf '# %s pane tail at delivery-proof failure:\n' "$name" >&2
+    printf '%s\n' "$after_p" | grep '[^[:space:]]' | tail -8 | sed 's/^/#   /' >&2
+    FAILED=1
+    printf 'not ok - %s (%s): a really-typed payload was not proven delivered (plain: %s; ansi: %s)\n' \
+      "$name" "$version" "${verdict_p:-none}" "${verdict_a:-none}" >&2
+    return
+  fi
+  CHECKED=$((CHECKED + 1))
+  pass "$name ($version): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities"
+}
+
 check_harness_idle_empty() {  # <name> <launch-cmd...>
   local name=$1 win="hx-$1" verdict='' i=0 budget=${FM_COMPOSER_MATRIX_LIVE_POLLS:-45} version dismissed=0 startup_screen
   shift
@@ -113,17 +166,45 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): real idle composer classifies empty"
   fi
+  # The delivery proof reads no composer region, so it is exercised whatever
+  # the classifier concluded above: a harness the shape catalogue cannot read
+  # is exactly the case it has to keep steerable.
+  check_harness_delta "$name" "$version" "$SESSION:$win"
+  tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+}
+
+# check_harness_delta_only: the delivery proof for a harness that is
+# deliberately outside the cursor-anchored empty-composer matrix (cursor parks
+# its terminal cursor outside the composer). The proof never reads a cursor, so
+# this harness is covered here and nowhere else.
+check_harness_delta_only() {  # <name> <launch-cmd...>
+  local name=$1 win="hd-$1" version
+  shift
+  version=$(harness_version "$1")
+  tmux -L "$SOCKET" new-window -d -t "$SESSION:" -n "$win" -c "$ROOT" -- "$@" \
+    || fail "$name ($version): could not launch in the isolated tmux server"
+  sleep "${FM_COMPOSER_MATRIX_LIVE_SETTLE:-16}"
+  check_harness_delta "$name" "$version" "$SESSION:$win"
   tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
 }
 
 # --- 1. Every installed verified harness must reach a proven-empty composer --
-for h in claude codex opencode pi grok kimi muse; do
+for h in claude codex opencode pi pi-signed grok kimi muse; do
   if command -v "$h" >/dev/null 2>&1; then
     check_harness_idle_empty "$h" "$h"
   else
     note "harness absent, not verified here: $h"
   fi
 done
+
+# Cursor is outside the empty-composer matrix (see the file header and
+# docs/verification/runtime-backends.md), but it is NOT outside the delivery
+# proof, which reads no cursor and no composer region.
+if command -v cursor-agent >/dev/null 2>&1; then
+  check_harness_delta_only cursor cursor-agent
+else
+  note "harness absent, not verified here: cursor (cursor-agent)"
+fi
 
 # --- 2. The strict blank-row posture, live ----------------------------------
 # A plain shell pane parked on a blank line between two rules (the audit's

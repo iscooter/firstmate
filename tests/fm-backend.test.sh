@@ -625,29 +625,33 @@ test_backend_of_selector_matches_explicit_target_meta() {
 make_send_fakebin() {  # <dir> -> echoes fakebin dir; logs every tmux call to $FM_TMUX_LOG
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/tmux" <<'SH'
+  cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-{ printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
-case "${1:-}" in
-  send-keys) exit 0 ;;
-  display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
-    printf 'fakepane\n'; exit 0 ;;
-  capture-pane)
-    start= end=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -S) start=$2; shift 2 ;;
-        -E) end=$2; shift 2 ;;
-        *) shift ;;
+. '$ROOT/tests/echoing-composer.inc.sh'
+{ printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
+case "\${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
       esac
     done
-    if [ "$start" = 1 ] && [ "$end" = 1 ]; then
-      printf '│    │\n'
-    else
-      printf '╭────╮\n│    │\n╰────╯\n'
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
     fi
+    exit 0 ;;
+  display-message)
+    for a in "\$@"; do case "\$a" in *cursor_y*) printf '1\\n'; exit 0 ;; esac; done
+    printf 'fakepane\\n'; exit 0 ;;
+  capture-pane)
+    fm_test_tmux_echo_capture
     exit 0 ;;
   list-windows) exit 0 ;;
 esac
@@ -695,7 +699,8 @@ test_send_tmux_contract() {
   assert_not_contains "$(cat "$log")" $'\x1f''-l'$'\x1f' "fm-send --key must not type literal text"
 
   # Case 2: plain text - typed literally exactly once, submitted with Enter,
-  # confirmed against the bordered-empty fake composer.
+  # confirmed against a fake composer that echoes the typed payload the way a
+  # real pane does.
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" hello captain
   rc=$?
   expect_code 0 "$rc" "fm-send plain text should confirm against the empty fake composer"

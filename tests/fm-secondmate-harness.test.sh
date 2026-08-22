@@ -634,26 +634,33 @@ meta_field() { grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-; }
 make_launch_capturing_tmux() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\$*" in
+  *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
 esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
+case "\${1:-}" in
+  display-message) printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
+    if [ -n "\${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      for a in "\$@"; do
+        if [ "\$prev" = "-l" ]; then
+          printf '%s\\n' "\$a" >> "\$FM_FAKE_LAUNCH_LOG"
+          fm_test_tmux_note_literal "\$a"
         fi
-        prev=$a
+        prev=\$a
       done
     fi
+    case " \$* " in
+      *' Enter '*) fm_test_tmux_note_enter ;;
+    esac
     exit 0
     ;;
 esac
@@ -1050,22 +1057,35 @@ SH
   chmod +x "$fakebin/gh-axi"
   # tmux fake supports fm-send's composer-verified submit path and optional
   # FM_FAKE_TMUX_LOG / FM_FAKE_TMUX_FAIL_LITERAL for reread-nudge assertions.
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
-if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
-  printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+. '$ROOT/tests/echoing-composer.inc.sh'
+if [ -n "\${FM_FAKE_TMUX_LOG:-}" ]; then
+  printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
 fi
-case "$*" in
-  *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
-  *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
-  *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
-  *capture-pane*) printf '❯\n'; exit 0 ;;
-  *'send-keys'*' -l '*)
-    [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
-    exit 0
-    ;;
-  *send-keys*)
-    [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+case "\$*" in
+  *display-message*'#{pane_current_command}'*) printf '%s\\n' codex; exit 0 ;;
+  *display-message*'#{pane_id}'*) printf '%s\\n' '%1'; exit 0 ;;
+  *display-message*'#{cursor_y}'*) printf '%s\\n' 1; exit 0 ;;
+esac
+case "\${1:-}" in
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
+  send-keys)
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    [ "\${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+    fi
     exit 0
     ;;
 esac

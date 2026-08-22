@@ -52,65 +52,68 @@ trap relaunch_cleanup EXIT
 make_tmux_stub() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/tmux" <<'SH'
+  cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-D=$FM_FAKE_DIR
-case "${1:-}" in
+. '$ROOT/tests/echoing-composer.inc.sh'
+D=\$FM_FAKE_DIR
+case "\${1:-}" in
   send-keys)
     shift
     literal=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
         -t) shift 2 ;;
         -l) literal=1; shift ;;
         *) break ;;
       esac
     done
-    payload=${1:-}
-    if [ "$literal" = 1 ]; then
-      printf '%s\n' "$payload" >> "$D/literal"
-      case "$payload" in
+    payload=\${1:-}
+    if [ "\$literal" = 1 ]; then
+      printf '%s\\n' "\$payload" >> "\$D/literal"
+      fm_test_tmux_note_literal "\$payload"
+      case "\$payload" in
         /exit|/quit)
-          printf 'zsh' > "$D/command"
-          [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
+          printf 'zsh' > "\$D/command"
+          [ -z "\${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
         *'encode launch-brief'*)
-          cat "$D/becomes" > "$D/command"
-          [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1
+          cat "\$D/becomes" > "\$D/command"
+          [ -z "\${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1
           ;;
       esac
     else
-      printf '%s\n' "$payload" >> "$D/keys"
-      case "$payload" in
+      printf '%s\\n' "\$payload" >> "\$D/keys"
+      [ "\$payload" = Enter ] && fm_test_tmux_note_enter
+      case "\$payload" in
         'export GOTMPDIR='*)
-          if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
-            : > "$FM_FAKE_TRACE_PREPARE"
-            while [ ! -e "$FM_FAKE_META_WRITER_READY" ]; do /bin/sleep 0.01; done
+          if [ -n "\${FM_FAKE_TRACE_PREPARE:-}" ]; then
+            : > "\$FM_FAKE_TRACE_PREPARE"
+            while [ ! -e "\$FM_FAKE_META_WRITER_READY" ]; do /bin/sleep 0.01; done
           fi
           ;;
         'export TRACEPARENT='*)
-          [ -z "${FM_FAKE_TRACE_EXPORTED:-}" ] || : > "$FM_FAKE_TRACE_EXPORTED"
+          [ -z "\${FM_FAKE_TRACE_EXPORTED:-}" ] || : > "\$FM_FAKE_TRACE_EXPORTED"
           ;;
       esac
     fi
     exit 0 ;;
   display-message)
-    for a in "$@"; do
-      case "$a" in
-        *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
+    for a in "\$@"; do
+      case "\$a" in
+        *cursor_y*) printf '1\\n'; exit 0 ;;
+        *pane_current_command*) cat "\$D/command"; printf '\\n'; exit 0 ;;
         *pane_current_path*)
-          if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
-            : > "$FM_FAKE_CWD_RACE_READY"
+          if [ -n "\${FM_FAKE_CWD_RACE_READY:-}" ]; then
+            : > "\$FM_FAKE_CWD_RACE_READY"
             /bin/sleep 1
           fi
-          cat "$D/cwd"; printf '\n'; exit 0 ;;
+          cat "\$D/cwd"; printf '\\n'; exit 0 ;;
       esac
     done
-    printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
-  list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
+    printf 'fakepane\\n'; exit 0 ;;
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
+  list-windows) [ -f "\$D/windows" ] && cat "\$D/windows"; exit 0 ;;
 esac
 exit 0
 SH

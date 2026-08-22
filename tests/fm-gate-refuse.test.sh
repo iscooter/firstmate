@@ -209,25 +209,28 @@ test_spawn_refuses_and_admits() {
 make_send_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-case "${1:-}" in
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\${1:-}" in
   send-keys)
     shift; literal=0; target=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -t) target=$2; shift 2 ;;
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) target=\$2; shift 2 ;;
         -l) literal=1; shift ;;
         *) break ;;
       esac
     done
-    printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
+    printf 'send-keys target=%s literal=%s arg=%s\\n' "\$target" "\$literal" "\${1:-}" >> "\$FM_TMUX_LOG"
+    [ "\$literal" = 1 ] && fm_test_tmux_note_literal "\${1:-}"
+    if [ "\$literal" = 0 ] && [ "\${1:-}" = Enter ]; then fm_test_tmux_note_enter; fi
     exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
-    printf '%%1\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+    for a in "\$@"; do case "\$a" in *cursor_y*) printf '1\\n'; exit 0 ;; esac; done
+    printf '%%1\\n'; exit 0 ;;
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
 esac
 exit 0
 SH

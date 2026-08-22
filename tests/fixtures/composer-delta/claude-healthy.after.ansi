@@ -1,0 +1,40 @@
+
+[91m╭───[39m [91mClaude Code[39m [37mv2.1.239[39m [91m─────────────────────────────────────────────────────────────────────────╮
+│[39m                                                    [2m[91m│[0m [1m[91mTips for getting started[0m                    [91m│
+│[39m                  [1mWelcome back!    [0m                 [2m[91m│[0m Run /init to create a CLAUDE.md file with … [91m│
+│[39m                                                    [2m[91m│[0m [91m───────────────────────────────────────────[39m [91m│
+│[39m                      [91m ▐[40m▛███▛█[39m[49m                      [2m[91m│[0m [1m[91mWhat's new[0m                                  [91m│
+│[39m                      [91m▝▜[40m█████[49m█▀[39m                     [2m[91m│[0m Cost estimates (`/cost`, status line, `--m… [91m│
+│[39m                      [91m  ▝▝ ▝▝  [39m                     [2m[91m│[0m Added the one-time fullscreen renderer off… [91m│
+│[39m  [37mHaiku 4.5 · Claude Max · agent@example.invalid's [39m [2m[91m│[0m Added `/claude-api upgrade` to migrate Pyt… [91m│
+│[39m  [37mOrganization[39m                                      [2m[91m│[0m [3m[37m/release-notes for more[0m                     [91m│
+│[39m       [37m/tmp/fixture-workspace[39m       [2m[91m│[0m                                             [91m│
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[37m────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ LAVISH PROPOSAL: investigate the fm-send delivery path end to end and produce a design-only
+  report; do not implement anything. END-OF-PAYLOAD-MARKER-7Q4Z
+[37m────────────────────────────────────────────────────────────────────────────────────────────────────
+
+[39m  [37m⏸ manual mode on[39m

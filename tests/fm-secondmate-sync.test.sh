@@ -302,22 +302,39 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/gh-axi"
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
-if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
-  printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+. '$ROOT/tests/echoing-composer.inc.sh'
+if [ -n "\${FM_FAKE_TMUX_LOG:-}" ]; then
+  printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
 fi
-case "$*" in
+case "\$*" in
   list-windows*)
-    sed -n 's/^window=[^:]*://p' "${FM_HOME:?}"/state/*.meta
+    sed -n 's/^window=[^:]*://p' "\${FM_HOME:?}"/state/*.meta
     exit 0
     ;;
-  *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
-  *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
-  *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
-  *capture-pane*) printf '❯\n'; exit 0 ;;
-  *'send-keys'*' -l '*)
-    [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+  *display-message*'#{pane_current_command}'*) printf '%s\\n' codex; exit 0 ;;
+  *display-message*'#{pane_id}'*) printf '%s\\n' '%1'; exit 0 ;;
+  *display-message*'#{cursor_y}'*) printf '%s\\n' 1; exit 0 ;;
+esac
+case "\${1:-}" in
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
+  send-keys)
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    [ "\${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+    fi
     exit 0
     ;;
 esac

@@ -92,11 +92,19 @@ case "${1:-} ${2:-}" in
        | .working |= with_entries(select(.key != $p))' | save ;;
   "pane send-text")
     [ ! -f "$SEND_FAIL" ] || exit 1
-    jq_state --arg p "${3:-}" '.typed[$p] = true' | save ;;
+    jq_state --arg p "${3:-}" --arg t "${4:-}" '.typed[$p] = true | .draft[$p] = $t' | save ;;
   "pane send-keys")
     [ ! -f "$SEND_FAIL" ] || exit 1
-    jq_state --arg p "${3:-}" '.typed[$p] = true | .working[$p] = true' | save ;;
-  "pane read") printf '\n' ;;
+    jq_state --arg p "${3:-}" '.typed[$p] = true | .working[$p] = true | .draft[$p] = ""' | save ;;
+  "pane read")
+    pane=${3:-}
+    draft=$(jq_state -r --arg p "$pane" '.draft[$p] // ""')
+    if [ -n "$draft" ]; then
+      printf '❯ %s\n' "$draft"
+    else
+      printf '❯ \n'
+    fi
+    ;;
   "pane process-info") printf '{"result":{"process":{"name":"codex"}}}\n' ;;
   "agent get")
     pane=${3:-}
@@ -121,5 +129,5 @@ SH
 # reset_remote_herdr_fixture <state>: return the fake host to "no workspaces,
 # tabs, or panes", which is what a test means by "the previous endpoint is gone".
 reset_remote_herdr_fixture() { # <state>
-  printf '{"next":1,"workspaces":[],"tabs":[],"typed":{},"working":{}}\n' > "$1"
+  printf '{"next":1,"workspaces":[],"tabs":[],"typed":{},"working":{},"draft":{}}\n' > "$1"
 }

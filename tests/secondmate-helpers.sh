@@ -22,30 +22,51 @@ make_fake_tmux() {
   # A real, positively identified empty agent composer. A blank capture is
   # deliberately unknown under the fleet-wide strict blank-row posture.
   printf '❯\n' > "$capture"
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-case "${1:-}" in
-  has-session|new-session|new-window|send-keys|kill-window)
-    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\${1:-}" in
+  has-session|new-session|new-window|kill-window)
+    printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
+    exit 0
+    ;;
+  send-keys)
+    printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+      fm_test_tmux_echo_capture > "\$FM_FAKE_TMUX_CAPTURE"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+      fm_test_tmux_echo_capture > "\$FM_FAKE_TMUX_CAPTURE"
+    fi
     exit 0
     ;;
   list-windows)
-    if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
-      printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
+    if [ -n "\${FM_FAKE_TMUX_WINDOW:-}" ]; then
+      printf '%s\\n' "\$FM_FAKE_TMUX_WINDOW"
     fi
     exit 0
     ;;
   display-message)
-    case "$*" in
-      *'#{cursor_y}'*) printf '0\n' ;;
-      *) printf 'firstmate\n' ;;
+    case "\$*" in
+      *'#{cursor_y}'*) printf '1\\n' ;;
+      *) printf 'firstmate\\n' ;;
     esac
     exit 0
     ;;
   capture-pane)
-    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
-    cat "$FM_FAKE_TMUX_CAPTURE"
+    printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
+    cat "\$FM_FAKE_TMUX_CAPTURE"
     exit 0
     ;;
 esac

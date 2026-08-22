@@ -1009,7 +1009,8 @@ test_send_text_submit_rejects_unobserved_paste() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "an unobserved paste should report send-failed, got '$out'"
+  [ "$out" = not-accepted:absent-from-added ] \
+    || fail "an unobserved paste must be refused by the shared delta proof, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when the pasted text was not observed"
   pass "fm_backend_zellij_send_text_submit: refuses confirmation when paste exits successfully without typing"
@@ -1027,7 +1028,11 @@ test_send_text_submit_rejects_transcript_echo_with_unrelated_draft() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "a transcript echo outside an unrelated draft should report send-failed, got '$out'"
+  # The stale transcript copy is present in BOTH captures, so it can neither be
+  # an addition nor raise an occurrence count. Refusal here is now structural
+  # rather than a consequence of scoping the read to a parsed composer region.
+  [ "$out" = not-accepted:absent-from-added ] \
+    || fail "a transcript echo that was already on screen must not prove typing, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when only a transcript echo matches the intended text"
   pass "fm_backend_zellij_send_text_submit: transcript echoes outside the selected composer cannot prove typing"
@@ -1045,7 +1050,8 @@ test_send_text_submit_rejects_existing_intended_text_after_noop_paste() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "pre-existing intended text after a no-op paste should report send-failed, got '$out'"
+  [ "$out" = not-accepted:absent-from-added ] \
+    || fail "pre-existing intended text after a no-op paste must not prove typing, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter without an observed composer delta"
   pass "fm_backend_zellij_send_text_submit: pre-existing text cannot prove a no-op paste landed"
@@ -1063,7 +1069,8 @@ test_send_text_submit_rejects_furniture_match_after_noop_paste() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "high" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "footer furniture matching a short steer should report send-failed, got '$out'"
+  [ "$out" = not-accepted:absent-from-added ] \
+    || fail "footer furniture matching a short steer must not prove typing, got '$out'"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
     "send_text_submit should not send Enter when only furniture matches the steer"
   pass "fm_backend_zellij_send_text_submit: unrelated drafts and furniture cannot prove typing"

@@ -502,14 +502,25 @@ fm_backend_zellij_capture() {  # <target> <lines> [expected-label]
 # the shared owner (bin/fm-composer-lib.sh, fm_composer_classify_screen);
 # this adapter contributes only the capture and its capability facts.
 
-# fm_backend_zellij_composer_capture: bounded styled tail of the pane. When
-# --ansi is unsupported (an older zellij), the caller falls back to the plain
-# dump and a styled=0 descriptor - see fm_backend_zellij_composer_state.
-fm_backend_zellij_composer_capture() {  # <target> [expected-label]
+# fm_backend_zellij_screen_capture: the WHOLE visible pane, styled. The
+# pre-Enter delta proof compares two of these, and cropping to a bottom-anchored
+# tail would hide a composer the harness did not draw at the bottom - opencode's
+# sits above a path/version footer.
+fm_backend_zellij_screen_capture() {  # <target> [expected-label]
   fm_backend_zellij_target_ready "$1" "${2:-}" || return 1
   local out
   out=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action dump-screen --pane-id "$FM_BACKEND_ZELLIJ_PANE" --ansi 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# fm_backend_zellij_composer_capture: bounded styled tail of the pane, the
+# classifier's window. When --ansi is unsupported (an older zellij), the caller
+# falls back to the plain dump and a styled=0 descriptor - see
+# fm_backend_zellij_composer_state.
+fm_backend_zellij_composer_capture() {  # <target> [expected-label]
+  local out
+  out=$(fm_backend_zellij_screen_capture "$1" "${2:-}") || return 1
   printf '%s' "$out" | tail -n "$FM_COMPOSER_CAPTURE_LINES"
 }
 
@@ -536,45 +547,36 @@ fm_backend_zellij_composer_state() {  # <target> [expected-label] -> empty|pendi
   printf '%s' "$verdict"
 }
 
-fm_backend_zellij_composer_content() {  # <target> [expected-label]
-  local target=$1 expected_label=${2:-} cap caps
-  cap=$(fm_backend_zellij_composer_capture "$target" "$expected_label") || return 1
-  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
-  fm_composer_extract_selected_content "$caps" "$cap"
-}
-
-fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expected-label]
-  local target=$1 before=$2 text=$3 expected_label=${4:-} cap caps after expected
-  [ -n "$text" ] || return 1
-  cap=$(fm_backend_zellij_composer_capture "$target" "$expected_label") || return 1
-  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
-  after=$(fm_composer_extract_selected_content "$caps" "$cap") || return 1
-  fm_composer_normalize_spaces_var before
-  fm_composer_normalize_spaces_var text
-  fm_composer_normalize_spaces_var after
-  before=${before//[$' \t\r\n\v\f']/}
-  text=${text//[$' \t\r\n\v\f']/}
-  after=${after//[$' \t\r\n\v\f']/}
-  [ -n "$text" ] || return 1
-  expected=$before$text
-  [ "$after" = "$expected" ]
-}
-
 # fm_backend_zellij_send_text_submit: type <text> into <target> once (raw,
 # unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
-# loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
-# real composer verdict above. Echoes empty|pending|unknown|send-failed, a
-# subset of the proof-carrying submit vocabulary. Only a positively classified
-# empty composer confirms delivery - a pane that merely CHANGED does not, so
-# the old heuristic's false "delivery confirmed" cannot recur.
+# loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the real
+# composer verdict above. Echoes empty|pending|unknown|send-failed|gated|
+# not-accepted:<why>, a subset of the proof-carrying submit vocabulary. Only a
+# positively classified empty composer confirms delivery - a pane that merely
+# CHANGED does not, so the old heuristic's false "delivery confirmed" cannot
+# recur.
+#
+# zellij used to carry its OWN pre-Enter acceptance rule here (extract the
+# composer region, then require after == before + text). That was a second
+# answer to a question the fleet now has one owner for, and it inherited every
+# region-parsing failure that owner was built to end: it is replaced by the
+# shared delta verdict, so zellij proves delivery exactly the way tmux, herdr,
+# cmux, and orca do.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before
-  before=$(fm_backend_zellij_composer_content "$target" "$expected_label") \
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after verdict
+  before=$(fm_backend_zellij_screen_capture "$target" "$expected_label") \
     || { printf 'send-failed'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  fm_backend_zellij_composer_observed_append "$target" "$before" "$text" "$expected_label" \
-    || { printf 'send-failed'; return 0; }
+  after=$(fm_backend_zellij_screen_capture "$target" "$expected_label") \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   fm_composer_submit_retry_core fm_backend_zellij_send_key fm_backend_zellij_composer_state \
     "$target" "$retries" "$sleep_s" "$expected_label"
 }

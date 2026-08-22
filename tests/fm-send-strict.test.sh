@@ -33,6 +33,13 @@ case "${1:-}" in
       esac
     done
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
+    if [ "$literal" = 1 ]; then
+      printf '%s' "${1:-}" > "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}"
+      rm -f "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}.entered"
+    fi
+    if [ "$literal" = 0 ] && [ "${1:-}" = Enter ]; then
+      : > "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}.entered"
+    fi
     # FM_FAKE_TMUX_SEND_KEY_FAIL names one key whose delivery fails, so the
     # --key exit contract can be driven both ways from the same stub.
     if [ "$literal" = 0 ] && [ -n "${FM_FAKE_TMUX_SEND_KEY_FAIL:-}" ] \
@@ -57,6 +64,19 @@ case "${1:-}" in
     printf '%%1\n'
     exit 0 ;;
   capture-pane)
+    if [ -n "${FM_FAKE_TMUX_GATED:-}" ]; then
+      printf '%s\n' \
+        ' Quick safety check: Is this a project you created or' \
+        ' ❯ 1. Yes, I trust this folder' \
+        '   2. No, exit' \
+        ' Enter to confirm · Esc to cancel'
+      exit 0
+    fi
+    if [ -f "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}" ] \
+      && [ ! -f "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}.entered" ]; then
+      printf '╭────────────╮\n│ > %s │\n╰────────────╯\n' "$(cat "${FM_TMUX_TYPED:-$FM_TMUX_LOG.typed}")"
+      exit 0
+    fi
     printf '╭────╮\n│    │\n╰────╯\n'
     exit 0 ;;
   list-windows)
@@ -225,6 +245,136 @@ test_key_send_exit_status_follows_delivery() {
   pass "fm-send --key: exit status follows delivery, and an undelivered key never reports success"
 }
 
+test_gated_trust_dialog_is_refused_loud() {
+  local dir fb home err log rc rec
+  dir="$TMP_ROOT/gated"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home gated); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  fm_write_meta "$home/state/labmate.meta" \
+    "window=sess:fm-labmate" "kind=secondmate" "mode=secondmate" "harness=claude" "home=$home"
+  mkdir -p "$home/state"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_FAKE_TMUX_GATED=1 \
+    "$SEND" labmate "please handle item 2" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a gated trust dialog must not exit 0"
+  assert_contains "$(cat "$err")" "gated modal dialog" "the diagnostic must name the gated pane"
+  if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then
+    fail "a gated pane must never receive Enter"$'\n'"$(cat "$log")"
+  fi
+  rec=$(find "$home/state/pending-replies" -maxdepth 1 -type f ! -name '.*' ! -name '*.request' 2>/dev/null | head -1)
+  if [ -n "$rec" ]; then
+    [ -z "$(grep '^delivered_epoch=' "$rec" | cut -d= -f2-)" ] \
+      || fail "gated refusal must not mark the pending-reply delivered"
+  fi
+  pass "fm-send: a Claude trust-dialog pane is refused loudly, with no Enter and no delivered marker"
+}
+
+test_missing_payload_tail_is_refused_and_closes_no_key() {
+  local dir fb home err log rc status
+  dir="$TMP_ROOT/not-accepted"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home notacc); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  fm_write_meta "$home/state/labmate.meta" "window=sess:fm-labmate" "kind=ship" "harness=claude"
+  printf 'needs-decision [key=demo]: pick a path\n' > "$home/state/labmate.status"
+  # Swallow: never persist typed text, so the post-type screen stays empty.
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    target=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) target=$2; shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    printf '%%1\n'; exit 0 ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fb/tmux"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" labmate --resolve-key demo "please handle item 2" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a swallowed payload must not exit 0"
+  assert_contains "$(cat "$err")" "not accepted" "the diagnostic must name the missing tail"
+  if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then
+    fail "missing tail must never send Enter"$'\n'"$(cat "$log")"
+  fi
+  status=$(cat "$home/state/labmate.status")
+  case "$status" in
+    *'resolved [key=demo]'*) fail "a refused send must not close --resolve-key"$'\n'"$status" ;;
+  esac
+  pass "fm-send: missing payload tail is not-accepted, sends no Enter, and closes no resolve-key"
+}
+
+# The pre-Enter proof compares two captures, so it needs no composer container
+# to accept a healthy send - and a stub that draws nothing recognisable is the
+# only way to assert that end to end through fm-send rather than at the library
+# boundary. This is the case that keeps a future "scope the read to the parsed
+# composer region" change from quietly reintroducing shape-dependence: it would
+# fail here, in behaviour, not in a unit assertion.
+test_shape_free_echo_still_confirms_delivery() {
+  local dir fb home err log rc
+  dir="$TMP_ROOT/shape-free"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home shapefree); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  fm_write_meta "$home/state/lane-bare.meta" "window=sess:fm-lane-bare" "kind=ship" "harness=opencode"
+  # Echo the typed text with NO border, NO prompt glyph, and NO box: exactly
+  # what a harness whose composer this fleet has never parsed would look like.
+  # The post-Enter read still gets a real emptied composer, because that half
+  # of the bracket is a different, shape-aware proof.
+  cat > "$fb/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    target=
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) target=\$2; shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    printf 'send-keys target=%s literal=%s arg=%s\\n' "\$target" "\$literal" "\${1:-}" >> "\$FM_TMUX_LOG"
+    [ "\$literal" = 1 ] && fm_test_tmux_note_literal "\${1:-}"
+    if [ "\$literal" = 0 ] && [ "\${1:-}" = Enter ]; then fm_test_tmux_note_enter; fi
+    exit 0 ;;
+  display-message)
+    for a in "\$@"; do case "\$a" in *cursor_y*) printf '1\\n'; exit 0 ;; esac; done
+    printf '%%1\\n'; exit 0 ;;
+  capture-pane)
+    typed=\$(fm_test_composer_typed_path)
+    entered=\$(fm_test_composer_entered_path)
+    if [ -f "\$typed" ] && [ ! -f "\$entered" ]; then
+      fm_test_write_shape_free_composer "\$(cat "\$typed")"
+    else
+      fm_test_write_composer ""
+    fi
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" lane-bare "steer with no composer shape to parse" >/dev/null 2>"$err"; rc=$?
+  expect_code 0 "$rc" "a healthy send into a shape-free composer should still succeed: $(cat "$err")"
+  assert_contains "$(cat "$log")" "literal=1 arg=steer with no composer shape to parse" \
+    "the shape-free send should still type the literal text once"
+  assert_contains "$(cat "$log")" "literal=0 arg=Enter" \
+    "the shape-free send should still submit with Enter once the payload was proven present"
+  pass "fm-send: a healthy send is confirmed with no composer container to parse at all"
+}
+
 test_exact_lane_id_send_still_works
 test_key_send_exit_status_follows_delivery
 test_unset_fm_home_fails
@@ -233,3 +383,6 @@ test_prefixless_herdr_pane_id_fails
 test_unmatched_single_colon_target_must_exist
 test_fm_prefixed_herdr_session_is_an_explicit_target
 test_healthy_fm_id_send_still_works
+test_gated_trust_dialog_is_refused_loud
+test_missing_payload_tail_is_refused_and_closes_no_key
+test_shape_free_echo_still_confirms_delivery

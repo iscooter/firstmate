@@ -75,60 +75,63 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
 make_tmux_stub() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/tmux" <<'SH'
+  cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-D=$FM_FAKE_DIR
-case "${1:-}" in
+. '$ROOT/tests/echoing-composer.inc.sh'
+D=\$FM_FAKE_DIR
+case "\${1:-}" in
   send-keys)
     shift
     literal=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
         -t) shift 2 ;;
         -l) literal=1; shift ;;
         *) break ;;
       esac
     done
-    payload=${1:-}
-    if [ "$literal" = 1 ]; then
-      printf '%s\n' "$payload" >> "$D/literal"
-      if [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
-         && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
-        printf 'zsh' > "$D/command"
+    payload=\${1:-}
+    if [ "\$literal" = 1 ]; then
+      printf '%s\\n' "\$payload" >> "\$D/literal"
+      fm_test_tmux_note_literal "\$payload"
+      if [ -z "\${FM_FAKE_NEVER_DIES:-}" ] \
+         && { [ "\$payload" = /exit ] || [ "\$payload" = /quit ]; }; then
+        printf 'zsh' > "\$D/command"
       fi
-      case "$payload" in
-        *'encode launch-brief'*) cat "$D/becomes" > "$D/command" ;;
+      case "\$payload" in
+        *'encode launch-brief'*) cat "\$D/becomes" > "\$D/command" ;;
       esac
     else
-      printf '%s\n' "$payload" >> "$D/keys"
-      if [ -n "${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
-         && { [ "$payload" = Escape ] || [ "$payload" = C-c ]; }; then
-        printf 'zsh' > "$D/command"
+      printf '%s\\n' "\$payload" >> "\$D/keys"
+      [ "\$payload" = Enter ] && fm_test_tmux_note_enter
+      if [ -n "\${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
+         && { [ "\$payload" = Escape ] || [ "\$payload" = C-c ]; }; then
+        printf 'zsh' > "\$D/command"
       fi
-      if [ "$payload" = Escape ] && [ -n "${FM_FAKE_MUSE_LOG:-}" ]; then
-        if [ -n "${FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK:-}" ]; then
-          : > "$D/muse-ack-pending"
+      if [ "\$payload" = Escape ] && [ -n "\${FM_FAKE_MUSE_LOG:-}" ]; then
+        if [ -n "\${FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK:-}" ]; then
+          : > "\$D/muse-ack-pending"
         else
-          printf '%s\n' '{"schema_version":1,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"terminal","terminal":"cancelled","reason":null}}}' >> "$FM_FAKE_MUSE_LOG"
+          printf '%s\\n' '{"schema_version":1,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"terminal","terminal":"cancelled","reason":null}}}' >> "\$FM_FAKE_MUSE_LOG"
         fi
       fi
     fi
     exit 0 ;;
   display-message)
-    for a in "$@"; do
-      case "$a" in
-        *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
-        *pane_current_path*) cat "$D/cwd"; printf '\n'; exit 0 ;;
+    for a in "\$@"; do
+      case "\$a" in
+        *cursor_y*) printf '1\\n'; exit 0 ;;
+        *pane_current_command*) cat "\$D/command"; printf '\\n'; exit 0 ;;
+        *pane_current_path*) cat "\$D/cwd"; printf '\\n'; exit 0 ;;
       esac
     done
-    printf 'fakepane\n'; exit 0 ;;
+    printf 'fakepane\\n'; exit 0 ;;
   capture-pane)
-    if [ -f "$D/pane" ]; then cat "$D/pane"; else printf '╭────╮\n│    │\n╰────╯\n'; fi
+    if [ -f "\$D/pane" ]; then cat "\$D/pane"; else fm_test_tmux_echo_capture; fi
     exit 0 ;;
   list-windows)
-    if [ -f "$D/windows" ]; then cat "$D/windows"; fi
+    if [ -f "\$D/windows" ]; then cat "\$D/windows"; fi
     exit 0 ;;
 esac
 exit 0

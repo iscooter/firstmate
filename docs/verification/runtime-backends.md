@@ -204,6 +204,49 @@ Kimi was not installed on the verification machine; its bordered shape is pinned
 This guard is the refresh command after an upgrade to any matrix-covered harness; rerun it and update the versions above rather than trusting this table across releases.
 Cursor is deliberately outside this cursor-anchored empty-composer matrix because its terminal cursor is parked outside the composer; tmux's Cursor-specific, process-identity-gated cursorless fallback is covered by the [Cursor Agent CLI](#cursor-agent-cli) section's separate live evidence and drift guard.
 
+### Pre-Enter delivery proof
+
+The pre-Enter delivery proof (`bin/fm-composer-lib.sh`, `fm_composer_delivery_delta_verdict`) decides whether Enter may be sent at all, from two whole captures and the payload.
+It reads no composer region, so unlike the matrix above it is not a bet on any vendor's drawing conventions; what it does depend on is that a payload typed into a real composer becomes visible somewhere new, and that is a per-harness fact which has to be measured.
+Verified 2026-08-22 on macOS Darwin 25.5.0 (arm64), tmux 3.6a, each harness launched idle in an isolated tmux server, with the probe typed once and Enter never sent.
+
+```sh
+FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - claude (2.1.239 (Claude Code)): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - codex (codex-cli 0.147.0): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - opencode (1.14.46): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - pi (0.84.1): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - pi-signed (0.84.1): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - grok (grok 1.0.5 (5115b46bc909) [stable]): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+# harness absent, not verified here: kimi
+ok - muse (Muse Code 0.2.1 (0.2.1-R1215.1)): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+ok - cursor (2026.08.11-e8db854): pre-Enter delivery proof accepts a real typed payload and refuses an untyped pane, on both capture fidelities
+```
+
+Eight of the nine verified harnesses are installed on this machine and all eight accepted a really-typed payload and refused the same pane with nothing typed into it, on plain and ANSI captures alike; Kimi is absent here and is covered by the checked-in captures below.
+Cursor appears here and not in the matrix above precisely because the proof reads no cursor: Cursor parks its terminal cursor outside the composer, which is why it is excluded from the cursor-anchored empty-composer matrix, and the delivery proof is the only live coverage it has for the send path.
+Grok also appears here as a pass while failing the matrix above in the same run, which is the clearest available statement of what this change buys: the shape catalogue drifted with a vendor release and the delivery proof did not notice.
+
+The portable half of the guarantee runs everywhere without a harness, from real captures checked in under `tests/fixtures/composer-delta/` (provenance in that directory's README) and driven by `tests/fm-composer-lib.test.sh`:
+eleven scenarios across Claude Code 2.1.239, codex-cli 0.147.0, opencode 1.14.46, Cursor Agent 2026.08.11, grok 1.0.5, Muse Code 0.2.1, pi 0.84.1, and pi-signed 0.84.1, each asserted on both capture fidelities and required to agree, which is what keeps the deleted styled/plain fork from returning.
+Those captures include three real swallows: Claude's workspace-trust dialog and codex's directory-trust dialog (both of which the gate scorer also catches) and opencode 1.14.46's vendor update modal, which the scorer does **not** catch and the delivery proof refuses anyway.
+That last case is the recorded reason the gate scorer must never be load-bearing for send safety.
+
+Typing the probe into codex's trust dialog also **exited the pane**, because its digits act as control input on a numbered selection list.
+That is the recorded reason `fm_composer_pre_type_ok` refuses to type into a gated screen at all rather than relying on the delivery proof to clean up afterwards.
+
+The anchor length (`FM_COMPOSER_DELTA_ANCHOR_MAX`) is bounded by the narrowest composer a steer must land in, not by uniqueness.
+Measured against the horizontally scrolling single-row composer in `tests/fm-afk-inject-herdr-e2e.test.sh`, a 40-column window leaves 33 normalized payload characters visible, so an anchor of 34 or more silently turns that healthy away-mode injection into a refusal (confirmed by bisection: 32 passes, 34 and 37 and 48 all fail).
+`tests/fm-composer-lib.test.sh` pins that constraint portably.
+
+Known drift, unrelated to this proof and pre-existing on `main`: grok 1.0.5's idle composer no longer reaches `empty` in the matrix above (it reads `pending-unproven`, and `unknown` from a raw capture), against the `grok 1.0.0` result recorded there on 2026-08-10.
+That is the shape catalogue, not the send path, and it is what defers away-mode injection into a grok pane; it needs its own work item.
+
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
 ## Herdr

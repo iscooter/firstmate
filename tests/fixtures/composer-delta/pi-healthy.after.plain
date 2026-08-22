@@ -1,0 +1,40 @@
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 0.84.2 is available. Run pi update
+ Changelog: https://pi.dev/changelog
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update --extensions
+ Packages:
+ - pi-web-access
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+LAVISH PROPOSAL: investigate the fm-send delivery path end to end and produce a design-only
+report; do not implement anything. END-OF-PAYLOAD-MARKER-7Q4Z
+────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/fixture-workspace
+$0.000 (sub) 0.0%/500k (auto)                                                  (xai) grok-4.6 • high
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

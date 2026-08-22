@@ -2757,9 +2757,12 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # footer may supply the same generating signal because live Claude never leaves
 # idle. The policy is fm_composer_queued_enter_verdict; this adapter only
 # supplies the busy primitive.
-# Echoes empty|pending|unknown|send-failed, a subset of the proof-carrying
-# submit vocabulary. Empty means confirmed submitted for every backend; how
-# each backend confirms it is an internal decision.
+# Echoes empty|pending|unknown|send-failed|gated|not-accepted:<why>, a subset
+# of the proof-carrying submit vocabulary. Empty means confirmed submitted for
+# every backend; how each backend confirms it is an internal decision. gated
+# and not-accepted are the pre-Enter refusals owned by bin/fm-composer-lib.sh:
+# the pane was a modal, or the payload never became newly present between the
+# two captures, so Enter is never sent.
 #
 # fm_backend_herdr_queued_enter_busy: delivery-busy for the shared queued-Enter
 # conversion. Native agent_status=working is generating; blocked is not (a
@@ -2780,12 +2783,30 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
   fi
 }
 
+# fm_backend_herdr_delta_capture: one capture primitive for the pre-Enter
+# proof, styled when herdr can supply it and plain otherwise. Which one it was
+# no longer matters to the verdict - the delta proof reads text, not styling -
+# so the caller must only make sure BOTH of its captures come from here.
+fm_backend_herdr_delta_capture() {  # <target>
+  fm_backend_herdr_capture_ansi "$1" "$FM_COMPOSER_DELTA_LINES" 2>/dev/null \
+    || fm_backend_herdr_capture "$1" "$FM_COMPOSER_DELTA_LINES"
+}
+
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
+  before=$(fm_backend_herdr_delta_capture "$target") || { printf 'send-failed'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(fm_backend_herdr_delta_capture "$target") || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   raw_status=$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")
   baseline=$(fm_backend_herdr_classify_submit_agent_status "$raw_status")
   confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")

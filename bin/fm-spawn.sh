@@ -2189,6 +2189,46 @@ kimi_wait_for_delivery() {
   return 1
 }
 
+# Claude launch-readiness: a freshly created worktree parks on Claude Code's
+# workspace-trust dialog, which every idle/alive read treats as healthy. Poll
+# until the pane is an accepting composer; a gated modal fails the spawn with
+# the dialog text attached rather than returning a route to a parked agent.
+claude_wait_for_ready() {
+  local pane i=0 max=${FM_CLAUDE_READY_POLLS:-60} interval=${FM_CLAUDE_POLL_INTERVAL:-0.5} state trimmed
+  CLAUDE_READY_DETAIL=
+  CLAUDE_READY_STATE=unknown
+  while [ "$i" -lt "$max" ]; do
+    pane=$(kimi_capture)
+    if fm_composer_screen_is_gated "$pane"; then
+      CLAUDE_READY_DETAIL=$pane
+      CLAUDE_READY_STATE=gated
+      return 1
+    fi
+    state=$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null || printf 'unknown')
+    CLAUDE_READY_STATE=$state
+    case "$state" in
+      empty|pending) return 0 ;;
+    esac
+    # Firstmate's own test stubs often omit a rendered composer. A gated
+    # dialog still fails above; an empty capture is treated as a stub with no
+    # TUI rather than a launch hang. Production never sets this bypass.
+    if [ "${FM_GATE_REFUSE_BYPASS:-}" = 1 ]; then
+      trimmed=$pane
+      fm_composer_normalize_trim_var trimmed
+      [ -n "$trimmed" ] || return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  CLAUDE_READY_DETAIL=$pane
+  return 1
+}
+
+claude_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 kimi_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
@@ -2813,6 +2853,19 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = claude ]; then
+  if ! claude_wait_for_ready; then
+    if [ "${CLAUDE_READY_STATE:-unknown}" = gated ]; then
+      claude_spawn_fail "claude is parked on a gated launch dialog rather than an accepting composer"
+    else
+      claude_spawn_fail "claude did not reach an accepting composer (last composer state: ${CLAUDE_READY_STATE:-unknown})"
+    fi
+    if [ -n "${CLAUDE_READY_DETAIL:-}" ]; then
+      printf '%s\n' "$CLAUDE_READY_DETAIL" >&2
+    fi
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

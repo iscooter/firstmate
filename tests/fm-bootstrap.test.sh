@@ -836,17 +836,34 @@ make_routine_bootstrap_fixture() {
   } > "$home/state/sm.meta"
   fakebin=$(make_fake_toolchain "$case_dir")
   add_real_jq "$fakebin"
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
-case "${1:-}" in
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\${1:-}" in
   display-message)
-    case "$*" in
-      *'#{cursor_y}'*) printf '%s\n' 0 ;;
-      *) printf '%s\n' codex ;;
+    case "\$*" in
+      *'#{cursor_y}'*) printf '%s\\n' 1 ;;
+      *) printf '%s\\n' codex ;;
     esac
     ;;
-  capture-pane) printf '❯\n' ;;
-  list-windows) printf '%s\n' fm-sm ;;
+  send-keys)
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+    fi
+    ;;
+  capture-pane) fm_test_tmux_echo_capture ;;
+  list-windows) printf '%s\\n' fm-sm ;;
 esac
 exit 0
 SH

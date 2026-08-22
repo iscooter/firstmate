@@ -30,80 +30,87 @@ trap cleanup_kimi_harness EXIT
 make_spawn_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
-state=$(cat "$FM_FAKE_KIMI_STATE" 2>/dev/null || true)
+. '$ROOT/tests/echoing-composer.inc.sh'
+printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_CALL_LOG"
+state=\$(cat "\$FM_FAKE_KIMI_STATE" 2>/dev/null || true)
 fake_screen() {
-  case "$state" in
+  case "\$state" in
     ready)
-      printf 'Welcome to Kimi Code!\ncontext: 0%% (0/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n'
+      printf 'Welcome to Kimi Code!\\ncontext: 0%% (0/256k)\\n╭────────────────────────────────╮\\n│ >                              │\\n╰────────────────────────────────╯\\n'
       ;;
     pointer-typed)
-      printf 'context: 0%% (0/256k)\n╭────────────────────────────────╮\n│ > Read the brief and follow it │\n│                                │\n╰────────────────────────────────╯\n'
+      if [ -f "\$(fm_test_composer_typed_path)" ]; then
+        fm_test_write_composer "\$(cat "\$(fm_test_composer_typed_path)")"
+      else
+        printf 'context: 0%% (0/256k)\\n╭────────────────────────────────╮\\n│ > Read the brief and follow it │\\n│                                │\\n╰────────────────────────────────╯\\n'
+      fi
       ;;
     delivered)
-      printf '✨ Read the brief at %s and follow it exactly.\ncontext: 1%% (2k/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n' "$FM_FAKE_BRIEF_REAL"
+      printf '✨ Read the brief at %s and follow it exactly.\\ncontext: 1%% (2k/256k)\\n╭────────────────────────────────╮\\n│ >                              │\\n╰────────────────────────────────╯\\n' "\$FM_FAKE_BRIEF_REAL"
       ;;
     *)
-      printf 'shell starting\n$ \n'
+      printf 'shell starting\\n\$ \\n'
       ;;
   esac
 }
 fake_cursor_y() {
-  case "$state" in
-    pointer-typed) printf '3\n' ;;
-    ready|delivered) printf '3\n' ;;
-    *) printf '1\n' ;;
+  case "\$state" in
+    pointer-typed) printf '1\\n' ;;
+    ready|delivered) printf '3\\n' ;;
+    *) printf '1\\n' ;;
   esac
 }
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "$FM_FAKE_PANE_PATH"; exit 0 ;;
+case "\$*" in
+  *"#{pane_current_path}"*) printf '%s\\n' "\$FM_FAKE_PANE_PATH"; exit 0 ;;
   *"#{cursor_y}"*) fake_cursor_y; exit 0 ;;
 esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
+case "\${1:-}" in
+  display-message) printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
     prev=
     literal=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then literal=$arg; break; fi
-      prev=$arg
+    for arg in "\$@"; do
+      if [ "\$prev" = -l ]; then literal=\$arg; break; fi
+      prev=\$arg
     done
-    if [ -n "$literal" ]; then
-      case "$literal" in
+    if [ -n "\$literal" ]; then
+      case "\$literal" in
         *' --auto')
-          printf '%s\n' "$literal" >> "$FM_FAKE_LAUNCH_LOG"
-          printf 'launched\n' > "$FM_FAKE_KIMI_STATE"
+          printf '%s\\n' "\$literal" >> "\$FM_FAKE_LAUNCH_LOG"
+          printf 'launched\\n' > "\$FM_FAKE_KIMI_STATE"
           ;;
         *)
-          printf '%s\n' "$literal" >> "$FM_FAKE_POINTER_LOG"
-          printf 'pointer-typed\n' > "$FM_FAKE_KIMI_STATE"
+          printf '%s\\n' "\$literal" >> "\$FM_FAKE_POINTER_LOG"
+          fm_test_tmux_note_literal "\$literal"
+          printf 'pointer-typed\\n' > "\$FM_FAKE_KIMI_STATE"
           ;;
       esac
       exit 0
     fi
-    case " $* " in
+    case " \$* " in
       *' Enter '*)
-        case "$state" in
+        case "\$state" in
           launched)
-            if [ "${FM_FAKE_KIMI_READY:-yes}" = yes ]; then
-              printf 'ready\n' > "$FM_FAKE_KIMI_STATE"
+            if [ "\${FM_FAKE_KIMI_READY:-yes}" = yes ]; then
+              printf 'ready\\n' > "\$FM_FAKE_KIMI_STATE"
             fi
             ;;
           pointer-typed)
-            if [ "${FM_FAKE_KIMI_DELIVERY:-yes}" = yes ]; then
-              if [ "${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" = yes ] \
-                 && [ ! -f "$FM_FAKE_KIMI_SWALLOWED" ]; then
-                : > "$FM_FAKE_KIMI_SWALLOWED"
+            if [ "\${FM_FAKE_KIMI_DELIVERY:-yes}" = yes ]; then
+              if [ "\${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" = yes ] \
+                 && [ ! -f "\$FM_FAKE_KIMI_SWALLOWED" ]; then
+                : > "\$FM_FAKE_KIMI_SWALLOWED"
               else
-                printf 'delivered\n' > "$FM_FAKE_KIMI_STATE"
+                fm_test_tmux_note_enter
+                printf 'delivered\\n' > "\$FM_FAKE_KIMI_STATE"
               fi
             else
-              printf 'ready\n' > "$FM_FAKE_KIMI_STATE"
+              printf 'ready\\n' > "\$FM_FAKE_KIMI_STATE"
             fi
             ;;
         esac
@@ -113,16 +120,16 @@ case "${1:-}" in
     ;;
   capture-pane)
     start= end= prev=
-    for arg in "$@"; do
-      case "$prev" in
-        -S) start=$arg ;;
-        -E) end=$arg ;;
+    for arg in "\$@"; do
+      case "\$prev" in
+        -S) start=\$arg ;;
+        -E) end=\$arg ;;
       esac
-      case "$arg" in -S|-E) prev=$arg ;; *) prev= ;; esac
+      case "\$arg" in -S|-E) prev=\$arg ;; *) prev= ;; esac
     done
-    case "$start:$end" in
+    case "\$start:\$end" in
       *[!0-9:]*|'':*|*:'') fake_screen ;;
-      *) fake_screen | awk -v start="$start" -v end="$end" \
+      *) fake_screen | awk -v start="\$start" -v end="\$end" \\
            'NR - 1 >= start && NR - 1 <= end' ;;
     esac
     exit 0

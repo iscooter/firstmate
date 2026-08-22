@@ -55,14 +55,33 @@ case "${1:-}:${2:-}" in
   mv:--help) printf '%s\n' 'usage: tasks-axi mv <id> [<id>...]' ;;
 esac
 SH
-  cat > "$fakebin/tmux" <<'SH'
+  cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
-[ -z "${FM_FAKE_TMUX_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
-case "$*" in
-  *display-message*'#{pane_current_command}'*) printf '%s\n' codex ;;
-  *display-message*'#{pane_id}'*) printf '%s\n' '%1' ;;
-  *display-message*'#{cursor_y}'*) printf '%s\n' 0 ;;
-  *capture-pane*) printf '❯\n' ;;
+. '$ROOT/tests/echoing-composer.inc.sh'
+[ -z "\${FM_FAKE_TMUX_LOG:-}" ] || printf '%s\\n' "\$*" >> "\$FM_FAKE_TMUX_LOG"
+case "\$*" in
+  *display-message*'#{pane_current_command}'*) printf '%s\\n' codex ;;
+  *display-message*'#{pane_id}'*) printf '%s\\n' '%1' ;;
+  *display-message*'#{cursor_y}'*) printf '%s\\n' 1 ;;
+esac
+case "\${1:-}" in
+  capture-pane) fm_test_tmux_echo_capture ;;
+  send-keys)
+    shift
+    literal=0
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "\$literal" = 1 ]; then
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
+    fi
+    ;;
 esac
 exit 0
 SH

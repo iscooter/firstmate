@@ -854,16 +854,19 @@ test_composer_state_unknown_when_no_composer_row_found() {
 test_send_text_submit_detects_landed_send() {
   local dir fb out
   dir="$TMP_ROOT/submit-ok"; mkdir -p "$dir/responses"
-  # 1: list-panes (target_ready via send_literal)
-  # 2: send (literal text)
-  # 3: list-panes (target_ready via send_key Enter)
-  # 4: send-key enter
-  # 5: list-panes (target_ready via composer_state's capture)
-  # 6: read-screen --scrollback --lines N --json -> composer reads empty (submitted)
+  # 1-2: list-panes + read-screen -> the BEFORE capture, an empty composer
+  # 3-4: list-panes + send (literal text)
+  # 5-6: list-panes + read-screen -> the AFTER capture, the payload now present
+  # 7-8: list-panes + send-key enter
+  # 9-10: list-panes + read-screen -> composer reads empty (submitted)
   cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯'
+  cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain" 3 0.01 0.01' "$ROOT" )
@@ -879,12 +882,16 @@ test_send_text_submit_detects_swallowed_enter() {
   local dir fb out
   dir="$TMP_ROOT/submit-swallow"; mkdir -p "$dir/responses"
   cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
+  cmux_panes_response "$dir" 11 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 13 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 14 $'  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰──────── Composer ──────╯\n\n  Enter:send'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain" 2 0.01 0.01' "$ROOT" )
@@ -900,23 +907,24 @@ test_send_text_submit_detects_swallowed_enter() {
 test_send_text_submit_popup_autocomplete_requires_second_enter() {
   local dir fb out
   dir="$TMP_ROOT/submit-popup-autocomplete"; mkdir -p "$dir/responses"
-  # 1: list-panes (target_ready via send_literal)
-  # 2: send "/compact"
-  # 3: list-panes (target_ready via send_key Enter #1)
-  # 4: send-key enter (#1) - closes the popup, fills the placeholder
-  # 5: list-panes (target_ready via composer_state capture)
-  # 6: composer still reads real (pending) text
+  # 1-2: BEFORE capture - an empty composer
+  # 3-4: list-panes + send "/compact"
+  # 5-6: AFTER capture - the typed slash command is now present
+  # 7-8: list-panes + send-key enter (#1) - closes the popup, fills the placeholder
+  # 9-10: composer_state - still reads real (pending) text
   cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 6 $'  ╭──────────────────────────────────────╮\n  │ ❯ /compact compaction instructions   │\n  ╰──────────────── Composer ────────────╯\n\n  Enter:send'
-  # 7: list-panes (target_ready via send_key Enter #2)
-  # 8: send-key enter (#2) - actually submits
-  # 9: list-panes (target_ready via composer_state capture)
-  # 10: composer now reads empty
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯ /compact             │\n  ╰──────── Composer ──────╯'
   cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
   cmux_panes_response "$dir" 9 "bbbbbbbb-1111-1111-1111-111111111111"
-  cmux_read_screen_response "$dir" 10 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
+  cmux_read_screen_response "$dir" 10 $'  ╭──────────────────────────────────────╮\n  │ ❯ /compact compaction instructions   │\n  ╰──────────────── Composer ────────────╯\n\n  Enter:send'
+  # 11-12: list-panes + send-key enter (#2) - actually submits
+  # 13-14: composer_state - now reads empty
+  cmux_panes_response "$dir" 11 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 13 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 14 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ──────╯'
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "/compact" 3 0.01 0.01' "$ROOT" )

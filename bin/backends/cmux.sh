@@ -562,13 +562,25 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,
 # unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
 # loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
-# shared composer verdict. Echoes empty|pending|unknown|send-failed, a subset
-# of the proof-carrying submit vocabulary.
+# shared composer verdict. Echoes empty|pending|unknown|send-failed|gated|
+# not-accepted:<why>, a subset of the proof-carrying submit vocabulary; the
+# last two are the shared pre-Enter refusals and mean no Enter was sent.
 fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-}
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after verdict
   fm_backend_cmux_parse_target "$target" || { printf 'unknown'; return 0; }
+  before=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_DELTA_LINES" "$expected_label") \
+    || { printf 'send-failed'; return 0; }
+  if ! fm_composer_pre_type_ok "$before"; then
+    return 0
+  fi
   fm_backend_cmux_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  after=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_DELTA_LINES" "$expected_label") \
+    || { printf 'unknown'; return 0; }
+  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+    printf '%s' "$verdict"
+    return 0
+  fi
   fm_composer_submit_retry_core fm_backend_cmux_send_key fm_backend_cmux_composer_state \
     "$target" "$retries" "$sleep_s" "$expected_label"
 }

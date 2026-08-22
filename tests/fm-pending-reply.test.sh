@@ -43,28 +43,32 @@ export FM_SEND_SETTLE=0
 make_stubs() {  # <dir> -> fakebin
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/tmux" <<'SH'
+  cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
-case "${1:-}" in
+. '$ROOT/tests/echoing-composer.inc.sh'
+case "\${1:-}" in
   send-keys)
     shift
     literal=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
         -t) shift 2 ;;
         -l) literal=1; shift ;;
         *) break ;;
       esac
     done
-    if [ "$literal" = 1 ]; then
-      printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+    if [ "\$literal" = 1 ]; then
+      printf '%s' "\${1:-}" >> "\$FM_SEND_LOG"
+      fm_test_tmux_note_literal "\${1:-}"
+    elif [ "\${1:-}" = Enter ]; then
+      fm_test_tmux_note_enter
     fi
     exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
-    printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+    for a in "\$@"; do case "\$a" in *cursor_y*) printf '1\\n'; exit 0 ;; esac; done
+    printf 'fakepane\\n'; exit 0 ;;
+  capture-pane) fm_test_tmux_echo_capture; exit 0 ;;
   list-windows) exit 0 ;;
 esac
 exit 0
