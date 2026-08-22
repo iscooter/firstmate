@@ -926,6 +926,7 @@ sim_capture() {
     case "$SIM_MODE" in
       capture-after-write-fails) return 1 ;;
       delta-refuse) printf '%s' "$SIM_SCROLLBACK"; return 0 ;;
+      scroll-off) printf '%s\n%s' 'new transcript' "> $(cat "$SIM_FILE")"; return 0 ;;
     esac
   fi
   if [ "$SIM_MODE" = erase-greedy-churn ] && [ "$SIM_ERASE_CALLS" -gt 0 ]; then
@@ -935,12 +936,12 @@ sim_capture() {
   printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
 }
 sim_literal() {
+  SIM_WIRE=$2
+  printf '%s' "$2" > "$SIM_FILE.wire"
   case "$SIM_MODE" in
     swallow) return 0 ;;
     write-fails) return 1 ;;
   esac
-  SIM_WIRE=$2
-  printf '%s' "$2" > "$SIM_FILE.wire"
   printf '%s' "$2" >> "$SIM_FILE"
 }
 sim_erase() {
@@ -998,17 +999,32 @@ test_core_delivers_a_self_proving_steer_untouched() {
 
 # A pane that swallowed the keystrokes shows no delta, so no Enter may follow.
 # This is the round-1 false delivery, and it must refuse for BOTH lengths.
-test_core_refuses_a_swallowed_send() {
-  local verdict
+test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals() {
+  local swallowed scrolloff short_verdict err wire
   sim_reset swallow
-  verdict=$(sim_send '2') && fail "a swallowed short steer must not be proven"
-  case "$verdict" in
-    not-accepted:*) ;;
-    *) fail "a swallowed send must refuse with a named reason, got '$verdict'" ;;
-  esac
+  short_verdict=$(sim_send '2' 2>"$SIM_DIR/short-swallow.err") \
+    && fail "a swallowed short steer must not be proven"
+  err=$(cat "$SIM_DIR/short-swallow.err")
+  wire=$(cat "$SIM_FILE.wire")
+  [ "$short_verdict" = typed-unproven ] \
+    || fail "an enveloped post-write refusal must report typed-unproven, got '$short_verdict'"
+  assert_contains "$err" "$wire" \
+    "an enveloped refusal must warn with the exact stranded wire"
+
   sim_reset swallow
-  verdict=$(sim_send "$DELTA_PAYLOAD") && fail "a swallowed long steer must not be proven"
-  pass "fm_composer_typed_delivery_core: a pane that swallowed the write is refused at both payload lengths"
+  swallowed=$(sim_send "$DELTA_PAYLOAD") \
+    && fail "a swallowed long steer must not be proven"
+  [ "$swallowed" = not-accepted:absent-from-added ] \
+    || fail "an absent added anchor must remain a retryable swallow, got '$swallowed'"
+
+  sim_reset scroll-off "old transcript: $DELTA_PAYLOAD"
+  scrolloff=$(sim_send "$DELTA_PAYLOAD") \
+    && fail "a scroll-off collision must not be proven"
+  [ "$scrolloff" = typed-unproven ] \
+    || fail "an added anchor with no count rise must report typed-unproven, got '$scrolloff'"
+  [ "$swallowed" != "$scrolloff" ] \
+    || fail "swallow and scroll-off outcomes must remain observably distinct"
+  pass "fm_composer_typed_delivery_core: swallow, scroll-off, and enveloped refusals preserve distinct recovery states"
 }
 
 # The round-1 false pass: the payload is already on screen from an earlier
@@ -1207,7 +1223,7 @@ SIM_DIR=$(mktemp -d)
 trap 'rm -rf "$SIM_DIR"' EXIT
 test_core_delivers_a_short_steer_and_leaves_no_residue
 test_core_delivers_a_self_proving_steer_untouched
-test_core_refuses_a_swallowed_send
+test_core_distinguishes_swallow_scrolloff_and_enveloped_refusals
 test_core_refuses_a_scrollback_copy_of_the_payload
 test_core_refuses_a_gated_pane_without_typing
 test_core_refuses_when_no_absent_boundary_probe_exists

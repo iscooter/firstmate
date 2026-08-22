@@ -1546,8 +1546,15 @@ fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <tar
     return 1
   }
   if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$typed" "$wire"); then
-    [ "$erase_n" -eq 0 ] || fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
-    printf '%s' "$verdict"
+    if [ "$erase_n" -gt 0 ]; then
+      fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
+      printf 'typed-unproven'
+    else
+      case "$verdict" in
+        not-accepted:no-new-occurrence*) printf 'typed-unproven' ;;
+        *) printf '%s' "$verdict" ;;
+      esac
+    fi
     return 1
   fi
   [ "$erase_n" -gt 0 ] || return 0

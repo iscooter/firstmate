@@ -1219,6 +1219,51 @@ test_typed_unproven_escalates_through_real_scan() {
   pass "typed-unproven records escalate once through the real scan and remain settleable"
 }
 
+test_typed_transition_supersedes_only_unconfirmed_delivery_unknown() {
+  local home state confirm_corr confirm_rec abandon_corr abandon_rec delivered_corr
+  home=$(setup_parent typed-transition-delivery-unknown)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=9030
+
+  confirm_corr=$(fm_pending_reply_create "$home" "$state" hibit "typed unknown to confirm")
+  confirm_rec=$(fm_pending_reply_path "$state" "$confirm_corr")
+  fm_pending_reply_prepare_delivery "$state" "$confirm_corr" || fail "confirm fixture delivery attempt should persist"
+  fm_pending_reply_set "$confirm_rec" grace_secs 0 || fail "confirm fixture grace should persist"
+  fm_pending_reply_reconcile_delivery "$state" "$confirm_corr" || fail "confirm fixture should reconcile"
+  [ "$(phase_of "$state" "$confirm_corr")" = delivery_unknown ] \
+    || fail "confirm fixture must begin delivery_unknown"
+  fm_pending_reply_mark_typed_unproven "$state" "$confirm_corr" \
+    || fail "typed-unproven must supersede unconfirmed delivery_unknown"
+  [ "$(phase_of "$state" "$confirm_corr")" = typed_unproven ] \
+    || fail "confirm fixture did not enter typed_unproven"
+  fm_pending_reply_confirm_typed "$state" "$confirm_corr" \
+    || fail "delivery_unknown promoted to typed-unproven must remain confirmable"
+  [ "$(phase_of "$state" "$confirm_corr")" = awaiting_report ] \
+    || fail "operator confirmation must re-arm the promoted record"
+
+  abandon_corr=$(fm_pending_reply_create "$home" "$state" hibit "typed unknown to abandon")
+  abandon_rec=$(fm_pending_reply_path "$state" "$abandon_corr")
+  fm_pending_reply_prepare_delivery "$state" "$abandon_corr" || fail "abandon fixture delivery attempt should persist"
+  fm_pending_reply_set "$abandon_rec" grace_secs 0 || fail "abandon fixture grace should persist"
+  fm_pending_reply_reconcile_delivery "$state" "$abandon_corr" || fail "abandon fixture should reconcile"
+  [ "$(phase_of "$state" "$abandon_corr")" = delivery_unknown ] \
+    || fail "abandon fixture must begin delivery_unknown"
+  fm_pending_reply_mark_typed_unproven "$state" "$abandon_corr" \
+    || fail "second delivery_unknown record must enter typed_unproven"
+  fm_pending_reply_abandon_typed "$state" "$abandon_corr" \
+    || fail "delivery_unknown promoted to typed-unproven must remain abandonable"
+  [ ! -f "$abandon_rec" ] || fail "operator abandonment must remove the promoted record"
+
+  delivered_corr=$(fm_pending_reply_create "$home" "$state" hibit "confirmed delivery")
+  fm_pending_reply_mark_delivered "$state" "$delivered_corr" || fail "confirmed fixture should be delivered"
+  if fm_pending_reply_mark_typed_unproven "$state" "$delivered_corr" 2>/dev/null; then
+    fail "typed-unproven must not override confirmed delivery"
+  fi
+  [ "$(phase_of "$state" "$delivered_corr")" = awaiting_report ] \
+    || fail "confirmed delivery phase changed during typed transition refusal"
+  pass "typed-unproven supersedes only unconfirmed delivery uncertainty and stays settleable"
+}
+
 test_typed_abandon_serializes_with_watcher_escalation() {
   local home state corr rec entered release abandon_pid escalation_pid i watcher_finished=0
   home=$(setup_parent typed-abandon-race)
@@ -1364,6 +1409,7 @@ test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_typed_unproven_escalates_through_real_scan
+test_typed_transition_supersedes_only_unconfirmed_delivery_unknown
 test_typed_abandon_serializes_with_watcher_escalation
 test_failed_send_discards_undelivered_expectation
 test_remote_repost_waits_for_the_reply_channel

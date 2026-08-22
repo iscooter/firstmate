@@ -481,15 +481,37 @@ fm_pending_reply_confirm_delivery() {  # <state-dir> <corr_id>
 }
 
 fm_pending_reply_mark_typed_unproven() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase delivered typed_epoch
+  local state=$1 corr=$2 lock rc=0
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  STATE=$state
+  lock="$state/.pending-reply-$corr.lock"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_pending_reply_mark_typed_unproven_locked "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_pending_reply_mark_typed_unproven_locked() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec phase delivered typed_epoch marker entry marker_state
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
-  case "$phase" in awaiting_report|typed_unproven) ;;
+  case "$phase" in awaiting_report|typed_unproven|delivery_unknown) ;;
     *) return 1 ;;
   esac
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
   [ -z "$delivered" ] || return 1
+  marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
+  if [ -f "$marker" ]; then
+    entry=$(cat "$marker" 2>/dev/null || true)
+    marker_state=${entry%%=*}
+    [ "$marker_state" != confirmed ] || return 1
+  fi
+  if [ "$phase" = delivery_unknown ]; then
+    [ -f "$marker" ] && [ "$marker_state" = attempted ] || return 1
+  fi
   typed_epoch=$(fm_pending_reply_get "$rec" typed_unproven_epoch)
   if [ -z "$typed_epoch" ]; then
     fm_pending_reply_set "$rec" typed_unproven_epoch "$(fm_pending_reply_now)" || return 1
@@ -512,6 +534,19 @@ fm_pending_reply_mark_delivery_unknown() {  # <state-dir> <corr_id>
 }
 
 fm_pending_reply_reconcile_delivery() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 lock rc=0
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  STATE=$state
+  lock="$state/.pending-reply-$corr.lock"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_pending_reply_reconcile_delivery_locked "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_pending_reply_reconcile_delivery_locked() {  # <state-dir> <corr_id>
   local state=$1 corr=$2 rec delivered marker entry delivery_state value epoch
   local grace now age phase
   rec=$(fm_pending_reply_path "$state" "$corr")
@@ -1231,7 +1266,7 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   if [ "$phase" = delivery_unknown ]; then
-    fm_pending_reply_reconcile_delivery "$state" "$corr" || true
+    _fm_pending_reply_reconcile_delivery_locked "$state" "$corr" || true
     phase=$(fm_pending_reply_get "$rec" phase)
     [ "$phase" = delivery_unknown ] || return 0
   fi
