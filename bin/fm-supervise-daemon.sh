@@ -645,13 +645,23 @@ escalate_add() {  # <state> <distilled-item>
   printf '%s\n' "$item" >> "$buf"
 }
 
+inject_is_typed_unproven() {  # <state>
+  grep -q '^fm away-mode inject WEDGED: typed-unproven' "$1/.subsuper-inject-wedged" 2>/dev/null
+}
+
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
-# inject failure (buffer preserved for retry / catch-up).
+# inject failure (buffer preserved for retry / catch-up). A successful but
+# unproven write remains wedged until the existing away-return settlement clears
+# the durable delivery artifacts, so it is never typed again automatically.
 escalate_flush() {  # <state>
   local state=$1 buf item n msg
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
+  if inject_is_typed_unproven "$state"; then
+    log "inject blocked: prior write was typed-unproven; automatic retry disabled until operator settlement"
+    return 1
+  fi
   n=$(wc -l < "$buf" 2>/dev/null || echo 0)
   # Join buffered items with the literal " | " separator into one digest line.
   msg=$(awk 'NR>1{printf " | "} {printf "%s",$0} END{print ""}' "$buf" 2>/dev/null)
@@ -908,6 +918,12 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   if [ "$(_file_age "$marker")" -lt "$max_defer" ]; then
     return 0
   fi
+  if inject_is_typed_unproven "$state"; then
+    log "ERROR: away-mode escalation write remains typed-unproven after ${age}s; automatic retry stays disabled. Buffer + wake-queue preserved; operator settlement required."
+    touch "$marker" 2>/dev/null || true
+    wedge_alarm_notify "away-mode escalation write UNPROVEN after ${age}s - see $marker" "$marker"
+    return 0
+  fi
   now=$(_now)
   if [ "$WEDGE_ALARM_LAST_EPOCH" -gt 0 ] && [ $((now - WEDGE_ALARM_LAST_EPOCH)) -lt "$max_defer" ]; then
     notify=0
@@ -1110,8 +1126,9 @@ window_for_task() {  # <task-key> [state]
 # inject_msg: send one escalation digest to the supervisor pane.
 # Returns 0 on successful inject (or empty buffer), non-zero if the pane is
 # gone, the supervisor is busy, afk is inactive, or the verified submit cannot
-# be confirmed after bounded retries. On non-zero the caller preserves
-# the buffer so the escalation survives for the next cycle or the catch-up flush.
+# be confirmed after bounded retries. The caller preserves the buffer. Pre-write
+# refusals remain retryable; any verdict that may follow a write creates a
+# durable wedge and cannot be injected again before away-return settlement.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1120,8 +1137,9 @@ window_for_task() {  # <task-key> [state]
 #   - SUBMIT ACK = the backend submit primitive reports `empty` after Enter.
 #     For tmux that means a cleared composer; for herdr's normal idle-baseline
 #     path it means native agent-state observed a real turn start.
-#     Pending means Enter was swallowed; unknown is treated as undelivered by
-#     this strict daemon path.
+#     Pending means Enter was swallowed; unknown remains unproven. Both follow
+#     a write and therefore wedge rather than making the digest eligible for a
+#     later automatic retype.
 #   - COMPOSER GUARD before typing: if the cursor line already has real content
 #     after dim/faint ghost text and borders are ignored (a human's half-typed
 #     line, or a previous injection's unsent text), defer entirely - injecting
@@ -1177,11 +1195,28 @@ inject_msg() {  # <message> [state]
   retries=${FM_INJECT_CONFIRM_RETRIES:-$INJECT_CONFIRM_RETRIES_DEFAULT}
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
-  if [ "$verdict" = empty ]; then
-    return 0  # Backend confirmed the submit.
-  fi
-  log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict, text may be in composer)"
-  return 1
+  case "$verdict" in
+    empty)
+      return 0
+      ;;
+    gated|send-failed)
+      log "inject deferred: text was never written and will retry (verdict=$verdict)"
+      return 1
+      ;;
+    *)
+      {
+        printf 'fm away-mode inject WEDGED: typed-unproven as of %s (verdict=%s)\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$verdict"
+        printf 'Text was written or may have been written; automatic retry is disabled until operator settlement. Buffered items:\n'
+        cat "$state/.subsuper-escalations" 2>/dev/null
+      } > "$state/.subsuper-inject-wedged" 2>/dev/null || true
+      if [ "$verdict" = typed-unproven ]; then
+        log "inject wedged: text was written but delivery is unproven; automatic retry disabled (verdict=$verdict)"
+      else
+        log "inject wedged: text may have been written and delivery is unproven; automatic retry disabled (verdict=$verdict)"
+      fi
+      return 1
+      ;;
+  esac
 }
 
 # --- INJECT_SKIP prefix match (literal prefixes, no regex) ------------------

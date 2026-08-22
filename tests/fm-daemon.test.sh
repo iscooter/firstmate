@@ -1181,11 +1181,12 @@ test_submit_ack_confirms_on_bordered_empty_composer() {
   # RC2: the submit acknowledgement must recognize a bordered-EMPTY composer as
   # "submitted." The old ACK reused the broken check, so on claude it could never
   # confirm and always reported a false "Enter swallowed."
-  local dir fakebin sent verdict
+  local dir fakebin sent verdict payload
   dir=$(make_bordered_case ack-bordered)
   fakebin="$dir/fakebin"; sent="$dir/sent.log"; : > "$sent"
+  payload='the self-proving acknowledgement digest payload'
   verdict=$(PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-    fm_tmux_submit_core "win" "the digest" 3 0.05 0.05)
+    fm_tmux_submit_core "win" "$payload" 3 0.05 0.05)
   [ "$verdict" = empty ] || fail "submit-ACK did not confirm on a bordered-empty composer: $verdict"
   [ "$(grep -cv '\[ENTER\]' "$sent")" -eq 1 ] || fail "digest typed more than once (retype)"
   [ "$(grep -c '\[ENTER\]' "$sent")" -eq 1 ] || fail "expected exactly one submitted Enter"
@@ -1196,13 +1197,14 @@ test_submit_ack_reports_pending_on_persistent_swallow() {
   # A genuinely swallowed Enter (text stays in the box across all retries) is
   # reported as "pending" — the daemon keeps the buffer, fm-send exits non-zero —
   # and the digest is typed ONCE (Enter-only retries, never a retype).
-  local dir fakebin sent verdict
+  local dir fakebin sent verdict payload
   dir=$(make_bordered_case ack-swallow)
   fakebin="$dir/fakebin"; sent="$dir/sent.log"; : > "$sent"
   touch "$dir/.swallow"
+  payload='the self-proving persistent-swallow digest payload'
   verdict=$(PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 \
-    fm_tmux_submit_core "win" "the digest" 3 0.05 0.05)
+    fm_tmux_submit_core "win" "$payload" 3 0.05 0.05)
   [ "$verdict" = pending ] || fail "persistent swallow not reported as pending: $verdict"
   [ "$(grep -cv '\[ENTER\]' "$sent")" -eq 1 ] || fail "digest retyped on swallow (expected type-once)"
   pass "submit-ACK reports pending on a persistently swallowed Enter (type-once)"
@@ -1659,7 +1661,7 @@ test_fm_send_reports_delivered_unconfirmed_submit() {
   fakebin="$dir/fakebin"; err="$dir/send.err"
   # Clean submit -> exit 0.
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
-    FM_SEND_SLEEP=0.05 "$ROOT/bin/fm-send.sh" sess:win 'route this work' >/dev/null 2>"$err" \
+    FM_SEND_SLEEP=0.05 "$ROOT/bin/fm-send.sh" sess:win 'route this self-proving work digest safely' >/dev/null 2>"$err" \
     || fail "fm-send exited non-zero on a clean submit: $(cat "$err")"
   # Persistent composer text after Enter -> delivered-unconfirmed exit 3 with
   # a non-error warning that explicitly tells the operator not to resend.
@@ -1667,7 +1669,7 @@ test_fm_send_reports_delivered_unconfirmed_submit() {
   touch "$dir/.swallow"
   if PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_SEND_SLEEP=0.05 \
-    "$ROOT/bin/fm-send.sh" sess:win 'fix findings 1 and 3, skip 2' >/dev/null 2>"$err"; then
+    "$ROOT/bin/fm-send.sh" sess:win 'fix findings 1 and 3, skip 2, and preserve this self-proving digest' >/dev/null 2>"$err"; then
     rc=0
   else
     rc=$?
@@ -1703,7 +1705,7 @@ test_fm_send_exits_nonzero_on_unproven_submit() {
   touch "$dir/.swallow"
   if PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_SEND_SLEEP=0.05 \
-    "$ROOT/bin/fm-send.sh" sess:win '修复' >/dev/null 2>"$err"; then
+    "$ROOT/bin/fm-send.sh" sess:win '修复 this self-proving unconfirmed digest safely' >/dev/null 2>"$err"; then
     fail "fm-send exited zero when submit proof remained pending-unproven"
   fi
   grep -F 'verdict=pending-unproven' "$err" >/dev/null \
@@ -1862,6 +1864,63 @@ test_inject_msg_herdr_pane_gone_defers() {
     fi
   ) || fail "herdr pane-gone inject_msg subshell failed"
   pass "inject_msg: herdr pane-gone check defers before any busy/composer/submit call"
+}
+
+test_inject_msg_typed_unproven_never_retries() {
+  local case_verdict dir state calls expected
+  for case_verdict in typed-unproven gated send-failed; do
+    dir=$(make_supercase "inject-verdict-$case_verdict")
+    state="$dir/state"
+    calls="$dir/submit-calls"
+    : > "$calls"
+    : > "$dir/daemon.log"
+    afk_enter "$state"
+    escalate_add "$state" "original buffered escalation"
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 1; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() {
+        printf 'write\n' >> "$calls"
+        if [ "$(wc -l < "$calls" | tr -d ' ')" -eq 1 ]; then
+          printf '%s' "$case_verdict"
+        else
+          printf 'empty'
+        fi
+      }
+      LOG="$dir/daemon.log"
+      if escalate_flush "$state"; then
+        fail "first $case_verdict inject must not report confirmed delivery"
+      fi
+      if [ "$case_verdict" = typed-unproven ]; then
+        inject_is_typed_unproven "$state" \
+          || fail "typed-unproven inject must write the durable wedge state"
+      else
+        [ ! -e "$state/.subsuper-inject-wedged" ] \
+          || fail "$case_verdict pre-write refusal must remain retryable without a typed wedge"
+      fi
+      escalate_flush "$state" || [ "$case_verdict" = typed-unproven ] \
+        || fail "$case_verdict pre-write refusal must succeed on its later retry"
+    ) || fail "$verdict inject divergence subshell failed"
+
+    if [ "$case_verdict" = typed-unproven ]; then expected=1; else expected=2; fi
+    [ "$(wc -l < "$calls" | tr -d ' ')" -eq "$expected" ] \
+      || fail "$case_verdict produced the wrong number of writes"
+    if [ "$case_verdict" = typed-unproven ]; then
+      [ -s "$state/.subsuper-escalations" ] \
+        || fail "typed-unproven must preserve the buffered escalation for settlement"
+      grep -Fq 'text was written but delivery is unproven; automatic retry disabled' "$dir/daemon.log" \
+        || fail "typed-unproven log must distinguish a written unproven message"
+      grep -Fq 'prior write was typed-unproven; automatic retry disabled' "$dir/daemon.log" \
+        || fail "later typed-unproven flush must log why it did not retry"
+    else
+      [ ! -s "$state/.subsuper-escalations" ] \
+        || fail "$case_verdict must preserve ordinary retry and clear after confirmation"
+      grep -Fq "text was never written and will retry (verdict=$case_verdict)" "$dir/daemon.log" \
+        || fail "$case_verdict log must distinguish its retryable pre-write refusal"
+    fi
+  done
+  pass "inject_msg: typed-unproven wedges permanently while pre-write refusals retry"
 }
 
 test_inject_msg_herdr_submits_through_backend_dispatch() {
@@ -2023,6 +2082,7 @@ test_pane_input_pending_herdr_dispatch
 test_inject_msg_herdr_busy_guard_defers
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
+test_inject_msg_typed_unproven_never_retries
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
 test_inject_msg_defers_on_unrecognized_composer_state
