@@ -108,7 +108,7 @@ Delivery is proven twice, either side of the Enter, and the two halves ask delib
 Before Enter, every backend delegates the complete type-and-prove sequence to `fm_composer_typed_delivery_core` in `bin/fm-composer-lib.sh`.
 Its delta verdict compares whole captures before and after typing, normalizes them identically with the payload, and accepts only when the payload-tail anchor is both newly added and more frequent on screen - never based on where the composer is drawn.
 That substitution is the point: locating the input buffer inside a pane capture is an inference about one vendor's current drawing conventions, while temporal novelty and an increased occurrence count exclude a stale on-screen copy and a modal that swallowed the write.
-Single-row payloads shorter than the 24-character anchor minimum use the same proof without weakening it: the shared core appends a fresh random verification suffix to reach 24 characters, proves that combined anchor, erases exactly the suffix, and proves both that no suffix boundary remains and that the payload count did not fall.
+Single-row payloads shorter than the 24-character anchor minimum use the same proof without weakening it: the shared core appends a fresh random verification suffix to reach 24 characters, proves that combined anchor, erases exactly the suffix, and proves both that no suffix boundary remains and that the payload count remains equal across the final erase.
 A short multi-row payload is refused before typing because backspace behavior across row boundaries is not portable.
 The suffix alphabet excludes every normalized payload character so suffix removal cannot itself change the payload count.
 Each adapter supplies only its capture, literal-write, and one-character erase primitives; capability descriptors, cursor rows, identity probes, and composer-region extraction are absent from this path.
@@ -118,7 +118,8 @@ After Enter, the existing shape-aware submit confirmation remains separately req
 The daemon injects only into an affirmatively `empty` composer, so every other or future verdict defers; positive container proof is required, and a blank unidentified row or bare dead-shell prompt cannot receive an escalation.
 The current operator boundary is in [Composer and injection safety](herdr-backend.md#composer-and-injection-safety).
 Unsupported supervisor backends refuse at daemon startup.
-Stalled escalation delivery writes `state/.subsuper-inject-wedged` and attempts a configured backend-independent active alert after `FM_MAX_DEFER_SECS` instead of silently deferring forever.
+A pre-write escalation deferral remains retryable and raises the configured backend-independent active alert after `FM_MAX_DEFER_SECS` instead of staying silent.
+Once a literal escalation write succeeds, any unproven verdict immediately disables automatic retyping in process and attempts to persist `state/.subsuper-inject-wedged`; the same max-defer cadence raises the active alert while preserving the buffer and wake queue.
 On an unmarked return, `bin/fm-afk-return.sh` owns ordered shutdown, durable catch-up evidence, and the fail-closed gate that keeps ordinary work behind every live firstmate-actionable blocker.
 `fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using metadata-routed target `harness=` values, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
 

@@ -100,27 +100,24 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
   It preserves proven idle composers as empty but requires a genuine container around shell glyphs; see `docs/herdr-backend.md` "Composer and injection safety" for the operator contract.
   `pane_input_pending` is the tested fail-closed predicate for callers that need to know whether the composer is unsafe: it treats every result except exact `empty` as pending.
 
-A busy primary pane, or any composer verdict other than `empty`, defers the injection; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
+A busy primary pane, or any composer verdict other than `empty`, defers before writing; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
 In afk mode the composer guard is belt-and-suspenders (no human is typing), but it protects against the race window between the captain returning and their message landing, a dead shell, and the daemon's own previous injection sitting unsent.
 
 **Max-defer escape (the daemon must never silently wedge).**
-If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon
-attempts one normal flush, which still requires an idle pane and an affirmatively empty composer.
+If a pre-write deferral stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon attempts one normal flush, which still requires an idle pane and an affirmatively empty composer.
+If a literal write succeeded but delivery remained unproven, the daemon does not attempt that flush again: it immediately disables automatic retyping in process and attempts to persist `state/.subsuper-inject-wedged`.
 The alarm is defense in depth rather than a substitute for keeping every genuinely idle supported composer injectable.
-If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
-an ERROR in the daemon log, a durable
-`state/.subsuper-inject-wedged` marker (surface it on the "while you were out"
-catch-up if present), a tmux status-line flash when applicable, and a configurable backend-independent active alert.
+At the max-defer cadence, either unresolved path raises a loud, rate-limited wedge alarm: an ERROR in the daemon log, the durable marker when it could be persisted, a tmux status-line flash when applicable, and a configurable backend-independent active alert.
 `docs/wedge-alarm.md` owns the alert channel setup, and `docs/verification/supervision.md` "Wedge-alarm channels" owns active evidence.
-So a guard false-positive becomes a visible stall, never an unbounded silent no-op.
+So a guard false-positive or unproven write becomes a visible stall, never an unbounded silent no-op or an automatic duplicate.
 
 ## Submit model
 
 The digest is typed **once** (`send-keys -l` on tmux, `pane send-text` on
 herdr - both literal, non-submitting sends), then submitted with Enter and
 **verified** through the selected backend's submit primitive.
-Enter is retried (Enter only, never a retype) until the backend confirms the
-submit landed.
+Enter is retried (Enter only, never a retype) until the backend confirms the submit landed.
+After a successful literal write, every unproven outcome preserves the buffer but disables automatic retyping for the rest of the process even if the durable wedge marker cannot be written.
 For tmux that confirmation is normally a proven cleared composer from the shared classifier; an idle baseline transitioning to busy across this submit's own Enter also confirms that the turn started when a working harness hides its composer.
 Without that baseline, busy state never converts an `unknown` composer into confirmation.
 For herdr, idle-baseline submits first seek native agent-state showing a real turn started, then use the shared classifier when native state remains idle: a cleared composer confirms delivery, while pending text retries Enter and reaches the shared busy-queue verdict only after the retry budget.
@@ -179,18 +176,13 @@ the operational prefix lets firstmate distinguish it from a real captain message
   `FM_COMPOSER_IDLE_RE` overrides the shared idle-placeholder regex, but a match alone never bypasses the classifier's shape-specific position and ANSI de-emphasis safety gates.
   `FM_BUSY_REGEX` overrides the rendered delivery guards plus Grok's isolated task-state fallback.
   A blank or otherwise unidentified input row carries no positive container proof and defers injection, so a modal dialog or a mid-redraw pane is never an injection target.
-- **Max-defer escape** - the daemon must never silently wedge. If anything stays
-  buffered past `FM_MAX_DEFER_SECS` (default 300s), the daemon attempts one
-  normal flush, which still requires an idle pane and an affirmatively empty composer. If that
-  cannot confirm a submit, it raises a loud, rate-limited wedge alarm: ERROR log,
-  durable `state/.subsuper-inject-wedged` marker, a tmux status-line flash when
-  applicable, and a backend-independent active alert. A
-  composer false-positive surfaces as a visible stall, never an unbounded silent
-  no-op.
-- **Verified type-once submit model** - the digest is typed once (`send-keys -l`
-  on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
-  Enter is retried, Enter only and never a retype, until the backend submit
-  primitive reports `empty` as its caller-facing success verdict.
+- **Max-defer escape** - the daemon must never silently wedge.
+  A pre-write deferral gets one normal flush after `FM_MAX_DEFER_SECS` (default 300s), while an unproven successful write is marked wedged immediately and is never retyped.
+  At that cadence either unresolved path raises a loud, rate-limited wedge alarm: ERROR log, the durable `state/.subsuper-inject-wedged` marker when persistence succeeded, a tmux status-line flash when applicable, and a backend-independent active alert.
+  A composer false-positive or marker-write failure surfaces as a visible stall, never an unbounded silent no-op or duplicate injection.
+- **Verified type-once submit model** - the digest is typed once (`send-keys -l` on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
+  Enter is retried, Enter only and never a retype, until the backend submit primitive reports `empty` as its caller-facing success verdict.
+  Every other post-write verdict preserves the buffer and disables automatic retyping in process, independent of durable marker persistence.
   For tmux that verdict normally means the shared classifier proved the composer cleared; a baseline-gated idle-to-busy transition may instead prove this Enter started the turn.
   For herdr's idle-baseline path it means native agent-state observed a turn start, the shared classifier proved the composer cleared, or the shared queued-Enter verdict proved delivery while busy.
   This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
