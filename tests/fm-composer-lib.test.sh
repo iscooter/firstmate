@@ -801,6 +801,21 @@ test_delta_verdict_normalizes_payload_and_screen_identically() {
   pass "fm_composer_delivery_delta_verdict: box glyphs in the payload vanish on both sides, not just one"
 }
 
+test_gate_ignores_transcript_signals_above_healthy_composer() {
+  local screen verdict
+  screen=$'Normal response:\n1. Keep the first item\n2. Keep the second item\nPress Enter to continue\n\n\n❯'
+  if fm_composer_screen_is_gated "$screen"; then
+    fail "numbered response text above a healthy composer must not be combined into a gate"
+  fi
+  fm_composer_pre_type_ok "$screen" \
+    || fail "transcript gate-like text must not block typing into the current composer"
+  verdict=$(fm_composer_classify_screen "$CAPS_PLAIN" "$screen")
+  [ "$verdict" = empty ] \
+    || fail "transcript gate-like text must not override the healthy composer, got '$verdict'"
+  pass "fm_composer_screen_is_gated: only current modal evidence is combined"
+}
+
+test_gate_ignores_transcript_signals_above_healthy_composer
 test_delta_verdict_matches_real_harness_captures
 test_delta_verdict_survives_opencode_wrap_and_furniture
 test_delta_verdict_refuses_a_swallow_the_gate_scorer_misses

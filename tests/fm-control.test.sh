@@ -803,6 +803,37 @@ test_agent_that_does_not_stop_fails_closed() {
   pass "fm-control exit: a stubborn agent reports delivered input and an unconfirmed exit"
 }
 
+test_exit_rejects_pre_enter_refusals_immediately() {
+  local dir out rc
+
+  dir=$(new_case exit-gated)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  cp "$ROOT/tests/fixtures/composer-delta/claude-trust.before.plain" "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "a gated exit command should fail immediately"$'\n'"$out"
+  assert_contains "$out" "(gated)" "the exit refusal should preserve the gated verdict"
+  assert_not_contains "$out" "exit-delivered" "a command refused before typing must not be reported delivered"
+  [ -z "$(literals "$dir")" ] || fail "a gated exit must type no command"
+  if grep -qx Enter "$dir/fake/keys"; then
+    fail "a gated exit must send no Enter"
+  fi
+
+  dir=$(new_case exit-not-accepted)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  printf '❯\n' > "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an unproven exit command should fail before Enter"$'\n'"$out"
+  assert_contains "$out" "(not-accepted:" "the exit refusal should preserve the delta verdict"
+  assert_not_contains "$out" "exit-delivered" "an unproven command must not be reported delivered"
+  [ "$(literals "$dir")" = /exit ] || fail "the delta refusal should occur after typing the exit command"
+  if grep -qx Enter "$dir/fake/keys"; then
+    fail "an unproven exit must send no Enter"
+  fi
+  pass "fm-control exit: pre-Enter refusals fail immediately"
+}
+
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed() {
   local dir out rc
   dir=$(new_case nosettle)
@@ -904,6 +935,7 @@ test_muse_interrupt_confirms_adapter_acknowledgement
 test_interrupt_revalidates_agent_after_acknowledgement_wait
 test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
+test_exit_rejects_pre_enter_refusals_immediately
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
 test_secondmate_control_command_carries_no_marker
