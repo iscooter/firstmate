@@ -414,6 +414,20 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
 }
 
 # --- operator resolution of a typed-unproven record -------------------------
+
+fm_pending_reply_typed_settlement_instruction() {  # <payload> <corr-id> [suffix-length]
+  local payload=$1 corr=$2 suffix_len=${3-}
+  [ -n "$corr" ] || return 1
+  if [ -z "$suffix_len" ]; then
+    suffix_len=$(fm_composer_verification_suffix_length "$payload")
+  fi
+  printf 'Submit Enter ONLY if the composer is an exact payload-only match: it holds the payload and NOTHING after it.'
+  if [ "$suffix_len" -gt 0 ]; then
+    printf ' The %s-character verification suffix must NOT remain after the payload.' "$suffix_len"
+  fi
+  printf " If anything follows the payload, clear the composer and run 'fm-send.sh --typed-abandon %s'; never submit it. After submitting the exact payload-only match, run 'fm-send.sh --typed-confirm %s'." "$corr" "$corr"
+}
+
 #
 # A typed_unproven record means the text WAS typed but the pane could not be
 # captured to prove it, so Enter was never sent. Only a human looking at the
@@ -1215,7 +1229,7 @@ fm_pending_reply_escalation_payload() {  # <record-path> <kind>
         suffix_len=$(fm_pending_reply_get "$rec" typed_suffix_length)
         case "$suffix_len" in ''|*[!0-9]*) suffix_len=$(fm_composer_verification_suffix_length "$actual_payload") ;; esac
       fi
-      instruction=$(fm_composer_typed_settlement_instruction "$actual_payload" "$corr" "$suffix_len")
+      instruction=$(fm_pending_reply_typed_settlement_instruction "$actual_payload" "$corr" "$suffix_len")
       printf 'pending-reply-typed-unproven: task=%s pending-reply-id=%s request=%s inspect the pane. %s' \
         "$task_id" "$corr" "$summary" "$instruction"
       return 0

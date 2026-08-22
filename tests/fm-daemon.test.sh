@@ -1920,7 +1920,38 @@ test_inject_msg_typed_unproven_never_retries() {
         || fail "$case_verdict log must distinguish its retryable pre-write refusal"
     fi
   done
-  pass "inject_msg: typed-unproven wedges permanently while pre-write refusals retry"
+
+  dir=$(make_supercase inject-typed-unproven-marker-failure)
+  state="$dir/state"
+  calls="$dir/submit-calls"
+  : > "$calls"
+  : > "$dir/daemon.log"
+  afk_enter "$state"
+  escalate_add "$state" "buffered escalation with unwritable wedge marker"
+  mkdir "$state/.subsuper-inject-wedged"
+  INJECT_TYPED_UNPROVEN_STATE=
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'write\n' >> "$calls"; printf 'typed-unproven'; }
+    LOG="$dir/daemon.log"
+    if escalate_flush "$state"; then
+      fail "typed-unproven with marker failure must not report confirmed delivery"
+    fi
+    if escalate_flush "$state"; then
+      fail "in-process typed-unproven wedge must remain unsettled"
+    fi
+  ) || fail "typed-unproven marker-failure subshell failed"
+  [ "$(wc -l < "$calls" | tr -d ' ')" -eq 1 ] \
+    || fail "marker persistence failure allowed a duplicate automatic write"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "marker persistence failure must preserve buffered content"
+  grep -Fq 'wedge could not be persisted; in-process automatic retry remains disabled' "$dir/daemon.log" \
+    || fail "marker persistence failure was not reported explicitly"
+  grep -Fq 'prior write was typed-unproven; automatic retry disabled' "$dir/daemon.log" \
+    || fail "in-process wedge did not explain the suppressed later retry"
+  pass "inject_msg: typed-unproven never retries even when wedge persistence fails"
 }
 
 test_inject_msg_herdr_submits_through_backend_dispatch() {

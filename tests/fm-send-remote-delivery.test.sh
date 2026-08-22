@@ -175,7 +175,7 @@ test_remote_typed_unproven_replays_stranded_suffix_warning() {
   dir="$TMP_ROOT/remote-typed-unproven"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); log="$dir/send.log"; ssh_log="$dir/ssh.log"; : > "$ssh_log"
   home=$(setup_remote_home remote-typed-unproven)
-  warning='warning: the pane could not be captured after typing at fm-remote:w1:p1; the composer may still hold the verification suffix. Expected text: 2abcdefghijklmnopqrstuvw (the last 23 characters are the suffix and are NOT part of the message). Submit Enter ONLY if the composer is an exact payload-only match: it holds the payload and NOTHING after it. The 23-character verification suffix must NOT remain after the payload. If anything follows the payload, clear the composer and never submit it.'
+  warning='warning: the pane could not be captured after typing at fm-remote:w1:p1; text written to the composer: 2abcdefghijklmnopqrstuvw (the last 23 characters are the verification suffix and are NOT part of the message).'
 
   : > "$log"
   env PATH="$fb:$PATH" \
@@ -185,16 +185,14 @@ test_remote_typed_unproven_replays_stranded_suffix_warning() {
     "$SEND" rsm "2" >"$dir/out" 2>"$dir/err"; rc=$?
   err=$(cat "$dir/err")
   expect_code 4 "$rc" "a remote typed-unproven send must preserve exit 4"
-  assert_contains "$err" 'Expected text: 2abcdefghijklmnopqrstuvw' \
+  assert_contains "$err" 'text written to the composer: 2abcdefghijklmnopqrstuvw' \
     "the parent must replay the exact stranded remote wire"
-  assert_contains "$err" 'last 23 characters are the suffix' \
-    "the parent must replay the remote suffix length"
   assert_contains "$err" 'exact payload-only match' \
     "the real command must require exact payload-only inspection"
-  assert_contains "$err" '23-character verification suffix must NOT remain' \
-    "the real command must name the remote verification suffix length"
+  assert_contains "$err" 'last 23 characters are the verification suffix' \
+    "the real command must retain the descriptive remote suffix detail"
   assert_contains "$err" 'If anything follows the payload, clear the composer' \
-    "the real command must forbid submitting suffix residue"
+    "the request-owning layer must forbid submitting suffix residue"
   assert_contains "$err" '--typed-confirm' \
     "the parent must retain its operator confirmation guidance"
   assert_contains "$err" '--typed-abandon' \

@@ -204,6 +204,7 @@ MAX_DEFER_SECS_DEFAULT=300
 WEDGE_ALARM_TIMEOUT_SECS_DEFAULT=10
 WEDGE_ALARM_LAST_EPOCH=0
 WEDGE_ALARM_NOTIFIER_PID=
+INJECT_TYPED_UNPROVEN_STATE=
 # The captain-relevant verb set and the status classifiers (last_status_line,
 # status_is_captain_relevant, window_to_task, scan_captain_relevant_statuses) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
@@ -646,7 +647,8 @@ escalate_add() {  # <state> <distilled-item>
 }
 
 inject_is_typed_unproven() {  # <state>
-  grep -q '^fm away-mode inject WEDGED: typed-unproven' "$1/.subsuper-inject-wedged" 2>/dev/null
+  [ "${INJECT_TYPED_UNPROVEN_STATE:-}" = "$1" ] \
+    || grep -q '^fm away-mode inject WEDGED: typed-unproven' "$1/.subsuper-inject-wedged" 2>/dev/null
 }
 
 # Flush the escalation buffer as ONE batched, single-line digest to the
@@ -1145,7 +1147,7 @@ window_for_task() {  # <task-key> [state]
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
 inject_msg() {  # <message> [state]
-  local msg=$1 state target backend retries sleep_s verdict composer encoded
+  local msg=$1 state target backend retries sleep_s verdict composer encoded marker marker_tmp persisted
   state="${2:-$(_state_root)}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
@@ -1204,11 +1206,32 @@ inject_msg() {  # <message> [state]
       return 1
       ;;
     *)
-      {
-        printf 'fm away-mode inject WEDGED: typed-unproven as of %s (verdict=%s)\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$verdict"
-        printf 'Text was written or may have been written; automatic retry is disabled until operator settlement. Buffered items:\n'
-        cat "$state/.subsuper-escalations" 2>/dev/null
-      } > "$state/.subsuper-inject-wedged" 2>/dev/null || true
+      INJECT_TYPED_UNPROVEN_STATE=$state
+      marker="$state/.subsuper-inject-wedged"
+      marker_tmp="$state/.subsuper-inject-wedged.tmp.$$"
+      persisted=1
+      if [ -d "$marker" ] || ! : > "$marker_tmp" 2>/dev/null; then
+        persisted=0
+      fi
+      if [ "$persisted" -eq 1 ] \
+        && ! printf 'fm away-mode inject WEDGED: typed-unproven as of %s (verdict=%s)\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$verdict" >> "$marker_tmp"; then
+        persisted=0
+      fi
+      if [ "$persisted" -eq 1 ] \
+        && ! printf 'Text was written or may have been written; automatic retry is disabled until operator settlement. Buffered items:\n' >> "$marker_tmp"; then
+        persisted=0
+      fi
+      if [ "$persisted" -eq 1 ] \
+        && ! cat "$state/.subsuper-escalations" >> "$marker_tmp" 2>/dev/null; then
+        persisted=0
+      fi
+      if [ "$persisted" -eq 1 ] && ! mv -f "$marker_tmp" "$marker" 2>/dev/null; then
+        persisted=0
+      fi
+      rm -f "$marker_tmp" 2>/dev/null || true
+      if [ "$persisted" -ne 1 ]; then
+        log "ERROR: typed-unproven inject wedge could not be persisted; in-process automatic retry remains disabled (state=$state verdict=$verdict)"
+      fi
       if [ "$verdict" = typed-unproven ]; then
         log "inject wedged: text was written but delivery is unproven; automatic retry disabled (verdict=$verdict)"
       else

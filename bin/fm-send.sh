@@ -735,7 +735,11 @@ else
           exit 4
         fi
       fi
-      typed_instruction=$(fm_composer_typed_settlement_instruction "$MESSAGE" "$PENDING_REPLY_CORR" "$typed_suffix_len")
+      if [ -n "$PENDING_REPLY_CORR" ]; then
+        typed_instruction=$(fm_pending_reply_typed_settlement_instruction "$MESSAGE" "$PENDING_REPLY_CORR" "$typed_suffix_len")
+      else
+        typed_instruction='No tracked request exists to settle; inspect the composer with fm-peek.sh and do not retype or resend.'
+      fi
       echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh. $typed_instruction" >&2
       exit 4
       ;;

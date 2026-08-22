@@ -1246,8 +1246,8 @@ test_core_reports_a_failed_erase_as_typed_unproven() {
   pass "fm_composer_typed_delivery_core: every way the erase can fail reports typed-unproven, never a bare refusal"
 }
 
-# The operator settling a typed-unproven request needs the literal text to look
-# for; a verdict token alone cannot carry it.
+# The transport warning reports evidence only; request settlement belongs to
+# callers that own a correlation id.
 test_core_names_the_stranded_suffix_on_stderr() {
   local err mode wire
   for mode in erase-noop capture-after-write-fails delta-refuse; do
@@ -1258,22 +1258,22 @@ test_core_names_the_stranded_suffix_on_stderr() {
       "the $mode warning must quote the exact text that may remain in the composer"
     assert_contains "$err" 'NOT part of the message' \
       "the $mode warning must say which part of that text is the suffix"
-    assert_contains "$err" '23-character verification suffix must NOT remain' \
+    assert_contains "$err" 'last 23 characters are the verification suffix' \
       "the $mode warning must name the verification suffix length"
-    assert_contains "$err" 'exact payload-only match' \
-      "the $mode warning must require exact payload-only inspection"
-    assert_contains "$err" 'If anything follows the payload, clear the composer and never submit it' \
-      "the $mode warning must forbid submitting suffix residue"
-    assert_not_contains "$err" 'complete text is present' \
-      "the $mode warning must not permit an approximate payload match"
+    assert_not_contains "$err" 'fm-send.sh --typed-confirm' \
+      "the transport warning must not invent a confirmation command"
+    assert_not_contains "$err" 'fm-send.sh --typed-abandon' \
+      "the transport warning must not invent an abandonment command"
+    assert_not_contains "$err" 'clear the composer' \
+      "the transport warning must not compete with request settlement"
   done
   sim_reset capture-after-write-fails
   err=$(sim_send "$DELTA_PAYLOAD" 2>&1 >/dev/null)
-  assert_contains "$err" 'exact payload-only match' \
-    "a self-proving payload failure must still require an exact match"
   assert_not_contains "$err" 'verification suffix' \
     "a self-proving payload failure must not claim that a suffix was stranded"
-  pass "fm_composer_typed_delivery_core: settlement guidance is exact and suffix-aware"
+  assert_not_contains "$err" 'fm-send.sh --typed-' \
+    "a self-proving transport warning must contain no settlement command"
+  pass "fm_composer_typed_delivery_core: stranded warnings are exact transport evidence only"
 }
 
 test_delta_verdict_normalizes_payload_and_screen_identically() {

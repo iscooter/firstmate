@@ -851,7 +851,11 @@ test_exit_rejects_pre_enter_refusals_immediately() {
   printf '❯\n' > "$dir/fake/pane"
   out=$(run_control "$dir" t1 exit); rc=$?
   expect_code 1 "$rc" "an unproven exit command should fail before Enter"$'\n'"$out"
-  assert_contains "$out" "(not-accepted:" "the exit refusal should preserve the delta verdict"
+  assert_contains "$out" "(typed-unproven)" "a successful but unproven write must preserve the typed stage"
+  assert_contains "$out" 'text written to the composer:' \
+    "the lifecycle delta refusal must retain descriptive stranded-text evidence"
+  assert_not_contains "$out" 'fm-send.sh --typed-' \
+    "the lifecycle delta refusal must not imply request settlement"
   assert_not_contains "$out" "exit-delivered" "an unproven command must not be reported delivered"
   # Typed, never submitted: the refusal lands before Enter. The raw type log is
   # what proves the command went out, and it carries the verification suffix
@@ -870,6 +874,16 @@ test_exit_rejects_pre_enter_refusals_immediately() {
   out=$(FM_FAKE_CAPTURE_FAIL_AFTER_TYPE=1 run_control "$dir" t1 exit); rc=$?
   expect_code 1 "$rc" "an after-type capture failure should fail before Enter"$'\n'"$out"
   assert_contains "$out" "(typed-unproven)" "the exit refusal should preserve the typed stage"
+  assert_contains "$out" 'text written to the composer:' \
+    "the lifecycle refusal must retain descriptive stranded-text evidence"
+  assert_contains "$out" 'characters are the verification suffix' \
+    "the lifecycle refusal must retain the descriptive suffix length"
+  assert_not_contains "$out" 'fm-send.sh --typed-confirm' \
+    "the lifecycle path has no pending request to confirm"
+  assert_not_contains "$out" 'fm-send.sh --typed-abandon' \
+    "the lifecycle path has no pending request to abandon"
+  assert_not_contains "$out" 'clear the composer' \
+    "the transport-only lifecycle warning must not imply request settlement"
   assert_not_contains "$out" "exit-command=delivered" "typed but unproven input must not be reported delivered"
   # Typed once and never submitted: the capture failed after the write, so the
   # command carries its verification suffix and no Enter followed.
