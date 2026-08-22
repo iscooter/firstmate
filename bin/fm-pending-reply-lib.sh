@@ -134,7 +134,7 @@ fm_pending_reply_path() {  # <state-dir> <corr_id>
   printf '%s/%s' "$(fm_pending_reply_dir "$1")" "$2"
 }
 
-# Sibling file holding the full request body for lossless recovery.
+# Sibling file holding the request body used for durable recovery.
 fm_pending_reply_request_path() {  # <state-dir> <corr_id>
   printf '%s/%s.request' "$(fm_pending_reply_dir "$1")" "$2"
 }
@@ -429,10 +429,10 @@ fm_pending_reply_typed_settlement_instruction() {  # <payload> <corr-id> [suffix
 }
 
 #
-# A typed_unproven record means the text WAS typed but the pane could not be
-# captured to prove it, so Enter was never sent. Only a human looking at the
-# pane can settle it, and until they do the record must not be guessed either
-# way: discarding it would lose the durable full-payload recovery for a request
+# A typed_unproven record means the text WAS typed but delivery or suffix
+# removal could not be proven, so Enter was never sent. Only a human looking at
+# the pane can settle it, and until they do the record must not be guessed either
+# way: discarding it would lose the durable request-body recovery for a request
 # that may well have landed, and marking it delivered would arm a reply
 # expectation for one that never did.
 #

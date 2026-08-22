@@ -283,6 +283,10 @@ test_after_type_capture_failure_refuses_without_retry() {
     "$SEND" lane "typed but capture failed" >/dev/null 2>"$err"; rc=$?
   expect_code 4 "$rc" "an after-type capture failure must preserve its no-Enter stage"
   assert_contains "$(cat "$err")" "text was typed" "the diagnostic must preserve the typed stage"
+  assert_contains "$(cat "$err")" "delivery or suffix removal could not be proven" \
+    "the command-level summary must cover every typed-unproven cause"
+  assert_not_contains "$(cat "$err")" "pane could not be captured to prove it reached the composer" \
+    "the command-level summary must not misstate typed-unproven as capture-only"
   assert_contains "$(cat "$err")" "Do not retype or resend" "the diagnostic must prevent an unsafe retry"
   if grep -F 'literal=0 arg=Enter' "$log" >/dev/null; then
     fail "an unproven typed payload must never receive Enter"$'\n'"$(cat "$log")"

@@ -741,7 +741,7 @@ else
       else
         typed_instruction='No tracked request exists to settle; inspect the composer with fm-peek.sh and do not retype or resend.'
       fi
-      echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh. $typed_instruction" >&2
+      echo "error: text was typed at $T, but delivery or suffix removal could not be proven (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh. $typed_instruction" >&2
       exit 4
       ;;
     not-accepted|not-accepted:*)

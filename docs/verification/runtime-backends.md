@@ -251,7 +251,9 @@ That is the shape catalogue, not the send path, and it is what defers away-mode 
 
 A steer whose payload is shorter than the anchor minimum is typed with a random verification suffix that lifts it to a full-length anchor, and that suffix alone is erased again before Enter (`bin/fm-composer-lib.sh`, `fm_composer_typed_delivery_core`).
 The erase is what makes the agent receive the caller's payload and nothing else, so each backend's erase key must remove exactly one character per press.
-That is a per-backend vendor fact - the key name belongs to each tool's own vocabulary, and the byte it resolves to belongs to the pane - so no backend's spelling may be borrowed from another's.
+That granularity also bounds the pre-Enter proof's remaining risk: its mid-erase boundary probe can be as short as two characters, and pane churn could spoof that checkpoint only on a backend whose erase key removes more than one character per press.
+An unverified backend therefore carries more of this risk until its live guard establishes one-character erases; adding later screen probes would only move the same gap to the keys after the new probe.
+Erase behavior is a per-backend vendor fact - the key name belongs to each tool's own vocabulary, and the byte it resolves to belongs to the pane - so no backend's spelling may be borrowed from another's.
 A wrong key name refuses the send rather than misdelivering it, but it still refuses every short steer on that backend, which is why each one carries a live guard.
 
 Verified 2026-08-22 on macOS Darwin 25.5.0 (arm64).

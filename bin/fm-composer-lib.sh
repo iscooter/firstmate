@@ -1450,18 +1450,27 @@ fm_composer_envelope_prepare() {  # <payload> <before>
 }
 
 # The erase proof uses the payload/first-suffix-character boundary selected to
-# be absent before typing. Its presence after N-1 erase keys measures this
-# send's erase granularity: those keys removed exactly N-1 characters, neither
-# more nor fewer. Its required absence after the final key proves no suffix
-# residue remains. A secondary payload-count barrier requires the payload count
-# to remain equal from the stage-one capture to the capture after the final key,
-# catching a plain final key that consumes a payload character.
+# be absent before typing. Its presence after N-1 erase keys is evidence that
+# the boundary remains, and its required absence after the final key proves no
+# suffix residue remains. The probe can be only two characters for a one-byte
+# payload: absence before typing makes it send-specific evidence, but not
+# high-entropy evidence. Pane churn can spoof the checkpoint only if an erase
+# key removes more than one character per press; with one-character erases an
+# over-erase removes the probe and cannot pass the checkpoint. This premise is
+# bounded by the erase-key guards in each real backend smoke test and the dated
+# results in docs/verification/runtime-backends.md: tmux and zellij are verified
+# one-per-press, while herdr and cmux are not yet live-verified. Completing those
+# live guards, rather than adding another screen probe after which the same gap
+# recurs, is the mitigation for unverified backends. A secondary payload-count
+# barrier requires the payload count to remain equal from the stage-one capture
+# to the capture after the final key, catching a plain final key that consumes a
+# payload character.
 #
-# There is no independent positive proof that the payload survived the final
-# key if screen churn exactly offsets that count change. Such a shape-free proof
-# cannot exist once the correct erase leaves only the low-entropy payload and
-# no high-entropy artifact to anchor on; obtaining one would require reading the
-# drawn composer shape, which this delta design deliberately replaced.
+# There is also no independent positive proof that the payload survived the
+# final key if screen churn exactly offsets that count change. Such a shape-free
+# proof cannot exist once the correct erase leaves only the low-entropy payload
+# and no high-entropy artifact to anchor on; obtaining one would require reading
+# the drawn composer shape, which this delta design deliberately replaced.
 fm_composer_envelope_boundary_verdict() {  # <screen> <payload> <nonce> <present|absent>
   local screen=$1 payload=$2 nonce=$3 expected=$4 payload_norm probe joined count
   payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
