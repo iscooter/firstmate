@@ -171,9 +171,12 @@ case "${1:-}" in
       exit 2
     }
     case "$2" in
-      [0-9A-Fa-f]*) ;;
-      *) echo "error: '$2' is not a correlation id" >&2; exit 2 ;;
+      *[!0-9A-Fa-f]*|'') echo "error: '$2' is not a correlation id" >&2; exit 2 ;;
     esac
+    [ "${#2}" -eq 16 ] || {
+      echo "error: '$2' is not a correlation id" >&2
+      exit 2
+    }
     if [ "$fm_send_typed_mode" = --typed-confirm ]; then
       fm_pending_reply_confirm_typed "$STATE" "$2" || {
         echo "error: no typed-unproven request '$2' in $STATE; it may already have been settled, delivered, or resolved" >&2

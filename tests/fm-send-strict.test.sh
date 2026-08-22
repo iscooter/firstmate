@@ -298,6 +298,29 @@ test_after_type_capture_failure_refuses_without_retry() {
   pass "fm-send: after-type capture failure preserves unresolved durable recovery"
 }
 
+test_typed_resolution_rejects_malformed_correlation_ids() {
+  local home corr body err rc
+  home=$(setup_home typed-resolution-id)
+  corr=0123456789abcdef
+  body="$home/state/pending-replies/$corr.request"
+  mkdir -p "${body%/*}"
+  printf 'phase=typed_unproven\ndelivered_epoch=\n' > "$body"
+  err="$TMP_ROOT/typed-resolution-id.err"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    "$SEND" --typed-abandon "$corr.request" >/dev/null 2>"$err"; rc=$?
+  expect_code 2 "$rc" "a suffixed correlation id must be rejected"
+  assert_contains "$(cat "$err")" "not a correlation id" \
+    "a malformed correlation id must get a clear diagnostic"
+  [ -f "$body" ] || fail "a malformed correlation id must not delete a request body"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    "$SEND" --typed-confirm 0123456789abcde >/dev/null 2>"$err"; rc=$?
+  expect_code 2 "$rc" "a short correlation id must be rejected"
+  [ -f "$body" ] || fail "a short correlation id must not alter a request body"
+  pass "fm-send: typed resolution accepts only exact correlation ids"
+}
+
 test_missing_payload_tail_is_refused_and_closes_no_key() {
   local dir fb home err log rc status
   dir="$TMP_ROOT/not-accepted"; mkdir -p "$dir"
@@ -415,5 +438,6 @@ test_fm_prefixed_herdr_session_is_an_explicit_target
 test_healthy_fm_id_send_still_works
 test_gated_trust_dialog_is_refused_loud
 test_after_type_capture_failure_refuses_without_retry
+test_typed_resolution_rejects_malformed_correlation_ids
 test_missing_payload_tail_is_refused_and_closes_no_key
 test_shape_free_echo_still_confirms_delivery
