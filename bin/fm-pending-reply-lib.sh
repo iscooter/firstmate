@@ -350,7 +350,7 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
   chmod 600 "$body_tmp" 2>/dev/null || true
   mv -f "$body_tmp" "$body_path" || { rm -f "$body_tmp"; return 1; }
   tmp="$dir/.${corr}.tmp.$$"
-  cat > "$tmp" <<EOF
+  if ! cat > "$tmp" <<EOF
 schema=$FM_PENDING_REPLY_SCHEMA
 corr_id=$corr
 task_id=$task_id
@@ -382,6 +382,10 @@ wrong_home_sightings=
 wrong_home_scan_signature=
 grace_secs=$(fm_pending_reply_grace_secs)
 EOF
+  then
+    rm -f "$body_path" "$tmp"
+    return 1
+  fi
   chmod 600 "$tmp" 2>/dev/null || true
   if ! mv -f "$tmp" "$rec"; then
     rm -f "$body_path" "$tmp"

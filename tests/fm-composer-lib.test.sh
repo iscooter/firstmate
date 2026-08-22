@@ -754,6 +754,22 @@ test_occurrence_count_refuses_when_novelty_is_defeated() {
   pass "fm_composer_delivery_delta_verdict: when a redrawing pane defeats novelty, the occurrence count still refuses"
 }
 
+test_occurrence_count_includes_overlapping_anchors() {
+  local anchor before after verdict
+  anchor=aaaaaaaaaaaaaaaaaaaaaaaa
+  before="${anchor}a"
+  after="${anchor}b${anchor}"
+  [ "$(fm_composer_count_occurrences "$before" "$anchor")" -eq 2 ] \
+    || fail "the before capture must expose both overlapping anchor occurrences"
+  [ "$(fm_composer_count_occurrences "$after" "$anchor")" -eq 2 ] \
+    || fail "the redraw must retain the same actual occurrence count"
+  verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$anchor") \
+    && fail "a redraw with no real occurrence increase must not prove delivery"
+  [ "$verdict" = 'not-accepted:no-new-occurrence(before=2 after=2)' ] \
+    || fail "the overlapping occurrence proof must refuse by unchanged count, got '$verdict'"
+  pass "fm_composer_delivery_delta_verdict: overlapping anchors cannot manufacture an occurrence increase"
+}
+
 # A partial write that landed only the head of the payload must not read as
 # delivery - the anchor is the TAIL precisely so there is no silent partial.
 test_partial_write_of_the_payload_is_refused() {
@@ -1362,6 +1378,7 @@ test_delta_verdict_refuses_a_swallow_the_gate_scorer_misses
 test_gated_trust_dialog_is_refused_before_typing_and_after
 test_scrollback_copy_of_the_payload_cannot_prove_delivery
 test_occurrence_count_refuses_when_novelty_is_defeated
+test_occurrence_count_includes_overlapping_anchors
 test_partial_write_of_the_payload_is_refused
 test_shape_free_echo_is_accepted
 test_delta_verdict_fails_loud_on_an_empty_payload

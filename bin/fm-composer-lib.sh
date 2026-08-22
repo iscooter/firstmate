@@ -1234,22 +1234,21 @@ fm_composer_payload_tail_anchor() {  # <text>
   fi
 }
 
-# fm_composer_count_occurrences: non-overlapping occurrences of <needle> in
-# <haystack>. Bash suffix removal, so no external process and no regex
-# metacharacter hazard from a payload that contains one.
+# fm_composer_count_occurrences: overlapping occurrences of <needle> in
+# <haystack>, compared literally without a regex metacharacter hazard.
 fm_composer_count_occurrences() {  # <haystack> <needle>
-  local hay=$1 needle=$2 n=0
-  if [ -z "$needle" ]; then
+  local hay=$1 needle=$2 n=0 i=0 hay_len needle_len
+  needle_len=${#needle}
+  if [ "$needle_len" -eq 0 ]; then
     printf '0'
     return 0
   fi
-  while [ -n "$hay" ]; do
-    case "$hay" in
-      *"$needle"*) ;;
-      *) break ;;
-    esac
-    hay=${hay#*"$needle"}
-    n=$((n + 1))
+  hay_len=${#hay}
+  while [ "$i" -le "$((hay_len - needle_len))" ]; do
+    if [ "${hay:i:needle_len}" = "$needle" ]; then
+      n=$((n + 1))
+    fi
+    i=$((i + 1))
   done
   printf '%s' "$n"
 }

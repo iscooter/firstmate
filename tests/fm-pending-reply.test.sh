@@ -1581,6 +1581,29 @@ test_request_body_is_never_scanned_as_a_record() {
   pass "pending request bodies are never scanned as records"
 }
 
+test_create_removes_partial_record_when_serialization_fails() {
+  local home state dir
+  home=$(setup_parent partial-record-write)
+  state="$home/state"
+  dir="$state/pending-replies"
+  (
+    # Shadows the serializer command invoked indirectly by the code under test.
+    # shellcheck disable=SC2329
+    cat() {
+      if [ "$#" -eq 0 ]; then
+        printf 'schema=partial\n'
+        return 1
+      fi
+      command cat "$@"
+    }
+    if fm_pending_reply_create "$home" "$state" hibit "must stay recoverable" >/dev/null; then
+      exit 1
+    fi
+    [ -z "$(find "$dir" -type f -print -quit)" ]
+  ) || fail "a failed record serialization must publish neither record nor request body"
+  pass "pending reply creation removes partial serialization artifacts"
+}
+
 test_create_falls_back_to_sha256sum() {
   local home state expected
   home=$(setup_parent sha256sum-fallback)
@@ -1612,6 +1635,7 @@ test_create_falls_back_to_sha256sum() {
 # --- run --------------------------------------------------------------------
 
 test_request_body_is_never_scanned_as_a_record
+test_create_removes_partial_record_when_serialization_fails
 test_create_falls_back_to_sha256sum
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
