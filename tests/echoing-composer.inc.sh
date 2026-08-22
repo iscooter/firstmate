@@ -61,7 +61,35 @@ fm_test_tmux_note_literal() {
   rm -f "$(fm_test_composer_entered_path)"
 }
 
+# One character off the composer tail, modelling the erase key the pre-Enter
+# proof's verification envelope uses for a short payload (bin/fm-composer-lib.sh,
+# fm_composer_typed_delivery_core). A stub that ignores this leaves the suffix
+# in the composer and the proof refuses - which is the correct outcome for a
+# pane that really did ignore the key, so a stub modelling a HEALTHY pane must
+# call this from its erase-key branch.
+fm_test_tmux_note_erase() {
+  local typed cur
+  typed=$(fm_test_composer_typed_path)
+  [ -f "$typed" ] || return 0
+  cur=$(cat "$typed")
+  [ -n "$cur" ] || return 0
+  printf '%s' "${cur:0:$((${#cur} - 1))}" > "$typed"
+}
+
+# What the composer held when Enter was pressed - which is what the agent
+# actually receives, and therefore what a test asserting "the agent got exactly
+# X" must read. It differs from the raw type log whenever a short payload was
+# typed with a verification suffix that was erased again before Enter.
+fm_test_composer_submitted_path() {
+  printf '%s\n' "${FM_FAKE_COMPOSER_SUBMITTED:-${0}.submitted}"
+}
+
 fm_test_tmux_note_enter() {
+  local typed
+  typed=$(fm_test_composer_typed_path)
+  if [ -f "$typed" ] && [ ! -f "$(fm_test_composer_entered_path)" ]; then
+    printf '%s\n' "$(cat "$typed")" >> "$(fm_test_composer_submitted_path)"
+  fi
   : > "$(fm_test_composer_entered_path)"
 }
 

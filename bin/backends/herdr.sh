@@ -2561,6 +2561,9 @@ fm_backend_herdr_normalize_key() {  # <key>
     # C-u clears a composer line. fm-send.sh's muse interrupt path needs it to
     # drop the prompt muse restores into the composer after Escape.
     C-u|c-u|ctrl+u|Ctrl+U) printf 'ctrl+u' ;;
+    # One character off the composer tail, for the shared pre-Enter proof's
+    # envelope erase.
+    BSpace|bspace|Backspace|backspace) printf 'backspace' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -2787,23 +2790,24 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
 # proof, styled when herdr can supply it and plain otherwise. Which one it was
 # no longer matters to the verdict - the delta proof reads text, not styling -
 # so the caller must only make sure BOTH of its captures come from here.
-fm_backend_herdr_delta_capture() {  # <target>
+fm_backend_herdr_delta_capture() {  # <target> [expected-label]
   fm_backend_herdr_capture_ansi "$1" "$FM_COMPOSER_DELTA_LINES" 2>/dev/null \
     || fm_backend_herdr_capture "$1" "$FM_COMPOSER_DELTA_LINES"
 }
 
+# fm_backend_herdr_erase_one: one character off the composer tail, for the
+# shared pre-Enter proof's envelope erase, in herdr's lowercase key vocabulary.
+fm_backend_herdr_erase_one() {  # <target> [expected-label]
+  fm_backend_herdr_send_key "$1" backspace
+}
+
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 before after
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
-  before=$(fm_backend_herdr_delta_capture "$target") || { printf 'send-failed'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
-    return 0
-  fi
-  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
-  sleep "$settle"
-  after=$(fm_backend_herdr_delta_capture "$target") || { printf 'typed-unproven'; return 0; }
-  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+  if ! verdict=$(fm_composer_typed_delivery_core \
+      fm_backend_herdr_delta_capture fm_backend_herdr_send_literal \
+      fm_backend_herdr_erase_one "$target" "$text" "$settle"); then
     printf '%s' "$verdict"
     return 0
   fi

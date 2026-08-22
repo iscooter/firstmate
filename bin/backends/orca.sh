@@ -270,24 +270,28 @@ fm_backend_orca_send_key() {  # <terminal-id> <key>
   esac
 }
 
+# fm_backend_orca_delta_capture: the capture half the shared pre-Enter core
+# drives, in that core's argument shape (<target> [label]).
+fm_backend_orca_delta_capture() {  # <terminal-id> [expected-label]
+  fm_backend_orca_capture "$1" "$FM_COMPOSER_DELTA_LINES"
+}
+
 # fm_backend_orca_send_text_submit: type <text> once, then drive the shared
 # verify-and-retry-Enter loop (bin/fm-composer-lib.sh:
 # fm_composer_submit_retry_core) against the shared composer verdict, so a
 # slash-command popup placeholder fill gets the required second Enter without
 # duplicating text.
 fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sleep> <settle>
-  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 before after verdict
+  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 verdict
   fm_backend_orca_tool_check || { printf 'send-failed'; return 0; }
-  before=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_DELTA_LINES") \
-    || { printf 'send-failed'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
-    return 0
-  fi
-  fm_backend_orca_send_literal "$terminal" "$text" || { printf 'send-failed'; return 0; }
-  sleep "$settle"
-  after=$(fm_backend_orca_capture "$terminal" "$FM_COMPOSER_DELTA_LINES") \
-    || { printf 'typed-unproven'; return 0; }
-  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+  # `-` for the erase primitive: Orca's send API exposes only text, Enter, and
+  # interrupt (fm_backend_orca_send_key rejects everything else), so there is
+  # no way to take a character back off this composer. The shared core turns
+  # that into a refusal BEFORE anything is typed for a payload that would need
+  # the verification envelope, rather than stranding a suffix it cannot remove.
+  if ! verdict=$(fm_composer_typed_delivery_core \
+      fm_backend_orca_delta_capture fm_backend_orca_send_literal \
+      - "$terminal" "$text" "$settle"); then
     printf '%s' "$verdict"
     return 0
   fi

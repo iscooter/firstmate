@@ -1196,8 +1196,21 @@ fm_composer_delta_rows() {  # <screen> -> normalized rows, one per line
 # collision, and 24 exact consecutive characters is far above where that is
 # plausible. 24 also leaves nine characters of margin against the narrowest
 # composer measured, rather than sitting one character from a refusal.
-FM_COMPOSER_DELTA_ANCHOR_MIN=24
 FM_COMPOSER_DELTA_ANCHOR_MAX=24
+
+# The anchor is refused below this length, and it is the same number: an anchor
+# shorter than this is not evidence at all. A two-character steer such as `2` or
+# `no` appears in a newly drawn row of a live agent pane constantly - a token
+# counter ticking from `1.9k` to `2.1k` is a new row, containing `2`, with the
+# count risen by exactly one - so novelty plus a rising count is a coincidence
+# ordinary screen churn manufactures on its own.
+#
+# Short steers still have to WORK, though: refusing them breaks real traffic,
+# including every fm-control lifecycle command. They are not exempted from this
+# minimum and they are not given a weaker test. Instead the ENVELOPE below
+# manufactures the entropy the payload does not have, so a one-character steer
+# reaches this proof carrying a full-length anchor like any other.
+FM_COMPOSER_DELTA_ANCHOR_MIN=24
 
 # fm_composer_payload_tail_anchor: the payload's own TAIL in normalized form,
 # capped at FM_COMPOSER_DELTA_ANCHOR_MAX. The tail and never the head: a
@@ -1263,7 +1276,7 @@ fm_composer_count_occurrences() {  # <haystack> <needle>
 # ever typed, so it reports `send-failed`; a failed AFTER capture means the
 # text WAS typed and cannot be proven, so it reports `typed-unproven` - the
 # verdict that tells a caller never to retype.
-fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payload>
+fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <wire-text>
   local before=$1 after=$2 payload=$3
   local anchor payload_norm before_rows after_rows added before_joined after_joined cb ca rc=0
   payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
@@ -1304,6 +1317,227 @@ fm_composer_delivery_delta_verdict() {  # <before-screen> <after-screen> <payloa
     return 1
   fi
   printf 'accepted'
+}
+
+# --- the short-payload entropy envelope --------------------------------------
+#
+# The proof above needs FM_COMPOSER_DELTA_ANCHOR_MIN characters of anchor, and
+# a real steer often has fewer: `2`, `y`, `approved`, `/exit`. Refusing those
+# is not an option - they are ordinary fleet traffic - and weakening the proof
+# for them reopens exactly the false-accept the proof exists to close.
+#
+# So neither happens. Instead firstmate MANUFACTURES the missing entropy: it
+# types the payload followed by a fresh random nonce, proves the combined
+# anchor, then erases exactly the nonce and proves the erase. The agent still
+# receives precisely the payload the caller wrote, and the thing that was
+# proven to be in the composer contains the payload's own characters, so this
+# is a proof ABOUT the payload rather than a proxy for it.
+#
+# Why the nonce goes after the payload and not before it: erasing is a
+# backspace, which consumes from the tail. A leading nonce could not be removed
+# without cursor movement no backend agrees on.
+FM_COMPOSER_ENVELOPE_ALPHABET='abcdefghijklmnopqrstuvwxyz0123456789'
+
+# fm_composer_envelope_nonce: <length> fresh characters drawn from the alphabet
+# MINUS every character the payload contains.
+#
+# That exclusion is not cosmetic - it is what makes the erase proof decidable.
+# With no payload character anywhere in the nonce, the payload cannot occur
+# inside the nonce, and it cannot occur across the payload/nonce boundary
+# either. So the payload's whole-screen occurrence count is unaffected by the
+# nonce's presence or removal, and any DROP in that count after the erase can
+# only mean the erase ate into the payload itself.
+#
+# /dev/urandom when it is readable, $RANDOM otherwise. This defends against
+# COINCIDENCE - a pane redrawing text that happens to match - not against an
+# adversary choosing pane content, so an unseeded fallback is still sound.
+fm_composer_envelope_nonce() {  # <payload-norm> <length>
+  local payload=$1 want=$2 pool='' ch i out='' n raw
+  i=0
+  while [ "$i" -lt "${#FM_COMPOSER_ENVELOPE_ALPHABET}" ]; do
+    ch=${FM_COMPOSER_ENVELOPE_ALPHABET:i:1}
+    i=$((i + 1))
+    case "$payload" in *"$ch"*) continue ;; esac
+    pool="$pool$ch"
+  done
+  n=${#pool}
+  [ "$n" -gt 0 ] || return 1
+  raw=$(LC_ALL=C tr -dc "$pool" < /dev/urandom 2>/dev/null | LC_ALL=C head -c "$want" 2>/dev/null) || true
+  if [ "${#raw}" -eq "$want" ]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+  i=0
+  while [ "$i" -lt "$want" ]; do
+    out="$out${pool:RANDOM%n:1}"
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+# fm_composer_envelope_prepare: decide the wire text for <payload> and publish
+#   FM_COMPOSER_ENVELOPE_WIRE   the text to type
+#   FM_COMPOSER_ENVELOPE_NONCE  the verification suffix alone (empty = none)
+#   FM_COMPOSER_ENVELOPE_ERASE  how many characters to erase afterwards (0 = none)
+# Returns 1 when the payload cannot be enveloped at all.
+#
+# It publishes variables rather than printing, because the wire is arbitrary
+# caller text: command substitution would eat a trailing newline the caller
+# meant to type.
+#
+# A payload that already carries a full-length anchor is left completely alone
+# (erase 0), so the ordinary long steer costs nothing - no nonce, no second
+# capture, no erase round trip. Only a short payload pays.
+#
+# A SHORT payload spanning more than one row is refused rather than enveloped:
+# erasing across a row boundary is a line-join on some composers and a no-op on
+# others, and no real steer is both multi-row and under two dozen characters.
+fm_composer_envelope_prepare() {  # <payload>
+  local payload=$1 norm nonce
+  FM_COMPOSER_ENVELOPE_WIRE=$payload
+  FM_COMPOSER_ENVELOPE_NONCE=
+  FM_COMPOSER_ENVELOPE_ERASE=0
+  norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
+  [ -n "$norm" ] || return 1
+  [ "${#norm}" -lt "$FM_COMPOSER_DELTA_ANCHOR_MIN" ] || return 0
+  case "$payload" in
+    *$'\n'*) return 1 ;;
+  esac
+  nonce=$(fm_composer_envelope_nonce "$norm" "$((FM_COMPOSER_DELTA_ANCHOR_MIN - ${#norm}))") || return 1
+  FM_COMPOSER_ENVELOPE_WIRE="$payload$nonce"
+  FM_COMPOSER_ENVELOPE_NONCE=$nonce
+  FM_COMPOSER_ENVELOPE_ERASE=${#nonce}
+  return 0
+}
+
+# fm_composer_envelope_erase_verdict: prove the envelope came back off, and
+# that nothing else came off with it. Prints `accepted` (return 0) or
+# `not-accepted:<why>` (return 1). Two independent conditions:
+#
+#   A) NO SUFFIX RESIDUE. Erasing consumes from the tail, so an incomplete
+#      erase can only ever leave `<payload><nonce-prefix>` in the composer -
+#      and every such leftover, down to a single character, still has the
+#      nonce's FIRST character sitting immediately after the payload. So the
+#      test is whether that two-part boundary string appears more often than it
+#      did before the send. Testing the whole suffix instead would miss this
+#      completely: dropping one character from the tail already destroys the
+#      full-length string, so its absence proves nothing.
+#   B) NO PAYLOAD LOSS. The payload's own count is unchanged from the
+#      just-typed capture. An over-erase consumes the payload's last characters
+#      and drops that count. Because the nonce shares no character with the
+#      payload (see fm_composer_envelope_nonce), removing the nonce cannot move
+#      this count on its own - which is what makes an unchanged count
+#      meaningful rather than merely likely.
+#
+# Both are counts, both are compared against a capture taken in the same send,
+# and both fail toward refusal - so the worst outcome of screen churn here is a
+# typed-unproven a human settles, never a silent partial send.
+fm_composer_envelope_erase_verdict() {  # <before> <after-typed> <after-erased> <payload> <nonce>
+  local before=$1 typed=$2 erased=$3 payload=$4 nonce=$5
+  local payload_norm probe before_joined typed_joined erased_joined cb ce pt pe
+  payload_norm=$(fm_composer_delta_rows "$payload" | LC_ALL=C tr -d '\n')
+  if [ -z "$payload_norm" ] || [ -z "$nonce" ]; then
+    printf 'not-accepted:envelope-erase-unverifiable'
+    return 1
+  fi
+  probe="$payload_norm${nonce:0:1}"
+  before_joined=$(fm_composer_delta_rows "$before" | LC_ALL=C tr -d '\n')
+  typed_joined=$(fm_composer_delta_rows "$typed" | LC_ALL=C tr -d '\n')
+  erased_joined=$(fm_composer_delta_rows "$erased" | LC_ALL=C tr -d '\n')
+  cb=$(fm_composer_count_occurrences "$before_joined" "$probe")
+  ce=$(fm_composer_count_occurrences "$erased_joined" "$probe")
+  if [ "$ce" -gt "$cb" ]; then
+    printf 'not-accepted:envelope-not-erased(before=%s after-erase=%s)' "$cb" "$ce"
+    return 1
+  fi
+  pt=$(fm_composer_count_occurrences "$typed_joined" "$payload_norm")
+  pe=$(fm_composer_count_occurrences "$erased_joined" "$payload_norm")
+  if [ "$pe" -ne "$pt" ]; then
+    printf 'not-accepted:envelope-erase-consumed-payload(typed=%s after-erase=%s)' "$pt" "$pe"
+    return 1
+  fi
+  printf 'accepted'
+}
+
+# fm_composer_typed_delivery_core: the ONE pre-Enter type-and-prove sequence,
+# shared by every backend and parameterised by that adapter's three primitives.
+# The caller supplies function NAMES, exactly as fm_composer_submit_retry_core
+# does, so no backend re-implements the ordering, the capture pairing, or the
+# distinction between a failure before and after the keystrokes went out.
+#
+#   <capture-fn> <target> [label]        -> the whole visible pane
+#   <literal-fn> <target> <text> [label] -> type text, no Enter
+#   <erase-fn>   <target> [label]        -> erase ONE character, or the literal
+#                                           `-` when the backend has none
+#
+# On proven delivery it prints nothing and returns 0; the caller may then send
+# Enter. Otherwise it prints ONE verdict token and returns 1, and the caller
+# must echo that token and send no Enter:
+#   send-failed     nothing was typed
+#   gated           a modal was in the way; nothing was typed
+#   typed-unproven  text WAS typed and could not be proven; never retype
+#   not-accepted:*  the pane did not show what was typed
+#
+# A backend with no erase primitive refuses a short payload BEFORE typing
+# anything, so it can never strand an envelope it has no way to remove.
+fm_composer_typed_delivery_core() {  # <capture-fn> <literal-fn> <erase-fn> <target> <text> <settle> [label]
+  local cap_fn=$1 lit_fn=$2 erase_fn=$3 target=$4 text=$5 settle=$6 label=${7:-}
+  local before typed erased verdict wire nonce erase_n i
+  before=$("$cap_fn" "$target" "$label") || { printf 'send-failed'; return 1; }
+  if ! verdict=$(fm_composer_pre_type_ok "$before"); then
+    printf '%s' "$verdict"
+    return 1
+  fi
+  if ! fm_composer_envelope_prepare "$text"; then
+    printf 'not-accepted:payload-not-provable'
+    return 1
+  fi
+  wire=$FM_COMPOSER_ENVELOPE_WIRE
+  nonce=$FM_COMPOSER_ENVELOPE_NONCE
+  erase_n=$FM_COMPOSER_ENVELOPE_ERASE
+  if [ "$erase_n" -gt 0 ] && [ "$erase_fn" = - ]; then
+    printf 'not-accepted:short-payload-needs-erase-unsupported-by-backend(erase=%s)' "$erase_n"
+    return 1
+  fi
+  "$lit_fn" "$target" "$wire" "$label" || { printf 'send-failed'; return 1; }
+  sleep "$settle"
+  typed=$("$cap_fn" "$target" "$label") || { printf 'typed-unproven'; return 1; }
+  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$typed" "$wire"); then
+    printf '%s' "$verdict"
+    return 1
+  fi
+  [ "$erase_n" -gt 0 ] || return 0
+  i=0
+  while [ "$i" -lt "$erase_n" ]; do
+    if ! "$erase_fn" "$target" "$label"; then
+      fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the erase keystroke was refused'
+      printf 'typed-unproven'
+      return 1
+    fi
+    i=$((i + 1))
+  done
+  sleep "$settle"
+  erased=$("$cap_fn" "$target" "$label") || {
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" 'the pane could not be captured after the erase'
+    printf 'typed-unproven'
+    return 1
+  }
+  if ! verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" "$text" "$nonce"); then
+    fm_composer_envelope_strand_note "$target" "$wire" "$erase_n" "$verdict"
+    printf 'typed-unproven'
+    return 1
+  fi
+  return 0
+}
+
+# fm_composer_envelope_strand_note: say on stderr exactly what may still be
+# sitting in the composer, because the verdict token alone cannot carry it. The
+# operator settling a typed-unproven request needs the literal text to look for
+# and the number of characters to remove; without them "inspect the pane" is
+# not an actionable instruction.
+fm_composer_envelope_strand_note() {  # <target> <wire> <erase-count> <why>
+  printf 'warning: %s at %s; the composer may still hold the verification suffix. Expected text: %s (the last %s characters are the suffix and are NOT part of the message). Clear the composer before sending anything else.\n' \
+    "$4" "$1" "$2" "$3" >&2
 }
 
 # fm_composer_screen_is_gated: 0 when <screen> is a modal/gated prompt rather

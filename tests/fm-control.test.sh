@@ -63,14 +63,16 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
 #            classifier's input (bin/backends/tmux.sh).
 #   cwd      the pane's current path.
 #   literal  every `send-keys -l` payload, one per line - exactly what was
-#            typed into the composer.
+#            typed into the composer, including any verification suffix.
+#   submitted what the composer held at each Enter - what the agent RECEIVES,
+#            which is the raw payload with that suffix erased again.
 #   keys     every named key send, one per line.
 #   pane     optional capture-pane override, for an adapter whose busy verdict
 #            is read from the rendered tail.
-# Two transitions make it a lifecycle model rather than a recorder: a literal
-# that is the harness's exit command flips `command` to a shell (the agent
-# stopped), and a literal carrying a launch brief flips it to the value in
-# `becomes` (a new agent came up). FM_FAKE_NEVER_DIES suppresses the first, so
+# Two transitions make it a lifecycle model rather than a recorder: a SUBMITTED
+# exit command flips `command` to a shell (the agent stopped), and a literal
+# carrying a launch brief flips it to the value in `becomes` (a new agent came
+# up). FM_FAKE_NEVER_DIES suppresses the first, so
 # a stubborn agent can be tested too.
 make_tmux_stub() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
@@ -95,16 +97,26 @@ case "\${1:-}" in
     if [ "\$literal" = 1 ]; then
       printf '%s\\n' "\$payload" >> "\$D/literal"
       fm_test_tmux_note_literal "\$payload"
-      if [ -z "\${FM_FAKE_NEVER_DIES:-}" ] \
-         && { [ "\$payload" = /exit ] || [ "\$payload" = /quit ]; }; then
-        printf 'zsh' > "\$D/command"
-      fi
       case "\$payload" in
         *'encode launch-brief'*) cat "\$D/becomes" > "\$D/command" ;;
       esac
     else
       printf '%s\\n' "\$payload" >> "\$D/keys"
-      [ "\$payload" = Enter ] && fm_test_tmux_note_enter
+      [ "\$payload" = BSpace ] && fm_test_tmux_note_erase
+      if [ "\$payload" = Enter ]; then
+        submitted=\$(cat "\$(fm_test_composer_typed_path)" 2>/dev/null || true)
+        fm_test_tmux_note_enter
+        printf '%s\\n' "\$submitted" >> "\$D/submitted"
+        # A command only takes effect when it is SUBMITTED, so the agent-stops
+        # transition reads the composer at Enter time rather than the raw type
+        # log: a short command is typed with a verification suffix that is
+        # erased again before Enter, and only the submitted form is what the
+        # agent ever sees.
+        if [ -z "\${FM_FAKE_NEVER_DIES:-}" ] \
+           && { [ "\$submitted" = /exit ] || [ "\$submitted" = /quit ]; }; then
+          printf 'zsh' > "\$D/command"
+        fi
+      fi
       if [ -n "\${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
          && { [ "\$payload" = Escape ] || [ "\$payload" = C-c ]; }; then
         printf 'zsh' > "\$D/command"
@@ -159,6 +171,7 @@ new_case() {
   local dir="$TMP_ROOT/$1-$RANDOM"
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/fake"
   : > "$dir/fake/literal"
+  : > "$dir/fake/submitted"
   : > "$dir/fake/keys"
   printf 'zsh' > "$dir/fake/command"
   printf 'claude' > "$dir/fake/becomes"
@@ -215,10 +228,19 @@ literals() {  # <case-dir>
   cat "$1/fake/literal"
 }
 
+# What the agent actually received: the composer's content at Enter, with any
+# verification suffix already erased.
+submitted() {  # <case-dir>
+  cat "$1/fake/submitted" 2>/dev/null
+}
+
 # Every named key EXCEPT Enter, which is submission mechanics shared with every
 # text send rather than a control-plane key.
+# The LIFECYCLE keys only. Enter and BSpace are part of typing a message - the
+# submit and the erase of the pre-Enter proof's verification suffix - not
+# control actions, so they are filtered out here.
 keys_sent() {  # <case-dir>
-  grep -v '^Enter$' "$1/fake/keys" || true
+  grep -Ev '^(Enter|BSpace)$' "$1/fake/keys" || true
 }
 
 # --- 1. adapter contract across every verified harness -----------------------
@@ -236,8 +258,8 @@ test_exit_types_each_harness_verified_command() {
     out=$(run_control "$dir" t1 exit); rc=$?
     expect_code 0 "$rc" "exit on $harness should succeed"$'\n'"$out"
     IFS=$'\t' read -r expected key repeat clear <<< "$(verified_adapter_contract "$harness")"
-    [ "$(literals "$dir")" = "$expected" ] \
-      || fail "exit on $harness should type exactly '$expected', got: $(literals "$dir")"
+    [ "$(submitted "$dir")" = "$expected" ] \
+      || fail "exit on $harness should submit exactly '$expected', got: $(submitted "$dir")"
     assert_contains "$out" "stopped t1 harness=$harness" "exit should report the stop for $harness"
   done
   pass "fm-control exit: every verified harness gets its own verified exit command"
@@ -308,7 +330,7 @@ test_prefixed_recorded_harness_reaches_each_control_verb() {
   alive_as "$dir" grok-2
   out=$(run_control "$dir" t1 exit); rc=$?
   expect_code 0 "$rc" "exit should resolve a prefixed recorded harness"$'\n'"$out"
-  [ "$(literals "$dir")" = /exit ] \
+  [ "$(submitted "$dir")" = /exit ] \
     || fail "a grok-prefixed task should receive grok's exit command"
   assert_contains "$out" "stopped t1 harness=grok" \
     "exit should report the verified adapter that supplied its mechanics"
@@ -683,7 +705,7 @@ test_busy_agent_is_interrupted_before_the_exit_command() {
   expect_code 0 "$rc" "exiting a busy agent should succeed"$'\n'"$out"
   [ "$(keys_sent "$dir")" = "Escape" ] \
     || fail "a busy agent should be interrupted once before its exit command, got: $(keys_sent "$dir")"
-  [ "$(literals "$dir")" = "/exit" ] || fail "the exit command should follow the interrupt"
+  [ "$(submitted "$dir")" = "/exit" ] || fail "the exit command should follow the interrupt"
   pass "fm-control exit: a busy agent receives interrupt delivery before the exit command"
 }
 
@@ -698,7 +720,7 @@ test_idle_agent_is_not_interrupted() {
   expect_code 0 "$rc" "exiting an idle agent should succeed"$'\n'"$out"
   [ -z "$(keys_sent "$dir")" ] \
     || fail "an idle agent needs no interrupt, got keys: $(keys_sent "$dir")"
-  [ "$(literals "$dir")" = "/exit" ] || fail "the exit command should still be sent"
+  [ "$(submitted "$dir")" = "/exit" ] || fail "the exit command should still be sent"
   pass "fm-control exit: an idle agent goes straight to its exit command"
 }
 
@@ -802,7 +824,7 @@ test_agent_that_does_not_stop_fails_closed() {
     "the failure must not deny the lifecycle input that was delivered"
   [ "$(keys_sent "$dir")" = Escape ] \
     || fail "a stubborn busy agent should receive its interrupt sequence"
-  [ "$(literals "$dir")" = /exit ] \
+  [ "$(submitted "$dir")" = /exit ] \
     || fail "a stubborn busy agent should receive its exit command"
   pass "fm-control exit: a stubborn agent reports delivered input and an unconfirmed exit"
 }
@@ -831,7 +853,13 @@ test_exit_rejects_pre_enter_refusals_immediately() {
   expect_code 1 "$rc" "an unproven exit command should fail before Enter"$'\n'"$out"
   assert_contains "$out" "(not-accepted:" "the exit refusal should preserve the delta verdict"
   assert_not_contains "$out" "exit-delivered" "an unproven command must not be reported delivered"
-  [ "$(literals "$dir")" = /exit ] || fail "the delta refusal should occur after typing the exit command"
+  # Typed, never submitted: the refusal lands before Enter. The raw type log is
+  # what proves the command went out, and it carries the verification suffix
+  # the short command was typed with, so this matches its head.
+  case "$(literals "$dir")" in
+    /exit*) ;;
+    *) fail "the delta refusal should occur after typing the exit command, got: $(literals "$dir")" ;;
+  esac
   if grep -qx Enter "$dir/fake/keys"; then
     fail "an unproven exit must send no Enter"
   fi
@@ -843,7 +871,14 @@ test_exit_rejects_pre_enter_refusals_immediately() {
   expect_code 1 "$rc" "an after-type capture failure should fail before Enter"$'\n'"$out"
   assert_contains "$out" "(typed-unproven)" "the exit refusal should preserve the typed stage"
   assert_not_contains "$out" "exit-command=delivered" "typed but unproven input must not be reported delivered"
-  [ "$(literals "$dir")" = /exit ] || fail "the exit command should have been typed exactly once"
+  # Typed once and never submitted: the capture failed after the write, so the
+  # command carries its verification suffix and no Enter followed.
+  [ "$(wc -l < "$dir/fake/literal")" -eq 1 ] \
+    || fail "the exit command should have been typed exactly once, got: $(literals "$dir")"
+  case "$(literals "$dir")" in
+    /exit*) ;;
+    *) fail "the single write should have been the exit command, got: $(literals "$dir")" ;;
+  esac
   if grep -qx Enter "$dir/fake/keys"; then
     fail "typed but unproven exit input must send no Enter"
   fi
@@ -890,8 +925,17 @@ test_secondmate_control_command_carries_no_marker() {
   out=$(run_control "$dir" domain exit); rc=$?
   expect_code 0 "$rc" "exiting a secondmate's agent should succeed"$'\n'"$out"
   typed=$(literals "$dir")
-  [ "$typed" = "/exit" ] \
-    || fail "a secondmate control command must be the bare exit command, got: $typed"
+  # The property under test is that no routing marker is prefixed onto a
+  # lifecycle command. The typed form may carry the pre-Enter proof's
+  # verification suffix, which is erased again before Enter - so the marker
+  # check reads the head of what was typed, and the exact command is read from
+  # what was actually submitted.
+  case "$typed" in
+    /exit*) ;;
+    *) fail "a secondmate control command must be typed with no marker prefix, got: $typed" ;;
+  esac
+  [ "$(submitted "$dir")" = "/exit" ] \
+    || fail "a secondmate control command must submit the bare exit command, got: $(submitted "$dir")"
   case "$typed" in
     *"$FM_FROMFIRST_MARK"*) fail "a control command must never carry the from-firstmate marker" ;;
   esac

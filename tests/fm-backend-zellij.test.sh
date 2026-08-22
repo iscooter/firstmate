@@ -1069,8 +1069,13 @@ test_send_text_submit_rejects_furniture_match_after_noop_paste() {
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_submit firstmate:7 "high" 2 0.01 0.01' "$ROOT" )
+  # The paste was a no-op, so nothing this send typed ever appeared. The pane's
+  # own footer already reads `high`, and under a proof that tested the bare
+  # payload that furniture would have stood in for our write; the verification
+  # suffix the short steer is typed with cannot be furniture, so the refusal is
+  # unambiguous.
   case "$out" in
-    not-accepted:payload-too-short*) ;;
+    not-accepted:absent-from-added*) ;;
     *) fail "footer furniture matching a short steer must not prove typing, got '$out'" ;;
   esac
   assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \

@@ -379,6 +379,46 @@ fm_pending_reply_mark_delivered() {  # <state-dir> <corr_id> [confirmed-epoch]
   return 0
 }
 
+# --- operator resolution of a typed-unproven record -------------------------
+#
+# A typed_unproven record means the text WAS typed but the pane could not be
+# captured to prove it, so Enter was never sent. Only a human looking at the
+# pane can settle it, and until they do the record must not be guessed either
+# way: discarding it would lose the durable full-payload recovery for a request
+# that may well have landed, and marking it delivered would arm a reply
+# expectation for one that never did.
+#
+# These are the two supported transitions out, and bin/fm-send.sh names them
+# with the concrete correlation id in the diagnostic that creates the state, so
+# the operator is never left holding a record with no way to close it and
+# teardown is never blocked indefinitely.
+#
+# Both are strict: they act ONLY on a record still in typed_unproven, so a
+# stale copy of the diagnostic cannot disturb a request that has since resolved
+# on its own.
+
+# The operator verified the complete text was present and submitted it: the
+# request is delivered, so the ordinary reply-and-recovery machinery resumes.
+fm_pending_reply_confirm_typed() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec phase
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 1
+  phase=$(fm_pending_reply_get "$rec" phase)
+  [ "$phase" = typed_unproven ] || return 1
+  fm_pending_reply_mark_delivered "$state" "$corr"
+}
+
+# The operator verified the text never landed, or cleared it: nothing was
+# delivered, so the expectation is dropped and its stored body is purged.
+fm_pending_reply_abandon_typed() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec phase
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 1
+  phase=$(fm_pending_reply_get "$rec" phase)
+  [ "$phase" = typed_unproven ] || return 1
+  fm_pending_reply_discard_undelivered "$state" "$corr"
+}
+
 fm_pending_reply_delivery_confirmation_path() {  # <state-dir> <corr_id>
   printf '%s/.delivery-confirmed-%s' "$(fm_pending_reply_dir "$1")" "$2"
 }
@@ -1244,6 +1284,12 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
     case "$phase" in
       delivery_unknown) fm_pending_reply_maybe_escalate "$state" "$corr" 2>/dev/null || true ;;
       escalated) fm_pending_reply_try_resolve "$state" "$corr" >/dev/null 2>&1 || true ;;
+      # A typed_unproven record needs a human to look at the pane, so it must
+      # not sit here silently: escalate it on the ordinary grace cadence so the
+      # operator is told to settle it with the confirm/abandon transitions
+      # above. Without this it would be invisible to the watcher and would
+      # block teardown forever.
+      typed_unproven) fm_pending_reply_maybe_escalate "$state" "$corr" 2>/dev/null || true ;;
     esac
     return 0
   fi

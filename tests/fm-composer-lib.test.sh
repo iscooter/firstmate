@@ -792,6 +792,10 @@ test_delta_verdict_fails_loud_on_an_empty_payload() {
 # The payload's own characters are normalized exactly like the screen's, so a
 # steer that itself contains box glyphs or exotic whitespace needs no special
 # case on either side.
+# A short payload carries too little entropy to prove itself: `2` appears in a
+# newly drawn row of a live agent pane constantly. It gets no weaker test - the
+# anchor minimum still refuses it outright, and the envelope below is what
+# makes short steers work.
 test_delta_verdict_refuses_short_collision_anchor() {
   local verdict
   verdict=$(fm_composer_delivery_delta_verdict '' '1' '1') \
@@ -801,6 +805,286 @@ test_delta_verdict_refuses_short_collision_anchor() {
     *) fail "a short payload must fail loudly with its uniqueness requirement, got '$verdict'" ;;
   esac
   pass "fm_composer_delivery_delta_verdict: short collision anchors are refused"
+}
+
+# The envelope is what lets a one-character steer reach the proof above with a
+# full-length anchor, instead of being refused or given a weaker test.
+test_envelope_gives_a_short_payload_a_full_length_anchor() {
+  local wire_a erase_a wire_b norm i ch
+  fm_composer_envelope_prepare '2' || fail "a short payload must be envelopable"
+  wire_a=$FM_COMPOSER_ENVELOPE_WIRE
+  erase_a=$FM_COMPOSER_ENVELOPE_ERASE
+
+  # The wire carries the payload, unaltered, at its head.
+  case "$wire_a" in
+    2*) ;;
+    *) fail "the wire must start with the payload itself, got '$wire_a'" ;;
+  esac
+  # ... and exactly enough entropy after it to clear the anchor minimum.
+  norm=$(fm_composer_delta_rows "$wire_a" | tr -d '\n')
+  [ "${#norm}" -eq "$FM_COMPOSER_DELTA_ANCHOR_MIN" ] \
+    || fail "the wire must normalize to exactly the anchor minimum, got ${#norm}"
+  [ "$erase_a" -eq "$((FM_COMPOSER_DELTA_ANCHOR_MIN - 1))" ] \
+    || fail "the erase count must be exactly the suffix length, got '$erase_a'"
+  fm_composer_payload_tail_anchor "$wire_a" >/dev/null \
+    || fail "the wire must yield a usable anchor where the bare payload could not"
+
+  # No payload character may appear in the suffix. That exclusion is what makes
+  # the erase proof decidable, so it is asserted rather than assumed.
+  i=1
+  while [ "$i" -lt "${#wire_a}" ]; do
+    ch=${wire_a:i:1}
+    [ "$ch" != 2 ] || fail "the suffix must not contain a payload character, got '$wire_a'"
+    i=$((i + 1))
+  done
+  [ "$FM_COMPOSER_ENVELOPE_NONCE" = "${wire_a:1}" ] \
+    || fail "the published suffix must be exactly the wire's tail past the payload"
+
+  # A fresh suffix per send: a reused one would be screen content a later send
+  # could match against.
+  fm_composer_envelope_prepare '2' || fail "second prepare failed"
+  wire_b=$FM_COMPOSER_ENVELOPE_WIRE
+  [ "$wire_a" != "$wire_b" ] || fail "the verification suffix must be fresh per send, got '$wire_a' twice"
+  pass "fm_composer_envelope_prepare: a short payload gets a fresh full-length anchor and an exact erase count"
+}
+
+# The ordinary long steer must pay nothing for this: no suffix, no erase, and
+# the wire byte-identical to the payload including whitespace the anchor
+# normalization would have dropped.
+test_envelope_leaves_a_self_proving_payload_alone() {
+  fm_composer_envelope_prepare "$DELTA_PAYLOAD" || fail "a long payload must prepare cleanly"
+  [ "$FM_COMPOSER_ENVELOPE_ERASE" -eq 0 ] \
+    || fail "a self-proving payload must need no erase, got '$FM_COMPOSER_ENVELOPE_ERASE'"
+  [ "$FM_COMPOSER_ENVELOPE_WIRE" = "$DELTA_PAYLOAD" ] \
+    || fail "a self-proving payload must be typed exactly as given"
+  fm_composer_envelope_prepare "$DELTA_PAYLOAD"$'  \n' || fail "trailing whitespace must still prepare"
+  [ "$FM_COMPOSER_ENVELOPE_WIRE" = "$DELTA_PAYLOAD"$'  \n' ] \
+    || fail "the wire must preserve trailing whitespace the caller meant to type"
+  pass "fm_composer_envelope_prepare: a self-proving payload is typed verbatim with no envelope"
+}
+
+# Erasing across a row boundary is a line-join on some composers and a no-op on
+# others, so a short multi-row payload is refused rather than guessed at. No
+# real steer is both multi-row and this short.
+test_envelope_refuses_a_short_multi_row_payload() {
+  fm_composer_envelope_prepare $'a\nb' \
+    && fail "a short multi-row payload must not be envelopable"
+  fm_composer_envelope_prepare '   ' \
+    && fail "a payload that normalizes to nothing must not be envelopable"
+  pass "fm_composer_envelope_prepare: an unerasable short payload is refused, not guessed at"
+}
+
+# The erase proof's two halves fail in different directions, so both are pinned:
+# an under-erase leaves the suffix behind, and an over-erase eats the payload.
+test_envelope_erase_verdict_pins_both_directions() {
+  local before typed erased verdict wire nonce
+  before='idle pane'
+  fm_composer_envelope_prepare 'ok' || fail "prepare failed"
+  wire=$FM_COMPOSER_ENVELOPE_WIRE
+  nonce=$FM_COMPOSER_ENVELOPE_NONCE
+  typed="idle pane
+> $wire"
+
+  # Clean erase: the suffix is gone and the payload survives.
+  erased='idle pane
+> ok'
+  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+    || fail "a clean erase must be accepted, got '$verdict'"
+
+  # Under-erase, and deliberately the HARDEST one: all but a single suffix
+  # character is gone, so the full-length suffix no longer appears anywhere on
+  # screen. A check that looked for the whole suffix would pass this and let
+  # Enter send a character of noise to the agent.
+  erased="idle pane
+> ok${nonce:0:1}"
+  assert_not_contains "$erased" "$nonce" \
+    "this case is only meaningful while the whole suffix is absent from the screen"
+  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+    && fail "a single leftover suffix character must not be accepted"
+  case "$verdict" in
+    not-accepted:envelope-not-erased*) ;;
+    *) fail "an under-erase must name itself, got '$verdict'" ;;
+  esac
+
+  # A larger leftover refuses for the same reason.
+  erased="idle pane
+> ok${nonce:0:5}"
+  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+    && fail "a partial suffix must not be accepted"
+
+  # Over-erase: the suffix went, and took the payload's tail with it. This is
+  # the silent partial send the whole design exists to prevent.
+  erased='idle pane
+> o'
+  verdict=$(fm_composer_envelope_erase_verdict "$before" "$typed" "$erased" 'ok' "$nonce") \
+    && fail "an erase that consumed the payload must not be accepted"
+  case "$verdict" in
+    not-accepted:envelope-erase-consumed-payload*) ;;
+    *) fail "an over-erase must name itself, got '$verdict'" ;;
+  esac
+  pass "fm_composer_envelope_erase_verdict: a single leftover suffix character and an over-erase are both refused by name"
+}
+
+# --- the shared type-and-prove core, driven through a real pane simulator ----
+#
+# These exercise fm_composer_typed_delivery_core the way an adapter does, with
+# three primitives over a file standing in for the composer. The simulator has
+# no shape at all, so nothing here can pass by matching a fixture's borders.
+
+# COMPOSER_FILE holds what the pane's composer currently contains; MODE selects
+# how the simulated pane behaves.
+sim_capture() {
+  # A modal pane draws no composer at all - that is what makes it a modal - so
+  # the gated mode renders the dialog alone rather than under a prompt row.
+  if [ "$SIM_MODE" = gated ]; then
+    printf '%s' "$SIM_SCROLLBACK"
+    return 0
+  fi
+  printf '%s\n%s' "$SIM_SCROLLBACK" "> $(cat "$SIM_FILE")"
+}
+sim_literal() {
+  case "$SIM_MODE" in
+    swallow) return 0 ;;
+    write-fails) return 1 ;;
+  esac
+  printf '%s' "$2" >> "$SIM_FILE"
+}
+sim_erase() {
+  local cur take=1 keep
+  case "$SIM_MODE" in
+    erase-fails) return 1 ;;
+    erase-noop) return 0 ;;
+    erase-greedy) take=2 ;;
+  esac
+  cur=$(cat "$SIM_FILE")
+  keep=$((${#cur} - take))
+  [ "$keep" -ge 0 ] || keep=0
+  printf '%s' "${cur:0:keep}" > "$SIM_FILE"
+}
+
+sim_reset() {  # <mode> [scrollback]
+  SIM_MODE=$1
+  SIM_SCROLLBACK=${2:-'agent idle'}
+  SIM_FILE="$SIM_DIR/composer"
+  : > "$SIM_FILE"
+}
+
+sim_send() {  # <text> -> the core's verdict on stdout, its return code preserved
+  fm_composer_typed_delivery_core sim_capture sim_literal sim_erase pane "$1" 0
+}
+
+# The case that must not regress: a one-character steer into a healthy pane is
+# DELIVERED, and the composer is left holding exactly the payload - no
+# verification suffix reaches the agent.
+test_core_delivers_a_short_steer_and_leaves_no_residue() {
+  local verdict
+  sim_reset healthy
+  verdict=$(sim_send '2') || fail "a short steer into a healthy pane must be proven, got '$verdict'"
+  [ -z "$verdict" ] || fail "a proven delivery prints no verdict, got '$verdict'"
+  [ "$(cat "$SIM_FILE")" = '2' ] \
+    || fail "the composer must hold exactly the payload before Enter, got '$(cat "$SIM_FILE")'"
+  pass "fm_composer_typed_delivery_core: a short steer is proven and leaves only the payload in the composer"
+}
+
+# A long steer takes the same path with no envelope at all, so the common case
+# keeps costing one write and one capture.
+test_core_delivers_a_self_proving_steer_untouched() {
+  local verdict
+  sim_reset healthy
+  verdict=$(sim_send "$DELTA_PAYLOAD") || fail "a long steer must be proven, got '$verdict'"
+  [ "$(cat "$SIM_FILE")" = "$DELTA_PAYLOAD" ] \
+    || fail "a self-proving steer must be typed verbatim"
+  pass "fm_composer_typed_delivery_core: a self-proving steer is delivered with no envelope"
+}
+
+# A pane that swallowed the keystrokes shows no delta, so no Enter may follow.
+# This is the round-1 false delivery, and it must refuse for BOTH lengths.
+test_core_refuses_a_swallowed_send() {
+  local verdict
+  sim_reset swallow
+  verdict=$(sim_send '2') && fail "a swallowed short steer must not be proven"
+  case "$verdict" in
+    not-accepted:*) ;;
+    *) fail "a swallowed send must refuse with a named reason, got '$verdict'" ;;
+  esac
+  sim_reset swallow
+  verdict=$(sim_send "$DELTA_PAYLOAD") && fail "a swallowed long steer must not be proven"
+  pass "fm_composer_typed_delivery_core: a pane that swallowed the write is refused at both payload lengths"
+}
+
+# The round-1 false pass: the payload is already on screen from an earlier
+# send, and the write goes nowhere. Novelty alone could be fooled; the
+# occurrence count cannot, because a pre-existing copy cannot raise it.
+test_core_refuses_a_scrollback_copy_of_the_payload() {
+  local verdict
+  sim_reset swallow "agent idle
+$DELTA_PAYLOAD"
+  verdict=$(sim_send "$DELTA_PAYLOAD") \
+    && fail "a scrollback copy of the payload must not prove a new delivery"
+  case "$verdict" in
+    not-accepted:*) ;;
+    *) fail "the scrollback case must refuse with a named reason, got '$verdict'" ;;
+  esac
+  pass "fm_composer_typed_delivery_core: an earlier copy of the payload on screen proves nothing"
+}
+
+# A modal is refused BEFORE anything is typed, so a swallowing dialog never
+# receives keystrokes that act as control input on its numbered list.
+test_core_refuses_a_gated_pane_without_typing() {
+  local verdict
+  sim_reset gated "Do you trust the files in this folder?
+  1. Yes, proceed
+  2. No, exit
+Enter to confirm"
+  verdict=$(sim_send '2') && fail "a gated pane must refuse"
+  [ "$verdict" = gated ] || fail "the gate must name itself, got '$verdict'"
+  [ -z "$(cat "$SIM_FILE")" ] || fail "a gated pane must receive no keystrokes at all"
+  pass "fm_composer_typed_delivery_core: a gated modal is refused before anything is typed"
+}
+
+# A backend with no erase primitive cannot take a suffix back off, so it must
+# refuse a short payload before typing rather than strand one. A long payload
+# needs no erase and still works there.
+test_core_refuses_a_short_steer_when_the_backend_cannot_erase() {
+  local verdict
+  sim_reset healthy
+  verdict=$(fm_composer_typed_delivery_core sim_capture sim_literal - pane '2' 0) \
+    && fail "a backend with no erase primitive must refuse a short steer"
+  case "$verdict" in
+    not-accepted:short-payload-needs-erase-unsupported-by-backend*) ;;
+    *) fail "the refusal must name the missing capability, got '$verdict'" ;;
+  esac
+  [ -z "$(cat "$SIM_FILE")" ] || fail "nothing may be typed when the suffix could not be removed"
+  verdict=$(fm_composer_typed_delivery_core sim_capture sim_literal - pane "$DELTA_PAYLOAD" 0) \
+    || fail "a self-proving steer needs no erase and must still work, got '$verdict'"
+  pass "fm_composer_typed_delivery_core: no erase primitive refuses short steers before typing, long steers still work"
+}
+
+# When the erase does not happen, the text WAS typed. That is typed-unproven -
+# never retype - and it must never be reported as a refusal that implies
+# nothing went out.
+test_core_reports_a_failed_erase_as_typed_unproven() {
+  local verdict mode
+  for mode in erase-fails erase-noop erase-greedy; do
+    sim_reset "$mode"
+    verdict=$(sim_send '2' 2>/dev/null) && fail "a broken erase ($mode) must not be proven"
+    [ "$verdict" = typed-unproven ] \
+      || fail "a broken erase ($mode) must report typed-unproven, got '$verdict'"
+  done
+  pass "fm_composer_typed_delivery_core: every way the erase can fail reports typed-unproven, never a bare refusal"
+}
+
+# The operator settling a typed-unproven request needs the literal text to look
+# for; a verdict token alone cannot carry it.
+test_core_names_the_stranded_suffix_on_stderr() {
+  local err
+  sim_reset erase-noop
+  err=$(sim_send '2' 2>&1 >/dev/null)
+  assert_contains "$err" "$(cat "$SIM_FILE")" \
+    "the warning must quote the exact text left in the composer"
+  assert_contains "$err" 'NOT part of the message' \
+    "the warning must say which part of that text is the suffix"
+  pass "fm_composer_typed_delivery_core: a stranded suffix is named on stderr so it can be cleared"
 }
 
 test_delta_verdict_normalizes_payload_and_screen_identically() {
@@ -848,6 +1132,20 @@ test_partial_write_of_the_payload_is_refused
 test_shape_free_echo_is_accepted
 test_delta_verdict_fails_loud_on_an_empty_payload
 test_delta_verdict_refuses_short_collision_anchor
+test_envelope_gives_a_short_payload_a_full_length_anchor
+test_envelope_leaves_a_self_proving_payload_alone
+test_envelope_refuses_a_short_multi_row_payload
+test_envelope_erase_verdict_pins_both_directions
+SIM_DIR=$(mktemp -d)
+trap 'rm -rf "$SIM_DIR"' EXIT
+test_core_delivers_a_short_steer_and_leaves_no_residue
+test_core_delivers_a_self_proving_steer_untouched
+test_core_refuses_a_swallowed_send
+test_core_refuses_a_scrollback_copy_of_the_payload
+test_core_refuses_a_gated_pane_without_typing
+test_core_refuses_a_short_steer_when_the_backend_cannot_erase
+test_core_reports_a_failed_erase_as_typed_unproven
+test_core_names_the_stranded_suffix_on_stderr
 test_delta_verdict_normalizes_payload_and_screen_identically
 
 # A single-row composer that horizontally SCROLLS shows only a window of its

@@ -454,6 +454,11 @@ fm_backend_zellij_normalize_key() {  # <key>
     # C-u clears a composer line. fm-send.sh's muse interrupt path needs it to
     # drop the prompt muse restores into the composer after Escape.
     C-u|c-u|ctrl+u|Ctrl+u|Ctrl+U|'Ctrl u'|'ctrl u') printf 'Ctrl u' ;;
+    # One character off the composer tail, for the shared pre-Enter proof's
+    # envelope erase. Verified empirically at 0.44.0: "Backspace" and
+    # "backspace" both remove exactly one character; tmux's "BSpace" is
+    # REJECTED here ("Invalid key"), which is why this mapping exists.
+    BSpace|bspace|Backspace|backspace) printf 'Backspace' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -562,18 +567,17 @@ fm_backend_zellij_composer_state() {  # <target> [expected-label] -> empty|pendi
 # region-parsing failure that owner was built to end: it is replaced by the
 # shared delta verdict, so zellij proves delivery exactly the way tmux, herdr,
 # cmux, and orca do.
+# fm_backend_zellij_erase_one: one character off the composer tail, for the
+# shared pre-Enter proof's envelope erase.
+fm_backend_zellij_erase_one() {  # <target> [expected-label]
+  fm_backend_zellij_send_key "$1" Backspace "${2:-}"
+}
+
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after verdict
-  before=$(fm_backend_zellij_screen_capture "$target" "$expected_label") \
-    || { printf 'send-failed'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
-    return 0
-  fi
-  fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
-  sleep "$settle"
-  after=$(fm_backend_zellij_screen_capture "$target" "$expected_label") \
-    || { printf 'typed-unproven'; return 0; }
-  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} verdict
+  if ! verdict=$(fm_composer_typed_delivery_core \
+      fm_backend_zellij_screen_capture fm_backend_zellij_send_literal \
+      fm_backend_zellij_erase_one "$target" "$text" "$settle" "$expected_label"); then
     printf '%s' "$verdict"
     return 0
   fi

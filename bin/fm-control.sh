@@ -464,11 +464,17 @@ do_exit() {
   esac
   cmd=$(fm_control_exit_command "$HARNESS")
   # The submit verdict is NOT the postcondition here: a successful exit command
-  # destroys the composer the verdict is read from, so a post-exit read can
-  # legitimately report anything. A transport failure or pre-Enter refusal
-  # aborts; the authoritative post-Enter proof is the agent-state wait below. The retried Enter still
-  # matters, because a slash command opens a completion popup on some TUIs that
-  # swallows the first Enter.
+  # destroys the composer any screen proof would read, so a post-exit read can
+  # legitimately report anything. The authoritative proof is the agent-state
+  # wait below - the agent actually stopped - which no screen evidence can
+  # improve on. A transport failure or pre-Enter refusal still aborts, because
+  # those mean the command never went out at all.
+  #
+  # Every exit command is short (`/exit`, `/quit`), and it needs no exemption
+  # from the shared pre-Enter proof to work: the proof's verification envelope
+  # (bin/fm-composer-lib.sh) gives a short command a full-length anchor like
+  # any other payload. The retried Enter still matters, because a slash command
+  # opens a completion popup on some TUIs that swallows the first Enter.
   verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
     || die "the exit command could not be sent to task $ID on $BACKEND"
   case "$verdict" in

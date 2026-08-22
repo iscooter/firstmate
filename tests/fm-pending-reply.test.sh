@@ -1209,12 +1209,16 @@ test_create_falls_back_to_sha256sum() {
   state="$home/state"
   expected=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   (
+    # Both shadow builtins/binaries the library calls, so they are invoked
+    # indirectly by the code under test rather than from this file.
+    # shellcheck disable=SC2329
     command() {
       if [ "${1:-}" = -v ] && [ "${2:-}" = shasum ]; then
         return 1
       fi
       builtin command "$@"
     }
+    # shellcheck disable=SC2329
     sha256sum() {
       printf '%s  -\n' "$expected"
     }

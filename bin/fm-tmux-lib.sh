@@ -278,25 +278,34 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
   fm_composer_queued_enter_verdict "$state" "$busy_state"
 }
 
+# fm_tmux_composer_literal / fm_tmux_composer_erase_one: the two write halves
+# the shared pre-Enter core drives (bin/fm-composer-lib.sh,
+# fm_composer_typed_delivery_core). `BSpace` is tmux's own key name, so tmux
+# resolves it to whatever byte the pane expects instead of firstmate guessing
+# between BS and DEL - verified against a real pane to remove exactly one
+# character per key (docs/verification/runtime-backends.md).
+fm_tmux_composer_literal() {  # <target> <text>
+  tmux send-keys -t "$1" -l "$2" 2>/dev/null
+}
+
+fm_tmux_composer_erase_one() {  # <target>
+  tmux send-keys -t "$1" BSpace 2>/dev/null
+}
+
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state
-  local before after verdict
+  local verdict
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
   baseline_state=$(fm_pane_busy_state "$target")
   [ "$baseline_state" = idle ] && baseline_idle=1
-  # Capture, type, capture: the adapter's whole obligation to the pre-Enter
-  # proof. No capability descriptor, no cursor row, no identity probe - the
-  # shared delta verdict reads two whole captures and the payload.
-  before=$(fm_tmux_composer_capture "$target") || { printf 'send-failed'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
-    return 0
-  fi
-  tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
-  sleep "$settle"
-  after=$(fm_tmux_composer_capture "$target") || { printf 'typed-unproven'; return 0; }
-  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+  # Three primitives in, one verdict out: the adapter's whole obligation to the
+  # pre-Enter proof. No capability descriptor, no cursor row, no identity probe
+  # - the shared core reads whole captures and the payload.
+  if ! verdict=$(fm_composer_typed_delivery_core \
+      fm_tmux_composer_capture fm_tmux_composer_literal fm_tmux_composer_erase_one \
+      "$target" "$text" "$settle"); then
     printf '%s' "$verdict"
     return 0
   fi

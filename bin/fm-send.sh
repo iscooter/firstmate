@@ -7,6 +7,9 @@
 #   tmux window search, because a "successful" send to the wrong endpoint is
 #   worse than a loud failure.
 # Special keys instead of text: fm-send.sh <target> --key Enter
+# Settling a typed-unproven request (exit 4) once the pane has been inspected:
+#   fm-send.sh --typed-confirm <corr-id>   the text was present and submitted
+#   fm-send.sh --typed-abandon <corr-id>   the text never landed, or was cleared
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
 #
@@ -152,6 +155,41 @@ fi
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+
+# Settle a typed-unproven request before anything else, including the guard
+# banner and target resolution: these modes touch one durable record by
+# correlation id and send nothing at all, so there is no target to resolve and
+# no pane to warn about. They are the two supported exits from the state the
+# `typed-unproven` branch below creates, and that branch prints them verbatim
+# with the concrete id - see bin/fm-pending-reply-lib.sh for why only a human
+# can settle it.
+case "${1:-}" in
+  --typed-confirm|--typed-abandon)
+    fm_send_typed_mode=$1
+    [ $# -eq 2 ] || {
+      echo "error: $fm_send_typed_mode requires exactly one correlation id" >&2
+      exit 2
+    }
+    case "$2" in
+      [0-9A-Fa-f]*) ;;
+      *) echo "error: '$2' is not a correlation id" >&2; exit 2 ;;
+    esac
+    if [ "$fm_send_typed_mode" = --typed-confirm ]; then
+      fm_pending_reply_confirm_typed "$STATE" "$2" || {
+        echo "error: no typed-unproven request '$2' in $STATE; it may already have been settled, delivered, or resolved" >&2
+        exit 1
+      }
+      echo "fm-send: request $2 recorded as delivered; its reply is expected again and durable recovery is re-armed" >&2
+    else
+      fm_pending_reply_abandon_typed "$STATE" "$2" || {
+        echo "error: no typed-unproven request '$2' in $STATE; it may already have been settled, delivered, or resolved" >&2
+        exit 1
+      }
+      echo "fm-send: request $2 abandoned; no reply is expected and nothing blocks the task's cleanup" >&2
+    fi
+    exit 0
+    ;;
+esac
 
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -603,7 +641,7 @@ else
       send_rc=0
       REMOTE_DELIVERY_NOTICE=1
     elif [ "$send_rc" -eq 4 ]; then
-      verdict=typed-unproven
+      verdict='typed-unproven'
       send_rc=0
     else
       verdict=send-failed
@@ -664,7 +702,11 @@ else
       if [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_mark_typed_unproven "$STATE" "$PENDING_REPLY_CORR" || true
       fi
-      echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh and submit Enter only if the complete text is still present." >&2
+      if [ -n "$PENDING_REPLY_CORR" ]; then
+        echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh, then settle this request one way or the other so nothing is left waiting on it: if the complete text is present, submit Enter and run 'fm-send.sh --typed-confirm $PENDING_REPLY_CORR'; if it is not, clear the pane and run 'fm-send.sh --typed-abandon $PENDING_REPLY_CORR'." >&2
+      else
+        echo "error: text was typed at $T, but the pane could not be captured to prove it reached the composer (harness=${TARGET_HARNESS:-unknown}; backend=$TARGET_BACKEND). No Enter was sent. Do not retype or resend; inspect with fm-peek.sh and submit Enter only if the complete text is still present." >&2
+      fi
       exit 4
       ;;
     not-accepted|not-accepted:*)

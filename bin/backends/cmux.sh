@@ -491,6 +491,9 @@ fm_backend_cmux_normalize_key() {  # <key>
     # C-u clears a composer line. fm-send.sh's muse interrupt path needs it to
     # drop the prompt muse restores into the composer after Escape.
     C-u|c-u|ctrl+u|Ctrl+u|Ctrl+U|ctrl-u) printf 'ctrl-u' ;;
+    # One character off the composer tail, for the shared pre-Enter proof's
+    # envelope erase, in cmux's own lowercase key vocabulary.
+    BSpace|bspace|Backspace|backspace) printf 'backspace' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -559,6 +562,18 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
   printf '%s' "$verdict"
 }
 
+# fm_backend_cmux_delta_capture / fm_backend_cmux_erase_one: the capture and
+# erase halves the shared pre-Enter core drives, in the argument shape that
+# core expects (<target> [label]). cmux's own capture takes the line bound in
+# the middle, so this pins it to the delta window.
+fm_backend_cmux_delta_capture() {  # <target> [expected-label]
+  fm_backend_cmux_capture "$1" "$FM_COMPOSER_DELTA_LINES" "${2:-}"
+}
+
+fm_backend_cmux_erase_one() {  # <target> [expected-label]
+  fm_backend_cmux_send_key "$1" backspace "${2:-}"
+}
+
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,
 # unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
 # loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
@@ -566,18 +581,11 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
 # not-accepted:<why>, a subset of the proof-carrying submit vocabulary; the
 # last two are the shared pre-Enter refusals and mean no Enter was sent.
 fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} before after verdict
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} verdict
   fm_backend_cmux_parse_target "$target" || { printf 'unknown'; return 0; }
-  before=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_DELTA_LINES" "$expected_label") \
-    || { printf 'send-failed'; return 0; }
-  if ! fm_composer_pre_type_ok "$before"; then
-    return 0
-  fi
-  fm_backend_cmux_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
-  sleep "$settle"
-  after=$(fm_backend_cmux_capture "$target" "$FM_COMPOSER_DELTA_LINES" "$expected_label") \
-    || { printf 'typed-unproven'; return 0; }
-  if ! verdict=$(fm_composer_delivery_delta_verdict "$before" "$after" "$text"); then
+  if ! verdict=$(fm_composer_typed_delivery_core \
+      fm_backend_cmux_delta_capture fm_backend_cmux_send_literal \
+      fm_backend_cmux_erase_one "$target" "$text" "$settle" "$expected_label"); then
     printf '%s' "$verdict"
     return 0
   fi
