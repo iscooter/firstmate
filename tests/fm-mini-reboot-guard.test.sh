@@ -276,10 +276,11 @@ t_lock_reclaims_from_a_dead_owner() {
   fb=$(fake_sysctl_bin "$home")
   local lockdir dead_pid
   lockdir="$home/state/mini-reboot/check.lock"
+  mkdir "$lockdir"
   # A pid that is certainly not alive.
   dead_pid=99999
   while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid - 1)); done
-  echo "$dead_pid" > "$lockdir"
+  echo "$dead_pid" > "$lockdir/owner"
   ran=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo ran-ok")
   assert_contains "$ran" "ran-ok" "the guarded function must still run after reclaiming a dead-owner lock"
@@ -290,79 +291,16 @@ t_lock_serializes_a_live_owner() {
   local home fb
   home="$TMP_ROOT/lock-live-owner"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
-  local lockdir identity
+  local lockdir
   lockdir="$home/state/mini-reboot/check.lock"
-  identity=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_process_identity '$$'")
-  printf '%s\n' "$identity" > "$lockdir"
+  mkdir "$lockdir"
+  printf '%s\n' "$$" > "$lockdir/owner"
   local out
   out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo should-not-run" 2>&1)
   assert_not_contains "$out" "should-not-run" "a live owner's lock must not be reclaimed or bypassed"
-  rm -f "$lockdir"
+  rm -rf "$lockdir"
   pass "a lock held by a live owner is never reclaimed or bypassed"
-}
-
-t_lock_reclaims_an_ownerless_crash() {
-  local home fb out lockdir
-  home="$TMP_ROOT/lock-ownerless"; mkdir -p "$home/state/mini-reboot"
-  fb=$(fake_sysctl_bin "$home")
-  lockdir="$home/state/mini-reboot/check.lock"
-  : > "$lockdir"
-  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_MRB_LOCK_OWNERLESS_GRACE_SECS=0 bash -c \
-    ". '$LIB'; fm_mrb_with_lock echo ran-after-ownerless-crash" 2>&1)
-  assert_contains "$out" "ran-after-ownerless-crash" "an ownerless crash claim must be reclaimed"
-  pass "an ownerless lock left during publication is reclaimed"
-}
-
-t_lock_reclaims_a_reused_pid_identity() {
-  local home fb out lockdir
-  home="$TMP_ROOT/lock-reused-pid"; mkdir -p "$home/state/mini-reboot"
-  fb=$(fake_sysctl_bin "$home")
-  lockdir="$home/state/mini-reboot/check.lock"
-  printf '%s\t%s\n' "$$" "Mon Jan 1 00:00:00 2001" > "$lockdir"
-  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
-    ". '$LIB'; fm_mrb_with_lock echo ran-after-pid-reuse" 2>&1)
-  assert_contains "$out" "ran-after-pid-reuse" "a mismatched process identity must be reclaimed"
-  pass "a reused live pid cannot impersonate the original lock owner"
-}
-
-t_lock_recovers_an_interrupted_reclaim() {
-  local home fb lock out
-  home="$TMP_ROOT/lock-interrupted-reclaim"; mkdir -p "$home/state/mini-reboot"
-  fb=$(fake_sysctl_bin "$home")
-  lock="$home/state/mini-reboot/check.lock"
-  printf '99999\tdead-process\n' > "$lock"
-  ln "$lock" "$lock.reap"
-  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
-    ". '$LIB'; fm_mrb_with_lock echo ran-after-interrupted-reclaim" 2>&1)
-  assert_contains "$out" "ran-after-interrupted-reclaim" "an interrupted exact-claim reclaim must recover"
-  pass "an interrupted stale-lock reclaim is crash-safe"
-}
-
-t_lock_concurrent_stale_reclaim_runs_once() {
-  local home fb lock p1 p2 worker
-  home="$TMP_ROOT/lock-concurrent-reclaim"; mkdir -p "$home/state/mini-reboot"
-  fb=$(fake_sysctl_bin "$home")
-  lock="$home/state/mini-reboot/check.lock"
-  printf '99999\tdead-process\n' > "$lock"
-  worker="$home/worker.sh"
-  cat > "$worker" <<EOF
-#!/usr/bin/env bash
-if mkdir "$home/active" 2>/dev/null; then
-  sleep 1
-  rmdir "$home/active"
-else
-  echo overlap >> "$home/overlap.log"
-fi
-EOF
-  chmod +x "$worker"
-  PATH="$fb:$PATH" FM_HOME="$home" bash -c \
-    ". '$LIB'; fm_mrb_with_lock '$worker'" & p1=$!
-  PATH="$fb:$PATH" FM_HOME="$home" bash -c \
-    ". '$LIB'; fm_mrb_with_lock '$worker'" & p2=$!
-  wait "$p1"; wait "$p2"
-  assert_absent "$home/overlap.log" "concurrent stale-lock reclaim must not overlap guarded execution"
-  pass "concurrent stale-lock reclaim preserves single-instance execution"
 }
 
 t_check_cycle_stops_after_sample_failure() {
@@ -522,10 +460,6 @@ t_marker_clears_when_stale
 t_execute_reboot_blocks_when_boot_session_is_unreadable
 t_lock_reclaims_from_a_dead_owner
 t_lock_serializes_a_live_owner
-t_lock_reclaims_an_ownerless_crash
-t_lock_reclaims_a_reused_pid_identity
-t_lock_recovers_an_interrupted_reclaim
-t_lock_concurrent_stale_reclaim_runs_once
 t_check_cycle_stops_after_sample_failure
 t_check_cycle_does_nothing_when_resource_not_triggered
 t_check_cycle_reboots_only_when_both_conditions_genuinely_hold

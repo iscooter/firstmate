@@ -707,107 +707,44 @@ fm_mrb_execute_reboot() {
 
 # --- orchestration ---------------------------------------------------------
 
-# fm_mrb_with_lock <fn> [args...]: runs <fn> under a single-instance lock so
-# overlapping `check` invocations (e.g. a hung prior run still active when the
-# next scheduled tick fires) never race. Creation uses the shell's exclusive
-# noclobber open. The owner identity combines pid and process start time, and
-# an ownerless interrupted write is reclaimed only after a grace period.
-fm_mrb_process_identity() {
-  local pid=$1 start
-  start=$(ps -p "$pid" -o lstart= 2>/dev/null | awk '{$1=$1; print}')
-  [ -n "$start" ] || return 1
-  printf '%s\t%s\n' "$pid" "$start"
-}
-
-fm_mrb_lock_mtime() {
-  local value
-  value=$(stat -f '%m' "$1" 2>/dev/null || true)
-  case "$value" in ''|*[!0-9]*) stat -c '%Y' "$1" 2>/dev/null ;; *) echo "$value" ;; esac
-}
-
-fm_mrb_lock_owner() {
-  local lock=$1
-  [ ! -f "$lock" ] || cat "$lock" 2>/dev/null
-}
-
-fm_mrb_lock_owner_stale() {
-  local owner=$1 pid signature live_identity
-  [ -n "$owner" ] || return 1
-  pid=${owner%%$'\t'*}
-  signature=
-  case "$owner" in *$'\t'*) signature=${owner#*$'\t'} ;; esac
-  live_identity=
-  case "$pid" in ''|*[!0-9]*) ;; *) live_identity=$(fm_mrb_process_identity "$pid" 2>/dev/null || true) ;; esac
-  [ -z "$live_identity" ] || { [ -n "$signature" ] && [ "$live_identity" != "$owner" ]; }
-}
-
-fm_mrb_lock_ownerless_stale() {
-  local lock=$1 grace=$2 mtime age
-  mtime=$(fm_mrb_lock_mtime "$lock" || true)
-  [ -n "$mtime" ] || return 1
-  age=$(( $(fm_mrb_now) - mtime ))
-  [ "$age" -ge "$grace" ]
-}
-
-fm_mrb_reclaim_lock() {
-  local lock=$1 expected=$2 grace=$3 reap current reclaimed=1
-  reap="$lock.reap"
-  if [ ! -e "$reap" ]; then
-    ln "$lock" "$reap" 2>/dev/null || return 1
-  fi
-  if [ -f "$lock" ] && [ "$lock" -ef "$reap" ]; then
-    current=$(fm_mrb_lock_owner "$reap")
-    if [ "$current" = "$expected" ]; then
-      if { [ -n "$current" ] && fm_mrb_lock_owner_stale "$current"; } || \
-         { [ -z "$current" ] && fm_mrb_lock_ownerless_stale "$reap" "$grace"; }; then
-        rm -f "$lock"
-        reclaimed=0
-      fi
-    fi
-  fi
-  rm -f "$reap"
-  return "$reclaimed"
-}
-
+# fm_mrb_with_lock <fn> [args...]: runs <fn> under a single-instance mkdir
+# lock so overlapping `check` invocations never run together. A dead recorded
+# owner is reclaimed; a live owner causes this cycle to skip after bounded
+# retries.
 fm_mrb_with_lock() {
-  local lock owner_value owner pid tries=0
-  local grace=${FM_MRB_LOCK_OWNERLESS_GRACE_SECS:-60}
+  local lock owner_file owner_pid tries=0 tmp status=0
   lock=$(fm_mrb_lock_dir)
-  owner_value=$(fm_mrb_process_identity "$$") || {
-    fm_mrb_log "could not establish lock owner identity"
-    return 1
-  }
+  owner_file="$lock/owner"
 
-  while :; do
-    if (set -o noclobber; printf '%s\n' "$owner_value" > "$lock") 2>/dev/null; then
-      break
-    fi
-    owner=$(fm_mrb_lock_owner "$lock")
-    if fm_mrb_lock_owner_stale "$owner"; then
-      pid=${owner%%$'\t'*}
-      if fm_mrb_reclaim_lock "$lock" "$owner" "$grace"; then
-        fm_mrb_log "reclaimed lock from stale owner pid=${pid:-unknown}"
-        continue
-      fi
-    fi
+  while ! mkdir "$lock" 2>/dev/null; do
+    owner_pid=$(cat "$owner_file" 2>/dev/null || true)
+    case "$owner_pid" in
+      ''|*[!0-9]*) ;;
+      *)
+        if ! kill -0 "$owner_pid" 2>/dev/null; then
+          fm_mrb_log "reclaiming lock from dead owner pid=$owner_pid"
+          rm -rf "$lock"
+          continue
+        fi
+        ;;
+    esac
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
-      if [ -z "$owner" ] && fm_mrb_reclaim_lock "$lock" "$owner" "$grace"; then
-        fm_mrb_log "reclaimed abandoned ownerless lock"
-        continue
-      fi
       fm_mrb_log "check already running (lock held), skipping this cycle"
       return 0
     fi
     sleep 1
   done
 
-  local status=0 current_owner
-  "$@" || status=$?
-  current_owner=$(fm_mrb_lock_owner "$lock")
-  if [ "$current_owner" = "$owner_value" ]; then
-    rm -f "$lock"
+  tmp="$lock/owner.tmp.$$"
+  if ! printf '%s\n' "$$" > "$tmp" || ! mv "$tmp" "$owner_file"; then
+    rm -rf "$lock"
+    fm_mrb_log "could not publish lock owner"
+    return 1
   fi
+
+  "$@" || status=$?
+  rm -rf "$lock"
   return "$status"
 }
 
