@@ -3,9 +3,8 @@
 #
 # Reboots this mini ONLY when a genuine resource-leak/pressure threshold has
 # been crossed AND the local fleet is robustly idle. No drain, no admission
-# lock, no blocking of new work, no captain-approval-per-reboot step: see
-# bin/fm-mini-reboot-lib.sh for the full design rationale and the captain's
-# 2026-08-24 retarget decision it implements.
+# lock, no blocking of new work, and no captain-approval-per-reboot step.
+# See bin/fm-mini-reboot-lib.sh for the safety invariants.
 #
 # Usage:
 #   fm-mini-reboot-guard.sh sample                collect and persist one sample
@@ -15,7 +14,7 @@
 #   fm-mini-reboot-guard.sh check                  run one full detect->idle->reboot cycle
 #   fm-mini-reboot-guard.sh status                 human-readable current state summary
 #
-# Intended to be invoked on a recurring schedule (report: every ~5 minutes) by
+# Intended to be invoked on a recurring schedule (about every 5 minutes) by
 # an operator-installed launchd job or cron entry. This script does not
 # install its own schedule - arming the schedule, config/host-role=mini, and
 # config/mini-reboot-helper are all separate, deliberate provisioning steps.

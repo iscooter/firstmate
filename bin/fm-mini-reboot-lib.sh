@@ -3,8 +3,8 @@
 # mini host. NOT sourced by fm-spawn.sh, fm-promote.sh, or fm-backlog-handoff.sh:
 # this feature does not touch cross-home admission at all.
 #
-# Design (captain 2026-08-24 retarget): no drain, no admission lock, no
-# blocking or holding new work, no fleet-emptying, no attack resistance, no
+# Design: no drain, no admission lock, no blocking or holding new work, no
+# fleet-emptying, no attack resistance, no
 # readiness-receipt machinery. Reboot the mini ONLY when BOTH:
 #   (a) a resource-leak/pressure threshold has genuinely been crossed
 #       (never from a single sample - see fm_mrb_evaluate); AND
@@ -57,7 +57,7 @@ fm_mrb_lock_dir() { echo "$(fm_mrb_state_dir)/check.lock"; }
 fm_mrb_reboot_marker_file() { echo "$(fm_mrb_state_dir)/reboot-in-progress"; }
 fm_mrb_attempts_log() { echo "$(fm_mrb_state_dir)/reboot-attempts.log"; }
 
-# --- thresholds (mini 64 GiB row, report section 4) ---------------------
+# --- thresholds (64 GiB mini defaults) ---------------------------------
 # Overridable only via env, for tests. No persistent tunable config file:
 # keep this minimal and single-purpose rather than growing a generic knob
 # surface.
@@ -70,7 +70,7 @@ fm_mrb_forecast_horizon_secs() { echo "${FM_MRB_FORECAST_HORIZON_SECS:-86400}"; 
 fm_mrb_swap_trend_samples() { echo "${FM_MRB_SWAP_TREND_SAMPLES:-3}"; }
 fm_mrb_min_trigger_samples() { echo "${FM_MRB_MIN_TRIGGER_SAMPLES:-3}"; }
 fm_mrb_prune_window_secs() { echo "${FM_MRB_PRUNE_WINDOW_SECS:-1209600}"; }  # 14 days
-fm_mrb_idle_min_gap_secs() { echo "${FM_MRB_IDLE_MIN_GAP_SECS:-300}"; }   # 5 min, report Phase D
+fm_mrb_idle_min_gap_secs() { echo "${FM_MRB_IDLE_MIN_GAP_SECS:-300}"; }   # 5 min
 fm_mrb_idle_max_gap_secs() { echo "${FM_MRB_IDLE_MAX_GAP_SECS:-1800}"; }  # 30 min: stitched, not stale
 fm_mrb_marker_max_age_secs() { echo "${FM_MRB_MARKER_MAX_AGE_SECS:-1200}"; }  # 20 min
 
@@ -89,8 +89,8 @@ fm_mrb_vm_stat_field() {
   '
 }
 
-# fm_mrb_zone_bytes: live payload of the two named leaking zones (report
-# section 4: element size * in-use count for data.kalloc.1024 and
+# fm_mrb_zone_bytes: live payload of the two named leaking zones (element
+# size * in-use count for data.kalloc.1024 and
 # data_shared.kalloc.1024), in bytes.
 fm_mrb_zone_bytes() {
   local raw
@@ -353,7 +353,7 @@ fm_mrb_evaluate() {
     fi
   fi
 
-  # Condition 3: pressure no longer normal and swapouts trending up.
+  # Condition 3: warning/critical pressure and swapouts trending up.
   local latest_pressure trend_n trend_rows first_swapouts latest_swapouts swap_trend=0
   latest_pressure=$(tail -n 1 "$file" | cut -f10)
   trend_n=$(fm_mrb_swap_trend_samples)
@@ -587,8 +587,7 @@ fm_mrb_idle_check_all() {
 # only when both snapshots are idle AND the gap between them is within
 # [idle_min_gap_secs, idle_max_gap_secs] - two genuinely back-to-back idle
 # reads, not a momentary gap and not two isolated readings stitched together
-# across an unrelated span (report Phase D: "two identical fleet snapshots at
-# least 5 minutes apart"). Always persists the current snapshot for next time,
+# across an unrelated span. Always persists the current snapshot for next time,
 # regardless of the verdict.
 fm_mrb_idle_confirm() {
   local file now verdict prev_epoch prev_verdict confirmed=no reason
