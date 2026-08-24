@@ -282,6 +282,19 @@ t_wired_alone_over_threshold_triggers() {
   pass "wired memory alone crossing its threshold for 3 samples triggers (OR, not AND)"
 }
 
+t_duplicate_timestamps_keep_each_wired_sample_distinct() {
+  local dir fb home out
+  dir="$TMP_ROOT/wired-duplicate-time"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  append_series "$fb" "$home" \
+    "100 0 $((MAINT_WIRED + 1)) 1 0" \
+    "100 0 0 1 0" \
+    "200 0 $((MAINT_WIRED + 1)) 1 0"
+  out=$(evaluate_with "$home" 200)
+  assert_contains "$out" "trigger=no" "duplicate timestamps must not reuse another row's wired value"
+  pass "consecutive thresholds evaluate each duplicate-timestamp sample independently"
+}
+
 # --- (e) slope forecast over a recent window --------------------------------
 
 t_slope_forecast_within_horizon_triggers() {
@@ -428,6 +441,7 @@ t_two_samples_do_not_trigger_threshold_condition
 t_three_consecutive_over_threshold_triggers
 t_only_two_of_three_consecutive_does_not_trigger
 t_wired_alone_over_threshold_triggers
+t_duplicate_timestamps_keep_each_wired_sample_distinct
 t_slope_forecast_within_horizon_triggers
 t_slope_forecast_beyond_horizon_does_not_trigger
 t_rise_then_fall_below_ceiling_does_not_trigger

@@ -306,11 +306,9 @@ fm_mrb_evaluate() {
   last_n=$(tail -n "$min_n" "$file")
   local crossed=1
   local rows_seen=0
-  while IFS=$'\t' read -r _epoch zone _w free _c _p _s _si _so _pr _zd _wd _sod; do
+  while IFS=$'\t' read -r _epoch zone wired free _c _p _s _si _so _pr _zd _wd _sod; do
     [ -n "${zone:-}" ] || continue
     rows_seen=$((rows_seen + 1))
-    local wired
-    wired=$(printf '%s\n' "$last_n" | awk -F'\t' -v e="$_epoch" '$1==e{print $3; exit}')
     if ! { [ "$zone" -ge "$maint_zone" ] || [ "${wired:-0}" -ge "$maint_wired" ]; }; then
       crossed=0
     fi
