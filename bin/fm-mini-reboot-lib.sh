@@ -707,10 +707,11 @@ fm_mrb_execute_reboot() {
 
 # --- orchestration ---------------------------------------------------------
 
-# fm_mrb_with_lock <fn> [args...]: runs <fn> under a single-instance mkdir
-# lock so overlapping `check` invocations never run together. A dead recorded
-# owner is reclaimed; a live owner causes this cycle to skip after bounded
-# retries.
+# fm_mrb_with_lock <fn> [args...]: runs <fn> under a best-effort mkdir lock
+# that prevents ordinary redundant overlap but does not guarantee strict mutual
+# exclusion during a genuinely concurrent dead-owner reclaim. Reboot safety
+# comes from the resource-plus-idle gate, not this lock; the normal caller is a
+# single scheduler running about every five minutes.
 fm_mrb_with_lock() {
   local lock owner_file owner_pid tries=0 tmp status=0
   lock=$(fm_mrb_lock_dir)
@@ -719,7 +720,11 @@ fm_mrb_with_lock() {
   while ! mkdir "$lock" 2>/dev/null; do
     owner_pid=$(cat "$owner_file" 2>/dev/null || true)
     case "$owner_pid" in
-      ''|*[!0-9]*) ;;
+      ''|*[!0-9]*)
+        fm_mrb_log "reclaiming lock with missing or invalid owner pid"
+        rm -rf "$lock"
+        continue
+        ;;
       *)
         if ! kill -0 "$owner_pid" 2>/dev/null; then
           fm_mrb_log "reclaiming lock from dead owner pid=$owner_pid"

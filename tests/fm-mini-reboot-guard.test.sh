@@ -287,6 +287,18 @@ t_lock_reclaims_from_a_dead_owner() {
   pass "a lock left behind by a dead owner pid is reclaimed, not left wedged forever"
 }
 
+t_lock_reclaims_ownerless_directory() {
+  local home fb out lockdir
+  home="$TMP_ROOT/lock-ownerless"; mkdir -p "$home/state/mini-reboot"
+  fb=$(fake_sysctl_bin "$home")
+  lockdir="$home/state/mini-reboot/check.lock"
+  mkdir "$lockdir"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
+    ". '$LIB'; fm_mrb_with_lock echo ran-after-ownerless-crash" 2>&1)
+  assert_contains "$out" "ran-after-ownerless-crash" "an ownerless lock directory must be reclaimed"
+  pass "an ownerless lock directory self-heals on the next invocation"
+}
+
 t_lock_serializes_a_live_owner() {
   local home fb
   home="$TMP_ROOT/lock-live-owner"; mkdir -p "$home/state/mini-reboot"
@@ -459,6 +471,7 @@ t_marker_clears_on_boot_session_change
 t_marker_clears_when_stale
 t_execute_reboot_blocks_when_boot_session_is_unreadable
 t_lock_reclaims_from_a_dead_owner
+t_lock_reclaims_ownerless_directory
 t_lock_serializes_a_live_owner
 t_check_cycle_stops_after_sample_failure
 t_check_cycle_does_nothing_when_resource_not_triggered
