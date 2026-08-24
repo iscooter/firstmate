@@ -330,16 +330,17 @@ fm_mrb_evaluate() {
   fi
 
   # Condition 3: pressure no longer normal and swapouts trending up.
-  local latest_pressure trend_n trend_rows swap_sum=0
+  local latest_pressure trend_n trend_rows first_swapouts latest_swapouts swap_trend=0
   latest_pressure=$(tail -n 1 "$file" | cut -f10)
   trend_n=$(fm_mrb_swap_trend_samples)
   trend_rows=$(tail -n "$trend_n" "$file")
-  while IFS=$'\t' read -r _e _z _w _f _c _p _s _si _so _pr _zd _wd sod; do
-    [ -n "${sod:-}" ] || continue
-    swap_sum=$(( swap_sum + sod ))
-  done <<< "$trend_rows"
+  first_swapouts=$(printf '%s\n' "$trend_rows" | head -n 1 | cut -f9)
+  latest_swapouts=$(printf '%s\n' "$trend_rows" | tail -n 1 | cut -f9)
+  if [[ "$first_swapouts" =~ ^[0-9]+$ ]] && [[ "$latest_swapouts" =~ ^[0-9]+$ ]]; then
+    swap_trend=$(( latest_swapouts - first_swapouts ))
+  fi
   if { [ "$latest_pressure" = warn ] || [ "$latest_pressure" = critical ]; } \
-      && [ "$swap_sum" -gt 0 ]; then
+      && [ "$swap_trend" -gt 0 ]; then
     trigger=yes
     reasons+=("pressure-${latest_pressure}-with-rising-swapouts")
   fi

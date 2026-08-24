@@ -380,6 +380,20 @@ t_unknown_pressure_with_rising_swapouts_does_not_trigger() {
   pass "unknown pressure with rising swapouts does not trigger"
 }
 
+t_pre_window_swapout_delta_does_not_trigger() {
+  local dir fb home out
+  dir="$TMP_ROOT/pressure-pre-window-delta"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  append_series "$fb" "$home" \
+    "900 0 0 1 0" \
+    "1000 0 0 2 100" \
+    "1100 0 0 2 50" \
+    "1200 0 0 2 50"
+  out=$(evaluate_with "$home" 1200)
+  assert_contains "$out" "trigger=no" "a pre-window increase must not outweigh falling then flat selected swapouts"
+  pass "swapout trend excludes the first selected row's pre-window delta"
+}
+
 t_collect_sample_parses_metrics
 t_append_sample_persists_deltas
 t_first_sample_has_zero_deltas
@@ -397,3 +411,4 @@ t_pressure_and_rising_swapouts_triggers
 t_pressure_alone_without_rising_swapouts_does_not_trigger
 t_rising_swapouts_alone_without_pressure_does_not_trigger
 t_unknown_pressure_with_rising_swapouts_does_not_trigger
+t_pre_window_swapout_delta_does_not_trigger
