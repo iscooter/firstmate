@@ -110,6 +110,25 @@ t_execute_reboot_refuses_wrong_role_value() {
   pass "reboot execution refuses when config/host-role names anything other than mini"
 }
 
+t_host_role_rejects_internal_whitespace() {
+  local home
+  home="$TMP_ROOT/role-internal-space"; mkdir -p "$home/config"
+  printf '  m i n i  \n' > "$home/config/host-role"
+  if FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_host_is_mini"; then
+    fail "host-role with internal whitespace must not authorize the mini gate"
+  fi
+  pass "the mini-only gate rejects internal host-role whitespace"
+}
+
+t_host_role_allows_surrounding_whitespace() {
+  local home
+  home="$TMP_ROOT/role-surrounding-space"; mkdir -p "$home/config"
+  printf ' \t mini \t \n' > "$home/config/host-role"
+  FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_host_is_mini" \
+    || fail "surrounding host-role whitespace should be trimmed"
+  pass "the mini-only gate trims only surrounding whitespace"
+}
+
 # --- never fakes privileged execution ---------------------------------------
 
 t_execute_reboot_blocked_without_helper_configured() {
@@ -162,6 +181,25 @@ EOF
   assert_grep "both-conditions-held" "$home/helper-invocations.log" "reason was passed through to the helper"
   assert_present "$home/state/mini-reboot/reboot-in-progress" "reboot marker written before invoking the helper"
   pass "a genuinely configured, executable, mini-role helper is invoked with the trigger reason"
+}
+
+t_execute_reboot_preserves_spaces_in_helper_path() {
+  local home fb out status helper
+  home="$TMP_ROOT/helper-path-space"; mkdir -p "$home/config"
+  echo mini > "$home/config/host-role"
+  helper="$home/reboot helper.sh"
+  cat > "$helper" <<EOF
+#!/usr/bin/env bash
+echo invoked > "$home/helper-invoked"
+EOF
+  chmod +x "$helper"
+  printf ' \t%s \t\n' "$helper" > "$home/config/mini-reboot-helper"
+  fb=$(fake_sysctl_bin "$home")
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_execute_reboot test-reason" 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "helper path containing a space should be preserved, got $status: $out"
+  assert_present "$home/helper-invoked" "the helper whose path contains a space must run"
+  pass "helper configuration trims edges while preserving internal spaces"
 }
 
 # --- reboot marker: prevents re-fire, self-clears -------------------------
@@ -472,9 +510,12 @@ t_cli_status_subcommand_runs_end_to_end
 t_cli_unknown_subcommand_errors
 t_execute_reboot_refuses_off_mini
 t_execute_reboot_refuses_wrong_role_value
+t_host_role_rejects_internal_whitespace
+t_host_role_allows_surrounding_whitespace
 t_execute_reboot_blocked_without_helper_configured
 t_execute_reboot_blocked_with_nonexecutable_helper
 t_execute_reboot_invokes_a_real_configured_helper
+t_execute_reboot_preserves_spaces_in_helper_path
 t_marker_active_blocks_a_second_cycle
 t_marker_clears_on_boot_session_change
 t_marker_clears_when_stale

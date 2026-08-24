@@ -319,9 +319,6 @@ fm_mrb_evaluate() {
         trigger=yes
         reasons+=("slope-forecast-crosses-hard-ceiling-in-${forecast_secs}s")
       fi
-    elif [ "$l_zone" -ge "$hard_zone" ]; then
-      trigger=yes
-      reasons+=("zone-already-at-or-past-hard-ceiling")
     fi
   fi
 
@@ -383,17 +380,37 @@ fm_mrb_idle_check_home() {
     return 0
   fi
 
-  # 1) zero child task metadata - the strongest simple gate (report Phase C).
-  local meta_paths meta_count
+  # 1) every child task's reconciled current state is done.
+  local meta_paths crew_state_bin meta task_id current_state
   if ! meta_paths=$(find "$state" -maxdepth 1 -name '*.meta' -print 2>&1); then
     echo "busy: could not enumerate $state/*.meta: $meta_paths"
     return 0
   fi
-  meta_count=$(printf '%s\n' "$meta_paths" | awk 'NF { count++ } END { print count + 0 }')
-  if [ "$meta_count" -gt 0 ]; then
-    echo "busy: $meta_count task(s) with metadata in $state"
+  crew_state_bin=${FM_MRB_CREW_STATE_BIN:-$FM_ROOT/bin/fm-crew-state.sh}
+  if [ -n "$meta_paths" ] && [ ! -x "$crew_state_bin" ]; then
+    echo "busy: fm-crew-state.sh not executable at $crew_state_bin"
     return 0
   fi
+  while IFS= read -r meta; do
+    [ -n "$meta" ] || continue
+    task_id=${meta##*/}
+    task_id=${task_id%.meta}
+    if ! current_state=$(FM_HOME="$home" "$crew_state_bin" "$task_id" 2>&1); then
+      echo "busy: fm-crew-state.sh failed for $task_id: $current_state"
+      return 0
+    fi
+    case "$current_state" in
+      *$'\n'*)
+        echo "busy: malformed multi-line current state for task $task_id"
+        return 0
+        ;;
+      "state: done · source: "*) ;;
+      *)
+        echo "busy: task $task_id current state is not done: $current_state"
+        return 0
+        ;;
+    esac
+  done <<< "$meta_paths"
 
   # 2) no in-flight backlog item, no open captain decision (tasks-axi held).
   # tasks-axi silently reports "count: 0" (exit 0) for a NONEXISTENT file
@@ -585,11 +602,15 @@ fm_mrb_idle_confirmed() {
 # fm_mrb_host_is_mini: true only when config/host-role is present and its
 # trimmed content is exactly "mini". Absent-by-default, so a MacBook (or any
 # unconfigured host) never reboots through this code.
+fm_mrb_trim() {
+  printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
 fm_mrb_host_is_mini() {
   local file content
   file="$(fm_mrb_config_dir)/host-role"
   [ -r "$file" ] || return 1
-  content=$(tr -d '[:space:]' < "$file")
+  content=$(fm_mrb_trim "$(cat "$file")")
   [ "$content" = mini ]
 }
 
@@ -649,7 +670,7 @@ fm_mrb_execute_reboot() {
   helper_path="$(fm_mrb_config_dir)/mini-reboot-helper"
   local helper
   if [ -r "$helper_path" ]; then
-    helper=$(tr -d '[:space:]' < "$helper_path")
+    helper=$(fm_mrb_trim "$(cat "$helper_path")")
   fi
   if [ -z "${helper:-}" ] || [ ! -x "$helper" ]; then
     fm_mrb_log "BLOCKED: no privileged reboot mechanism configured."

@@ -296,6 +296,19 @@ t_slope_forecast_beyond_horizon_does_not_trigger() {
   pass "a shallow recent slope that would only cross far beyond the horizon does not trigger"
 }
 
+t_peak_then_falling_hard_ceiling_does_not_trigger() {
+  local dir fb home out
+  dir="$TMP_ROOT/slope-falling"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  append_series "$fb" "$home" \
+    "1000 0 0 1 0" \
+    "1100 $((HARD_ZONE + 1024 * 1024 * 1024)) 0 1 0" \
+    "1200 $HARD_ZONE 0 1 0"
+  out=$(evaluate_with "$home" 1200)
+  assert_contains "$out" "trigger=no" "a peak followed by a falling hard-ceiling sample must not trigger"
+  pass "an improving trend at the hard ceiling does not create an extra trigger"
+}
+
 t_lifetime_first_sample_does_not_pollute_recent_slope() {
   local dir fb home out
   dir="$TMP_ROOT/slope-window"; mkdir -p "$dir"
@@ -378,6 +391,7 @@ t_only_two_of_three_consecutive_does_not_trigger
 t_wired_alone_over_threshold_triggers
 t_slope_forecast_within_horizon_triggers
 t_slope_forecast_beyond_horizon_does_not_trigger
+t_peak_then_falling_hard_ceiling_does_not_trigger
 t_lifetime_first_sample_does_not_pollute_recent_slope
 t_pressure_and_rising_swapouts_triggers
 t_pressure_alone_without_rising_swapouts_does_not_trigger

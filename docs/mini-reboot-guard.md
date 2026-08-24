@@ -10,7 +10,7 @@ This is mini-only by construction; a MacBook (or any unconfigured host) never re
 A resource sampler records zone bytes, wired memory, free memory, swap use, pressure, and their deltas.
 It raises the resource condition only when the maintenance threshold is crossed in three consecutive samples, a recent-window slope forecasts the hard ceiling before the forecast horizon, or pressure is no longer normal with swapouts rising.
 It never triggers from a single sample.
-An idle check reuses `fm-crew-state.sh`, `tasks-axi`, and the documented `state/` layout to require zero child task metadata, no in-flight backlog item, no open captain decision, no unhandled steering inbox message, no pending remote reply, no promised public reply owed, and no registered process-event source, for every home in the registry.
+An idle check reuses `fm-crew-state.sh`, `tasks-axi`, and the documented `state/` layout to require every child task's reconciled current state to be done, no in-flight backlog item, no open captain decision, no unhandled steering inbox message, no pending remote reply, no promised public reply owed, and no registered process-event source, for every home in the registry.
 Any read failure, or a missing backlog file, blocks (fails closed) rather than reading as empty.
 Idleness is only confirmed after two consecutive idle reads at least 5 and at most 30 minutes apart, so a single lucky snapshot is never enough.
 Only when the resource condition and the confirmed idle window both hold does the guard attempt to execute a reboot.

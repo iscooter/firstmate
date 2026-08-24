@@ -57,15 +57,39 @@ t_clear_home_is_idle() {
   pass "a genuinely clear home reports idle"
 }
 
-t_child_task_metadata_blocks() {
-  local home
-  home="$TMP_ROOT/meta"
+t_working_child_current_state_blocks() {
+  local home reader out
+  home="$TMP_ROOT/meta-working"
   make_clear_home "$home"
   fm_write_meta "$home/state/some-task.meta" "kind=ship" "worktree=/tmp/x"
-  local out
-  out=$(run_idle_check_home "$home")
-  assert_contains "$out" "busy" "child task metadata must block idleness"
-  pass "child task metadata blocks idleness"
+  echo "done: stale event" > "$home/state/some-task.status"
+  reader="$home/fm-crew-state.sh"
+  cat > "$reader" <<EOF
+#!/usr/bin/env bash
+echo "\$1" > "$home/crew-state-invoked"
+echo "state: working · source: run-step · active validation"
+EOF
+  chmod +x "$reader"
+  out=$(FM_MRB_CREW_STATE_BIN="$reader" bash -c ". '$LIB'; fm_mrb_idle_check_home '$home'")
+  assert_contains "$out" "busy" "a reconciled working state must block idleness"
+  assert_present "$home/crew-state-invoked" "the current-state owner must be invoked"
+  pass "a reconciled working child blocks despite a stale done event"
+}
+
+t_done_child_current_state_allows_idle() {
+  local home reader out
+  home="$TMP_ROOT/meta-done"
+  make_clear_home "$home"
+  fm_write_meta "$home/state/some-task.meta" "kind=ship" "worktree=/tmp/x"
+  reader="$home/fm-crew-state.sh"
+  cat > "$reader" <<'EOF'
+#!/usr/bin/env bash
+echo "state: done · source: run-step · checks passed"
+EOF
+  chmod +x "$reader"
+  out=$(FM_MRB_CREW_STATE_BIN="$reader" bash -c ". '$LIB'; fm_mrb_idle_check_home '$home'")
+  [ "$out" = idle ] || fail "a reconciled done child should allow idle, got: $out"
+  pass "a child reported done by fm-crew-state allows idleness"
 }
 
 t_missing_state_directory_blocks() {
@@ -362,7 +386,8 @@ t_busy_reading_between_two_idle_reads_resets_confirmation() {
 }
 
 t_clear_home_is_idle
-t_child_task_metadata_blocks
+t_working_child_current_state_blocks
+t_done_child_current_state_allows_idle
 t_missing_state_directory_blocks
 t_state_enumeration_failure_blocks
 t_missing_backlog_file_blocks
