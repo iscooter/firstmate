@@ -44,10 +44,15 @@ SH
 
   cat > "$fb/zprint" <<'SH'
 #!/usr/bin/env bash
+[ "${FM_FAKE_ZPRINT_FAIL:-0}" = 1 ] && exit 1
 echo "                            elem         cur         max        cur         max         cur  alloc  alloc"
 echo "zone name                   size        size        size      #elts       #elts       inuse   size  count"
 echo "-----------------------------------------------------------------------------------------------------------"
-echo "data.kalloc.1024             1          0K          0K           0           0     ${FM_FAKE_ZONE_BYTES:-0}     0K      0"
+if [ "${FM_FAKE_ZPRINT_MALFORMED:-0}" = 1 ]; then
+  echo "data.kalloc.1024             bad        0K          0K           0           0     bad     0K      0"
+else
+  echo "data.kalloc.1024             1          0K          0K           0           0     ${FM_FAKE_ZONE_BYTES:-0}     0K      0"
+fi
 SH
   chmod +x "$fb/zprint"
 
@@ -138,6 +143,22 @@ t_first_sample_has_zero_deltas() {
   [ "$(cut -f12 <<< "$row")" = 0 ] || fail "first-sample wired_delta should be 0"
   [ "$(cut -f13 <<< "$row")" = 0 ] || fail "first-sample swapouts_delta should be 0"
   pass "the very first sample records zero deltas rather than erroring"
+}
+
+t_invalid_zprint_does_not_append_a_sample() {
+  local dir fb home samples before status
+  dir="$TMP_ROOT/invalid-zprint"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  FM_HOME="$home" FM_MRB_NOW=1000 FM_FAKE_ZONE_BYTES=100 FM_FAKE_PAGESIZE=1 \
+    PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_append_sample"
+  samples="$home/state/mini-reboot/samples.tsv"
+  before=$(cat "$samples")
+  FM_HOME="$home" FM_MRB_NOW=1100 FM_FAKE_ZPRINT_MALFORMED=1 FM_FAKE_PAGESIZE=1 \
+    PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_append_sample" >/dev/null 2>&1
+  status=$?
+  [ "$status" -ne 0 ] || fail "malformed zprint must make sample collection fail"
+  [ "$(cat "$samples")" = "$before" ] || fail "failed metric collection must leave sample history unchanged"
+  pass "malformed zprint output is rejected without appending a sample"
 }
 
 # --- helper: append N samples with per-sample overrides ---------------------
@@ -349,6 +370,7 @@ t_unknown_pressure_with_rising_swapouts_does_not_trigger() {
 t_collect_sample_parses_metrics
 t_append_sample_persists_deltas
 t_first_sample_has_zero_deltas
+t_invalid_zprint_does_not_append_a_sample
 t_never_triggers_from_single_sample
 t_two_samples_do_not_trigger_threshold_condition
 t_three_consecutive_over_threshold_triggers

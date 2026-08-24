@@ -90,31 +90,41 @@ fm_mrb_vm_stat_field() {
 
 # fm_mrb_zone_bytes: live payload of the two named leaking zones (report
 # section 4: element size * in-use count for data.kalloc.1024 and
-# data_shared.kalloc.1024), in bytes. Empty/zero zprint output yields 0, never
-# an error - a leak detector must not crash the sampler.
+# data_shared.kalloc.1024), in bytes.
 fm_mrb_zone_bytes() {
-  zprint 2>/dev/null | awk '
-    $1 == "data.kalloc.1024" || $1 == "data_shared.kalloc.1024" { sum += $2 * $7 }
-    END { print sum + 0 }
+  local raw
+  raw=$(zprint 2>/dev/null) || return 1
+  printf '%s\n' "$raw" | awk '
+    $1 == "data.kalloc.1024" || $1 == "data_shared.kalloc.1024" {
+      found = 1
+      if ($2 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/) invalid = 1
+      sum += $2 * $7
+    }
+    END {
+      if (!found || invalid) exit 1
+      printf "%.0f\n", sum
+    }
   '
 }
 
 # fm_mrb_swap_used_bytes: parses `sysctl vm.swapusage`'s "used = 552.25M"
 # (or ...G) into bytes.
 fm_mrb_swap_used_bytes() {
-  sysctl vm.swapusage 2>/dev/null | awk '
+  local raw
+  raw=$(sysctl vm.swapusage 2>/dev/null) || return 1
+  printf '%s\n' "$raw" | awk '
     {
       for (i = 1; i <= NF; i++) {
         if ($i == "used") { val = $(i + 2); break }
       }
     }
     END {
-      if (val == "") { print 0; exit }
+      if (val !~ /^[0-9]+([.][0-9]+)?[MG]$/) exit 1
       unit = substr(val, length(val), 1)
       num = substr(val, 1, length(val) - 1)
       mult = 1024 * 1024
       if (unit == "G") mult = 1024 * 1024 * 1024
-      printf "%d\n", num * mult
+      printf "%.0f\n", num * mult
     }
   '
 }
@@ -142,29 +152,33 @@ fm_mrb_boot_session_id() {
 # per the sample contract):
 #   epoch  zone_bytes  wired_bytes  free_bytes  compressor_bytes  purgeable_bytes  swap_used_bytes  swapins  swapouts  pressure
 fm_mrb_collect_sample() {
-  local page vmstat wired free compressor purgeable swapins swapouts zone swap pressure
-  page=$(fm_mrb_pagesize_bytes)
-  page=${page:-16384}
-  vmstat=$(vm_stat 2>/dev/null)
+  local page vmstat wired free compressor purgeable swapins swapouts zone swap pressure value
+  page=$(fm_mrb_pagesize_bytes) || return 1
+  case "$page" in ''|*[!0-9]*|0) return 1 ;; esac
+  vmstat=$(vm_stat 2>/dev/null) || return 1
   wired=$(fm_mrb_vm_stat_field "Pages wired down" "$vmstat")
   free=$(fm_mrb_vm_stat_field "Pages free" "$vmstat")
   compressor=$(fm_mrb_vm_stat_field "Pages occupied by compressor" "$vmstat")
   purgeable=$(fm_mrb_vm_stat_field "Pages purgeable" "$vmstat")
   swapins=$(fm_mrb_vm_stat_field "Swapins" "$vmstat")
   swapouts=$(fm_mrb_vm_stat_field "Swapouts" "$vmstat")
-  zone=$(fm_mrb_zone_bytes)
-  swap=$(fm_mrb_swap_used_bytes)
+  for value in "$wired" "$free" "$compressor" "$purgeable" "$swapins" "$swapouts"; do
+    case "$value" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  zone=$(fm_mrb_zone_bytes) || return 1
+  swap=$(fm_mrb_swap_used_bytes) || return 1
+  case "$zone:$swap" in *[!0-9:]*) return 1 ;; esac
   pressure=$(fm_mrb_pressure_level)
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(fm_mrb_now)" \
     "$zone" \
-    "$(( ${wired:-0} * page ))" \
-    "$(( ${free:-0} * page ))" \
-    "$(( ${compressor:-0} * page ))" \
-    "$(( ${purgeable:-0} * page ))" \
+    "$(( wired * page ))" \
+    "$(( free * page ))" \
+    "$(( compressor * page ))" \
+    "$(( purgeable * page ))" \
     "$swap" \
-    "${swapins:-0}" \
-    "${swapouts:-0}" \
+    "$swapins" \
+    "$swapouts" \
     "$pressure"
 }
 
@@ -190,7 +204,10 @@ fm_mrb_append_sample() {
       has_prev=1
     fi
   fi
-  raw=$(fm_mrb_collect_sample)
+  if ! raw=$(fm_mrb_collect_sample); then
+    fm_mrb_log "sample collection failed; leaving history unchanged"
+    return 1
+  fi
   local zone wired swapouts zone_delta wired_delta swapouts_delta
   zone=$(printf '%s' "$raw" | cut -f2)
   wired=$(printf '%s' "$raw" | cut -f3)
@@ -588,7 +605,7 @@ fm_mrb_reboot_marker_active() {
   epoch=$(awk -F'\t' 'NR==1{print $1}' "$file" 2>/dev/null)
   boot_id=$(awk -F'\t' 'NR==1{print $2}' "$file" 2>/dev/null)
   cur_boot=$(fm_mrb_boot_session_id)
-  if [ -n "$cur_boot" ] && [ "$boot_id" != "$cur_boot" ]; then
+  if [ -n "$boot_id" ] && [ -n "$cur_boot" ] && [ "$boot_id" != "$cur_boot" ]; then
     fm_mrb_log "boot-session changed since marker ($boot_id -> $cur_boot): reboot happened, clearing marker"
     rm -f "$file"
     return 1
@@ -603,10 +620,12 @@ fm_mrb_reboot_marker_active() {
 }
 
 fm_mrb_write_reboot_marker() {
-  local file tmp
+  local file tmp boot_id
   file=$(fm_mrb_reboot_marker_file)
+  boot_id=$(fm_mrb_boot_session_id) || return 1
+  case "$boot_id" in ''|*$'\t'*|*$'\n'*|*$'\r'*) return 1 ;; esac
   tmp="$file.tmp.$$"
-  printf '%s\t%s\t%s\n' "$(fm_mrb_now)" "$(fm_mrb_boot_session_id)" "$1" > "$tmp"
+  printf '%s\t%s\t%s\n' "$(fm_mrb_now)" "$boot_id" "$1" > "$tmp" || return 1
   mv "$tmp" "$file"
 }
 
@@ -637,7 +656,11 @@ fm_mrb_execute_reboot() {
     return 3
   fi
 
-  fm_mrb_write_reboot_marker "$reason"
+  if ! fm_mrb_write_reboot_marker "$reason"; then
+    fm_mrb_log "BLOCKED: cannot read a valid macOS boot-session id; reboot marker was not published"
+    printf '%s\tblocked\tno-boot-session-id\n' "$(fm_mrb_now)" >> "$log"
+    return 4
+  fi
   fm_mrb_log "invoking reboot helper: $helper (reason: $reason)"
   local status=0
   "$helper" "$reason" || status=$?
@@ -671,46 +694,76 @@ fm_mrb_lock_mtime() {
   case "$value" in ''|*[!0-9]*) stat -c '%Y' "$1" 2>/dev/null ;; *) echo "$value" ;; esac
 }
 
+fm_mrb_lock_owner() {
+  local lock=$1
+  [ ! -f "$lock" ] || cat "$lock" 2>/dev/null
+}
+
+fm_mrb_lock_owner_stale() {
+  local owner=$1 pid signature live_identity
+  [ -n "$owner" ] || return 1
+  pid=${owner%%$'\t'*}
+  signature=
+  case "$owner" in *$'\t'*) signature=${owner#*$'\t'} ;; esac
+  live_identity=
+  case "$pid" in ''|*[!0-9]*) ;; *) live_identity=$(fm_mrb_process_identity "$pid" 2>/dev/null || true) ;; esac
+  [ -z "$live_identity" ] || { [ -n "$signature" ] && [ "$live_identity" != "$owner" ]; }
+}
+
+fm_mrb_lock_ownerless_stale() {
+  local lock=$1 grace=$2 mtime age
+  mtime=$(fm_mrb_lock_mtime "$lock" || true)
+  [ -n "$mtime" ] || return 1
+  age=$(( $(fm_mrb_now) - mtime ))
+  [ "$age" -ge "$grace" ]
+}
+
+fm_mrb_reclaim_lock() {
+  local lock=$1 expected=$2 grace=$3 reap current reclaimed=1
+  reap="$lock.reap"
+  if [ ! -e "$reap" ]; then
+    ln "$lock" "$reap" 2>/dev/null || return 1
+  fi
+  if [ -f "$lock" ] && [ "$lock" -ef "$reap" ]; then
+    current=$(fm_mrb_lock_owner "$reap")
+    if [ "$current" = "$expected" ]; then
+      if { [ -n "$current" ] && fm_mrb_lock_owner_stale "$current"; } || \
+         { [ -z "$current" ] && fm_mrb_lock_ownerless_stale "$reap" "$grace"; }; then
+        rm -f "$lock"
+        reclaimed=0
+      fi
+    fi
+  fi
+  rm -f "$reap"
+  return "$reclaimed"
+}
+
 fm_mrb_with_lock() {
-  local lock owner_file owner_value owner pid signature live_identity tries=0
-  local mtime age grace=${FM_MRB_LOCK_OWNERLESS_GRACE_SECS:-60}
+  local lock owner_value owner pid tries=0
+  local grace=${FM_MRB_LOCK_OWNERLESS_GRACE_SECS:-60}
   lock=$(fm_mrb_lock_dir)
   owner_value=$(fm_mrb_process_identity "$$") || {
     fm_mrb_log "could not establish lock owner identity"
     return 1
   }
 
-  while ! (set -o noclobber; printf '%s\n' "$owner_value" > "$lock") 2>/dev/null; do
-    if [ -d "$lock" ]; then
-      owner_file="$lock/owner"
-    else
-      owner_file="$lock"
+  while :; do
+    if (set -o noclobber; printf '%s\n' "$owner_value" > "$lock") 2>/dev/null; then
+      break
     fi
-    owner=
-    [ ! -f "$owner_file" ] || owner=$(cat "$owner_file" 2>/dev/null)
-    if [ -n "$owner" ]; then
+    owner=$(fm_mrb_lock_owner "$lock")
+    if fm_mrb_lock_owner_stale "$owner"; then
       pid=${owner%%$'\t'*}
-      signature=
-      case "$owner" in *$'\t'*) signature=${owner#*$'\t'} ;; esac
-      live_identity=
-      case "$pid" in ''|*[!0-9]*) ;; *) live_identity=$(fm_mrb_process_identity "$pid" 2>/dev/null || true) ;; esac
-      if [ -z "$live_identity" ] || { [ -n "$signature" ] && [ "$live_identity" != "$owner" ]; }; then
-        fm_mrb_log "reclaiming lock from stale owner pid=${pid:-unknown}"
-        rm -rf "$lock"
+      if fm_mrb_reclaim_lock "$lock" "$owner" "$grace"; then
+        fm_mrb_log "reclaimed lock from stale owner pid=${pid:-unknown}"
         continue
       fi
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
-      if [ -z "$owner" ]; then
-        mtime=$(fm_mrb_lock_mtime "$lock" || true)
-        age=0
-        [ -z "$mtime" ] || age=$(( $(fm_mrb_now) - mtime ))
-        if [ -n "$mtime" ] && [ "$age" -ge "$grace" ]; then
-          fm_mrb_log "reclaiming abandoned ownerless lock"
-          rm -rf "$lock"
-          continue
-        fi
+      if [ -z "$owner" ] && fm_mrb_reclaim_lock "$lock" "$owner" "$grace"; then
+        fm_mrb_log "reclaimed abandoned ownerless lock"
+        continue
       fi
       fm_mrb_log "check already running (lock held), skipping this cycle"
       return 0
@@ -720,7 +773,7 @@ fm_mrb_with_lock() {
 
   local status=0 current_owner
   "$@" || status=$?
-  current_owner=$(cat "$lock" 2>/dev/null || true)
+  current_owner=$(fm_mrb_lock_owner "$lock")
   if [ "$current_owner" = "$owner_value" ]; then
     rm -f "$lock"
   fi
@@ -738,7 +791,10 @@ fm_mrb_check_cycle() {
     return 0
   fi
 
-  fm_mrb_append_sample
+  if ! fm_mrb_append_sample; then
+    fm_mrb_log "current sample is invalid, doing nothing"
+    return 0
+  fi
 
   local eval_out trig_line
   eval_out=$(fm_mrb_evaluate)

@@ -30,6 +30,7 @@ fake_sysctl_bin() {
   cat > "$fb/sysctl" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = "-n" ] && [ "$2" = "kern.bootsessionuuid" ]; then
+  [ "${FM_FAKE_BOOT_ID_UNREADABLE:-0}" = 1 ] && exit 1
   echo "${FM_FAKE_BOOT_ID:-BOOT-A}"
   exit 0
 fi
@@ -207,20 +208,40 @@ t_marker_clears_when_stale() {
   pass "a stale reboot marker self-clears without manual intervention (never wedges forever)"
 }
 
+t_execute_reboot_blocks_when_boot_session_is_unreadable() {
+  local home fb helper out status
+  home="$TMP_ROOT/marker-no-boot-id"; mkdir -p "$home/config"
+  echo mini > "$home/config/host-role"
+  helper="$home/helper.sh"
+  cat > "$helper" <<EOF
+#!/usr/bin/env bash
+echo invoked > "$home/helper-invoked"
+EOF
+  chmod +x "$helper"
+  echo "$helper" > "$home/config/mini-reboot-helper"
+  fb=$(fake_sysctl_bin "$home")
+  out=$(FM_FAKE_BOOT_ID_UNREADABLE=1 PATH="$fb:$PATH" FM_HOME="$home" \
+    bash -c ". '$LIB'; fm_mrb_execute_reboot test-reason" 2>&1)
+  status=$?
+  [ "$status" -eq 4 ] || fail "unreadable boot-session id should block with exit 4, got $status"
+  assert_contains "$out" "boot-session id" "the refusal should name the unreadable boot-session id"
+  assert_absent "$home/helper-invoked" "the reboot helper must not run without a valid marker boot id"
+  assert_absent "$home/state/mini-reboot/reboot-in-progress" "an invalid marker must not be published"
+  pass "reboot execution blocks when the boot-session id is unreadable"
+}
+
 # --- single-instance lock is crash-safe -------------------------------------
 
 t_lock_reclaims_from_a_dead_owner() {
   local home fb ran
   home="$TMP_ROOT/lock-dead-owner"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
-  local lockdir owner_file dead_pid
+  local lockdir dead_pid
   lockdir="$home/state/mini-reboot/check.lock"
-  mkdir -p "$lockdir"
   # A pid that is certainly not alive.
   dead_pid=99999
   while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid - 1)); done
-  owner_file="$lockdir/owner"
-  echo "$dead_pid" > "$owner_file"
+  echo "$dead_pid" > "$lockdir"
   ran=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo ran-ok")
   assert_contains "$ran" "ran-ok" "the guarded function must still run after reclaiming a dead-owner lock"
@@ -231,17 +252,15 @@ t_lock_serializes_a_live_owner() {
   local home fb
   home="$TMP_ROOT/lock-live-owner"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
-  local lockdir owner_file identity
+  local lockdir identity
   lockdir="$home/state/mini-reboot/check.lock"
-  mkdir -p "$lockdir"
-  owner_file="$lockdir/owner"
   identity=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_process_identity '$$'")
-  printf '%s\n' "$identity" > "$owner_file"
+  printf '%s\n' "$identity" > "$lockdir"
   local out
   out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo should-not-run" 2>&1)
   assert_not_contains "$out" "should-not-run" "a live owner's lock must not be reclaimed or bypassed"
-  rm -rf "$lockdir"
+  rm -f "$lockdir"
   pass "a lock held by a live owner is never reclaimed or bypassed"
 }
 
@@ -250,7 +269,7 @@ t_lock_reclaims_an_ownerless_crash() {
   home="$TMP_ROOT/lock-ownerless"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
   lockdir="$home/state/mini-reboot/check.lock"
-  mkdir -p "$lockdir"
+  : > "$lockdir"
   out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_MRB_LOCK_OWNERLESS_GRACE_SECS=0 bash -c \
     ". '$LIB'; fm_mrb_with_lock echo ran-after-ownerless-crash" 2>&1)
   assert_contains "$out" "ran-after-ownerless-crash" "an ownerless crash claim must be reclaimed"
@@ -262,12 +281,63 @@ t_lock_reclaims_a_reused_pid_identity() {
   home="$TMP_ROOT/lock-reused-pid"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
   lockdir="$home/state/mini-reboot/check.lock"
-  mkdir -p "$lockdir"
-  printf '%s\t%s\n' "$$" "Mon Jan 1 00:00:00 2001" > "$lockdir/owner"
+  printf '%s\t%s\n' "$$" "Mon Jan 1 00:00:00 2001" > "$lockdir"
   out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo ran-after-pid-reuse" 2>&1)
   assert_contains "$out" "ran-after-pid-reuse" "a mismatched process identity must be reclaimed"
   pass "a reused live pid cannot impersonate the original lock owner"
+}
+
+t_lock_recovers_an_interrupted_reclaim() {
+  local home fb lock out
+  home="$TMP_ROOT/lock-interrupted-reclaim"; mkdir -p "$home/state/mini-reboot"
+  fb=$(fake_sysctl_bin "$home")
+  lock="$home/state/mini-reboot/check.lock"
+  printf '99999\tdead-process\n' > "$lock"
+  ln "$lock" "$lock.reap"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
+    ". '$LIB'; fm_mrb_with_lock echo ran-after-interrupted-reclaim" 2>&1)
+  assert_contains "$out" "ran-after-interrupted-reclaim" "an interrupted exact-claim reclaim must recover"
+  pass "an interrupted stale-lock reclaim is crash-safe"
+}
+
+t_lock_concurrent_stale_reclaim_runs_once() {
+  local home fb lock p1 p2 worker
+  home="$TMP_ROOT/lock-concurrent-reclaim"; mkdir -p "$home/state/mini-reboot"
+  fb=$(fake_sysctl_bin "$home")
+  lock="$home/state/mini-reboot/check.lock"
+  printf '99999\tdead-process\n' > "$lock"
+  worker="$home/worker.sh"
+  cat > "$worker" <<EOF
+#!/usr/bin/env bash
+if mkdir "$home/active" 2>/dev/null; then
+  sleep 1
+  rmdir "$home/active"
+else
+  echo overlap >> "$home/overlap.log"
+fi
+EOF
+  chmod +x "$worker"
+  PATH="$fb:$PATH" FM_HOME="$home" bash -c \
+    ". '$LIB'; fm_mrb_with_lock '$worker'" & p1=$!
+  PATH="$fb:$PATH" FM_HOME="$home" bash -c \
+    ". '$LIB'; fm_mrb_with_lock '$worker'" & p2=$!
+  wait "$p1"; wait "$p2"
+  assert_absent "$home/overlap.log" "concurrent stale-lock reclaim must not overlap guarded execution"
+  pass "concurrent stale-lock reclaim preserves single-instance execution"
+}
+
+t_check_cycle_stops_after_sample_failure() {
+  local home out marker
+  home="$TMP_ROOT/cycle-sample-failure"; mkdir -p "$home"
+  marker="$home/evaluate-called"
+  out=$(FM_HOME="$home" bash -c ". '$LIB';
+    fm_mrb_append_sample() { return 1; }
+    fm_mrb_evaluate() { echo called > '$marker'; echo trigger=yes; }
+    fm_mrb_check_cycle" 2>&1)
+  assert_contains "$out" "current sample is invalid" "the cycle should diagnose invalid current metrics"
+  assert_absent "$marker" "stale history must not be evaluated after current sample collection fails"
+  pass "the check cycle stops when current sample collection fails"
 }
 
 # --- the AND-gate: never reboots on either condition alone ------------------
@@ -334,7 +404,7 @@ EOF
   chmod +x "$fb/vm_stat"
   cat > "$fb/zprint" <<'SH'
 #!/usr/bin/env bash
-echo "zone name elem size ... inuse"
+echo "data.kalloc.1024 1 0K 0K 0 0 0 0K 0"
 SH
   chmod +x "$fb/zprint"
   printf '%s\n' "$fb"
@@ -408,10 +478,14 @@ t_execute_reboot_invokes_a_real_configured_helper
 t_marker_active_blocks_a_second_cycle
 t_marker_clears_on_boot_session_change
 t_marker_clears_when_stale
+t_execute_reboot_blocks_when_boot_session_is_unreadable
 t_lock_reclaims_from_a_dead_owner
 t_lock_serializes_a_live_owner
 t_lock_reclaims_an_ownerless_crash
 t_lock_reclaims_a_reused_pid_identity
+t_lock_recovers_an_interrupted_reclaim
+t_lock_concurrent_stale_reclaim_runs_once
+t_check_cycle_stops_after_sample_failure
 t_check_cycle_does_nothing_when_resource_not_triggered
 t_check_cycle_reboots_only_when_both_conditions_genuinely_hold
 t_check_cycle_does_not_reboot_when_only_resource_triggers
