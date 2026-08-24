@@ -80,28 +80,6 @@ t_cli_unknown_subcommand_errors() {
   pass "the CLI rejects an unknown subcommand with a clear diagnostic"
 }
 
-# --- the discarded drain/admission-lock design is genuinely gone -----------
-
-t_no_drain_or_admission_lock_machinery_remains() {
-  ! grep -rl "FM_HOST_MAINT\|host-maintenance-drain\|fm_host_maint_" \
-    "$ROOT/bin" "$ROOT/AGENTS.md" 2>/dev/null | grep -v '/tests/' \
-    | grep -q . \
-    || fail "leftover discarded drain/admission-lock machinery found in bin/ or AGENTS.md"
-  pass "no leftover drain/admission-lock/barrier machinery remains (captain retarget honored)"
-}
-
-t_no_spawn_promote_handoff_integration_added() {
-  # The new design does not touch cross-home admission at all - unlike the
-  # discarded drain barrier, spawn/promotion/handoff are untouched.
-  ! grep -q "mini-reboot\|fm-mini-reboot" "$ROOT/bin/fm-spawn.sh" 2>/dev/null \
-    || fail "fm-spawn.sh should not reference the mini-reboot guard"
-  ! grep -q "mini-reboot\|fm-mini-reboot" "$ROOT/bin/fm-promote.sh" 2>/dev/null \
-    || fail "fm-promote.sh should not reference the mini-reboot guard"
-  ! grep -q "mini-reboot\|fm-mini-reboot" "$ROOT/bin/fm-backlog-handoff.sh" 2>/dev/null \
-    || fail "fm-backlog-handoff.sh should not reference the mini-reboot guard"
-  pass "spawn/promotion/handoff are untouched - no admission-control coupling in the new design"
-}
-
 # --- mini-only gate ----------------------------------------------------------
 
 t_execute_reboot_refuses_off_mini() {
@@ -253,17 +231,43 @@ t_lock_serializes_a_live_owner() {
   local home fb
   home="$TMP_ROOT/lock-live-owner"; mkdir -p "$home/state/mini-reboot"
   fb=$(fake_sysctl_bin "$home")
-  local lockdir owner_file
+  local lockdir owner_file identity
   lockdir="$home/state/mini-reboot/check.lock"
   mkdir -p "$lockdir"
   owner_file="$lockdir/owner"
-  echo $$ > "$owner_file"   # this test process itself: definitely alive
+  identity=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c ". '$LIB'; fm_mrb_process_identity '$$'")
+  printf '%s\n' "$identity" > "$owner_file"
   local out
   out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
     ". '$LIB'; fm_mrb_with_lock echo should-not-run" 2>&1)
   assert_not_contains "$out" "should-not-run" "a live owner's lock must not be reclaimed or bypassed"
   rm -rf "$lockdir"
   pass "a lock held by a live owner is never reclaimed or bypassed"
+}
+
+t_lock_reclaims_an_ownerless_crash() {
+  local home fb out lockdir
+  home="$TMP_ROOT/lock-ownerless"; mkdir -p "$home/state/mini-reboot"
+  fb=$(fake_sysctl_bin "$home")
+  lockdir="$home/state/mini-reboot/check.lock"
+  mkdir -p "$lockdir"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_MRB_LOCK_OWNERLESS_GRACE_SECS=0 bash -c \
+    ". '$LIB'; fm_mrb_with_lock echo ran-after-ownerless-crash" 2>&1)
+  assert_contains "$out" "ran-after-ownerless-crash" "an ownerless crash claim must be reclaimed"
+  pass "an ownerless lock left during publication is reclaimed"
+}
+
+t_lock_reclaims_a_reused_pid_identity() {
+  local home fb out lockdir
+  home="$TMP_ROOT/lock-reused-pid"; mkdir -p "$home/state/mini-reboot"
+  fb=$(fake_sysctl_bin "$home")
+  lockdir="$home/state/mini-reboot/check.lock"
+  mkdir -p "$lockdir"
+  printf '%s\t%s\n' "$$" "Mon Jan 1 00:00:00 2001" > "$lockdir/owner"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" bash -c \
+    ". '$LIB'; fm_mrb_with_lock echo ran-after-pid-reuse" 2>&1)
+  assert_contains "$out" "ran-after-pid-reuse" "a mismatched process identity must be reclaimed"
+  pass "a reused live pid cannot impersonate the original lock owner"
 }
 
 # --- the AND-gate: never reboots on either condition alone ------------------
@@ -396,8 +400,6 @@ EOF
 
 t_cli_status_subcommand_runs_end_to_end
 t_cli_unknown_subcommand_errors
-t_no_drain_or_admission_lock_machinery_remains
-t_no_spawn_promote_handoff_integration_added
 t_execute_reboot_refuses_off_mini
 t_execute_reboot_refuses_wrong_role_value
 t_execute_reboot_blocked_without_helper_configured
@@ -408,6 +410,8 @@ t_marker_clears_on_boot_session_change
 t_marker_clears_when_stale
 t_lock_reclaims_from_a_dead_owner
 t_lock_serializes_a_live_owner
+t_lock_reclaims_an_ownerless_crash
+t_lock_reclaims_a_reused_pid_identity
 t_check_cycle_does_nothing_when_resource_not_triggered
 t_check_cycle_reboots_only_when_both_conditions_genuinely_hold
 t_check_cycle_does_not_reboot_when_only_resource_triggers

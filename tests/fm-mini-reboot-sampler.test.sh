@@ -333,6 +333,19 @@ t_rising_swapouts_alone_without_pressure_does_not_trigger() {
   pass "rising swapouts alone under normal pressure does not trigger"
 }
 
+t_unknown_pressure_with_rising_swapouts_does_not_trigger() {
+  local dir fb home out
+  dir="$TMP_ROOT/pressure-unknown"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  append_series "$fb" "$home" \
+    "1000 0 0 0 10" \
+    "1100 0 0 0 15" \
+    "1200 0 0 0 20"
+  out=$(evaluate_with "$home" 1200)
+  assert_contains "$out" "trigger=no" "unknown pressure must fail closed despite rising swapouts"
+  pass "unknown pressure with rising swapouts does not trigger"
+}
+
 t_collect_sample_parses_metrics
 t_append_sample_persists_deltas
 t_first_sample_has_zero_deltas
@@ -347,3 +360,4 @@ t_lifetime_first_sample_does_not_pollute_recent_slope
 t_pressure_and_rising_swapouts_triggers
 t_pressure_alone_without_rising_swapouts_does_not_trigger
 t_rising_swapouts_alone_without_pressure_does_not_trigger
+t_unknown_pressure_with_rising_swapouts_does_not_trigger

@@ -68,6 +68,37 @@ t_child_task_metadata_blocks() {
   pass "child task metadata blocks idleness"
 }
 
+t_missing_state_directory_blocks() {
+  local home out
+  home="$TMP_ROOT/no-state"
+  mkdir -p "$home/data"
+  printf '# Backlog\n\n## Done\n' > "$home/data/backlog.md"
+  out=$(run_idle_check_home "$home")
+  assert_contains "$out" "busy" "a missing state directory must fail closed"
+  assert_contains "$out" "state directory" "the reason should name the missing state directory"
+  pass "a missing state directory blocks idleness"
+}
+
+t_state_enumeration_failure_blocks() {
+  local home fb out
+  home="$TMP_ROOT/state-find-failure"
+  make_clear_home "$home"
+  fb=$(fm_fakebin "$home")
+  cat > "$fb/find" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "$home/state" ]; then
+  echo "simulated state read failure" >&2
+  exit 1
+fi
+exec /usr/bin/find "\$@"
+EOF
+  chmod +x "$fb/find"
+  out=$(PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_idle_check_home '$home'")
+  assert_contains "$out" "busy" "a failed state enumeration must fail closed"
+  assert_contains "$out" "could not enumerate" "the enumeration failure should be diagnosed"
+  pass "a state enumeration error blocks idleness"
+}
+
 t_missing_backlog_file_blocks() {
   local home
   home="$TMP_ROOT/no-backlog"
@@ -170,46 +201,32 @@ t_process_event_source_blocks() {
 }
 
 t_promised_public_reply_blocks() {
-  local home
+  local home req exp relation out
   home="$TMP_ROOT/followup"
   make_clear_home "$home"
-  cat > "$home/data/backlog.md" <<'EOF'
-# Backlog
-
-## Done
-EOF
-  if ! command -v tasks-axi >/dev/null 2>&1; then
-    echo "skip - tasks-axi not available" >&2
-    return 0
-  fi
-  # A best-effort real registration through tasks-axi's own public-followup
-  # add path. The typed request_context_binding contract validates several
-  # nested fields deep (context_binding.version must be "ctx1",
-  # context_binding.value must start with "ctx1_" AND satisfy further format
-  # validation this fixture does not reproduce) - that contract is owned by
-  # tasks-axi, not this suite, so a registration failure here skips rather
-  # than asserting a false failure. The count-parsing code path this exercises
-  # is the same one already proven correct (count=0 -> idle) by every other
-  # passing test in this file, since fm_mrb_idle_check_home calls
-  # `public-followup ready` on every clear-home check too.
-  local req exp
-  req="$home/req.json"; exp="$home/exp.json"
-  cat > "$req" <<'EOF2'
-{"request_id":"pf-test-1","platform":"slack","context_binding":{"version":"ctx1","value":"ctx1_c1_1.1"},"public_safe_summary":"test","received_at":"2026-08-24T00:00:00Z","followup_expires_at":"2099-01-01T00:00:00Z","reservation_expires_at":"2099-01-01T00:00:00Z"}
-EOF2
-  cat > "$exp" <<'EOF2'
-{"type":"note","project":"demo","required_deliverables":["reply"],"completion_policy":"manual"}
-EOF2
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required for public-followup coverage"
+  command -v jq >/dev/null 2>&1 || fail "jq is required for public-followup coverage"
+  req="$home/req.json"; exp="$home/exp.json"; relation="$home/relation.json"
+  jq -n '{request_id:"req-pf-test", platform:"discord",
+    context_binding:{version:"ctx1", value:"ctx1_req-pf-test"},
+    public_safe_summary:"test", received_at:"2026-08-24T00:00:00Z",
+    followup_expires_at:"2099-01-01T00:00:00Z",
+    reservation_expires_at:"2099-01-01T00:00:00Z"}' > "$req"
+  jq -n '{type:"report-ready", project:"firstmate", required_deliverables:["report_path"],
+    completion_policy:"all-required"}' > "$exp"
+  jq -n '{relation_id:"rel-test", work_ref:{home_id:"main", task_id:"work-test"},
+    role:"fulfills", required:true, generation:1}' > "$relation"
   tasks-axi public-followup add pf-test-1 --file "$home/data/backlog.md" \
     --request-context-file "$req" --purpose promised-final \
-    --expected-final-file "$exp" --expires-at 2099-01-01T00:00:00Z >/dev/null 2>&1 || {
-    echo "skip - could not register a fixture public-followup obligation" >&2
-    return 0
-  }
-  local out
+    --expected-final-file "$exp" --expires-at 2099-01-01T00:00:00Z >/dev/null 2>&1 \
+    || fail "fixture setup: public-followup add failed"
+  tasks-axi public-followup bind-work pf-test-1 --file "$home/data/backlog.md" \
+    --relation-file "$relation" >/dev/null 2>&1 \
+    || fail "fixture setup: public-followup bind-work failed"
   out=$(run_idle_check_home "$home")
-  assert_contains "$out" "busy" "a promised public reply still owed must block idleness"
-  pass "a promised public reply still owed blocks idleness"
+  assert_contains "$out" "busy" "a pending-work public reply must block idleness"
+  assert_contains "$out" "still owed" "the reason should identify the unresolved public reply"
+  pass "a pending-work promised public reply blocks idleness"
 }
 
 # --- (d) empty/unregistered registry never reads as idle -------------------
@@ -326,6 +343,8 @@ t_busy_reading_between_two_idle_reads_resets_confirmation() {
 
 t_clear_home_is_idle
 t_child_task_metadata_blocks
+t_missing_state_directory_blocks
+t_state_enumeration_failure_blocks
 t_missing_backlog_file_blocks
 t_in_flight_backlog_item_blocks
 t_held_captain_decision_blocks

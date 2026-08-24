@@ -317,7 +317,8 @@ fm_mrb_evaluate() {
     [ -n "${sod:-}" ] || continue
     swap_sum=$(( swap_sum + sod ))
   done <<< "$trend_rows"
-  if [ -n "$latest_pressure" ] && [ "$latest_pressure" != normal ] && [ "$swap_sum" -gt 0 ]; then
+  if { [ "$latest_pressure" = warn ] || [ "$latest_pressure" = critical ]; } \
+      && [ "$swap_sum" -gt 0 ]; then
     trigger=yes
     reasons+=("pressure-${latest_pressure}-with-rising-swapouts")
   fi
@@ -359,18 +360,22 @@ fm_mrb_idle_check_home() {
     return 0
   fi
 
+  local state="$home/state"
+  if [ ! -d "$state" ] || [ ! -r "$state" ]; then
+    echo "busy: state directory is missing or unreadable: $state"
+    return 0
+  fi
+
   # 1) zero child task metadata - the strongest simple gate (report Phase C).
-  if [ -d "$home/state" ]; then
-    local meta_count
-    meta_count=$(find "$home/state" -maxdepth 1 -name '*.meta' 2>/dev/null | wc -l | tr -d ' ')
-    if [ -z "$meta_count" ]; then
-      echo "busy: could not enumerate $home/state/*.meta"
-      return 0
-    fi
-    if [ "$meta_count" -gt 0 ]; then
-      echo "busy: $meta_count task(s) with metadata in $home/state"
-      return 0
-    fi
+  local meta_paths meta_count
+  if ! meta_paths=$(find "$state" -maxdepth 1 -name '*.meta' -print 2>&1); then
+    echo "busy: could not enumerate $state/*.meta: $meta_paths"
+    return 0
+  fi
+  meta_count=$(printf '%s\n' "$meta_paths" | awk 'NF { count++ } END { print count + 0 }')
+  if [ "$meta_count" -gt 0 ]; then
+    echo "busy: $meta_count task(s) with metadata in $state"
+    return 0
   fi
 
   # 2) no in-flight backlog item, no open captain decision (tasks-axi held).
@@ -418,25 +423,25 @@ fm_mrb_idle_check_home() {
   fi
 
   # 3) no unhandled steering-inbox message for any task under this home.
-  if [ -d "$home/state" ]; then
-    local unhandled
-    unhandled=$(find "$home/state" -mindepth 2 -maxdepth 2 -path '*.inbox/*.msg' 2>/dev/null | head -n 1)
-    if [ -n "$unhandled" ]; then
-      echo "busy: unhandled steering inbox message under $home/state"
-      return 0
-    fi
+  local unhandled
+  if ! unhandled=$(find "$state" -mindepth 2 -maxdepth 2 -path '*.inbox/*.msg' -print 2>&1); then
+    echo "busy: could not enumerate steering inboxes under $state: $unhandled"
+    return 0
+  fi
+  if [ -n "$unhandled" ]; then
+    echo "busy: unhandled steering inbox message under $state"
+    return 0
   fi
 
   # 4) no pending remote reply.
-  if [ -d "$home/state/pending-replies" ]; then
-    local pr_count
-    pr_count=$(find "$home/state/pending-replies" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
-    if [ -z "$pr_count" ]; then
-      echo "busy: could not enumerate $home/state/pending-replies"
+  if [ -d "$state/pending-replies" ]; then
+    local pr_paths
+    if ! pr_paths=$(find "$state/pending-replies" -mindepth 1 -print 2>&1); then
+      echo "busy: could not enumerate $state/pending-replies: $pr_paths"
       return 0
     fi
-    if [ "$pr_count" -gt 0 ]; then
-      echo "busy: pending remote reply record(s) in $home/state/pending-replies"
+    if [ -n "$pr_paths" ]; then
+      echo "busy: pending remote reply record(s) in $state/pending-replies"
       return 0
     fi
   fi
@@ -444,14 +449,22 @@ fm_mrb_idle_check_home() {
   # 5) no promised public reply still owed. Both the backlog and tasks-axi
   # presence were already established above (they are required, not
   # optional, for this home to be checked at all).
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "busy: jq not available to inspect public followups for $backlog"
+    return 0
+  fi
   local followup followup_n
-  if ! followup=$(tasks-axi public-followup ready --file "$backlog" 2>&1); then
+  if ! followup=$(tasks-axi public-followup list --file "$backlog" --json 2>&1); then
     echo "busy: tasks-axi public-followup check failed for $backlog: $followup"
     return 0
   fi
-  followup_n=$(printf '%s\n' "$followup" | awk -F': ' '/^count:/{print $2; exit}')
+  if ! followup_n=$(printf '%s\n' "$followup" | jq -er \
+      '(.public_followups // []) | map(select((.state // "") != "done")) | length' 2>/dev/null); then
+    echo "busy: could not parse tasks-axi public-followup list for $backlog"
+    return 0
+  fi
   if ! [[ "$followup_n" =~ ^[0-9]+$ ]]; then
-    echo "busy: could not parse tasks-axi public-followup count for $backlog"
+    echo "busy: invalid tasks-axi public-followup count for $backlog"
     return 0
   fi
   if [ "$followup_n" -gt 0 ]; then
@@ -461,15 +474,14 @@ fm_mrb_idle_check_home() {
 
   # 6) no registered process-event source (presence alone keeps supervision
   #    required, per AGENTS.md).
-  if [ -d "$home/state/procevent" ]; then
-    local pe_count
-    pe_count=$(find "$home/state/procevent" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
-    if [ -z "$pe_count" ]; then
-      echo "busy: could not enumerate $home/state/procevent"
+  if [ -d "$state/procevent" ]; then
+    local pe_paths
+    if ! pe_paths=$(find "$state/procevent" -mindepth 1 -print 2>&1); then
+      echo "busy: could not enumerate $state/procevent: $pe_paths"
       return 0
     fi
-    if [ "$pe_count" -gt 0 ]; then
-      echo "busy: registered process-event source(s) in $home/state/procevent"
+    if [ -n "$pe_paths" ]; then
+      echo "busy: registered process-event source(s) in $state/procevent"
       return 0
     fi
   fi
@@ -641,40 +653,78 @@ fm_mrb_execute_reboot() {
 
 # --- orchestration ---------------------------------------------------------
 
-# fm_mrb_with_lock <fn> [args...]: runs <fn> under a single-instance mkdir
-# lock so overlapping `check` invocations (e.g. a hung prior run still active
-# when the next scheduled tick fires) never race. Crash-safe: the owner pid is
-# written to a temp file and atomically renamed into the lock dir, so there is
-# never a window where the lock exists without an identifiable owner. A lock
-# whose recorded owner pid is no longer alive is reclaimed unconditionally by
-# process liveness alone - this is a purely local, single-machine lock with at
-# most one legitimate holder, not the distributed admission boundary the
-# discarded drain design needed, so a simple dead-owner check is sufficient.
+# fm_mrb_with_lock <fn> [args...]: runs <fn> under a single-instance lock so
+# overlapping `check` invocations (e.g. a hung prior run still active when the
+# next scheduled tick fires) never race. Creation uses the shell's exclusive
+# noclobber open. The owner identity combines pid and process start time, and
+# an ownerless interrupted write is reclaimed only after a grace period.
+fm_mrb_process_identity() {
+  local pid=$1 start
+  start=$(ps -p "$pid" -o lstart= 2>/dev/null | awk '{$1=$1; print}')
+  [ -n "$start" ] || return 1
+  printf '%s\t%s\n' "$pid" "$start"
+}
+
+fm_mrb_lock_mtime() {
+  local value
+  value=$(stat -f '%m' "$1" 2>/dev/null || true)
+  case "$value" in ''|*[!0-9]*) stat -c '%Y' "$1" 2>/dev/null ;; *) echo "$value" ;; esac
+}
+
 fm_mrb_with_lock() {
-  local lock owner_file pid tries=0
+  local lock owner_file owner_value owner pid signature live_identity tries=0
+  local mtime age grace=${FM_MRB_LOCK_OWNERLESS_GRACE_SECS:-60}
   lock=$(fm_mrb_lock_dir)
-  owner_file="$lock/owner"
-  while ! mkdir "$lock" 2>/dev/null; do
-    if [ -f "$owner_file" ]; then
-      pid=$(cat "$owner_file" 2>/dev/null)
-      if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-        fm_mrb_log "reclaiming lock from dead owner pid=$pid"
+  owner_value=$(fm_mrb_process_identity "$$") || {
+    fm_mrb_log "could not establish lock owner identity"
+    return 1
+  }
+
+  while ! (set -o noclobber; printf '%s\n' "$owner_value" > "$lock") 2>/dev/null; do
+    if [ -d "$lock" ]; then
+      owner_file="$lock/owner"
+    else
+      owner_file="$lock"
+    fi
+    owner=
+    [ ! -f "$owner_file" ] || owner=$(cat "$owner_file" 2>/dev/null)
+    if [ -n "$owner" ]; then
+      pid=${owner%%$'\t'*}
+      signature=
+      case "$owner" in *$'\t'*) signature=${owner#*$'\t'} ;; esac
+      live_identity=
+      case "$pid" in ''|*[!0-9]*) ;; *) live_identity=$(fm_mrb_process_identity "$pid" 2>/dev/null || true) ;; esac
+      if [ -z "$live_identity" ] || { [ -n "$signature" ] && [ "$live_identity" != "$owner" ]; }; then
+        fm_mrb_log "reclaiming lock from stale owner pid=${pid:-unknown}"
         rm -rf "$lock"
         continue
       fi
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
+      if [ -z "$owner" ]; then
+        mtime=$(fm_mrb_lock_mtime "$lock" || true)
+        age=0
+        [ -z "$mtime" ] || age=$(( $(fm_mrb_now) - mtime ))
+        if [ -n "$mtime" ] && [ "$age" -ge "$grace" ]; then
+          fm_mrb_log "reclaiming abandoned ownerless lock"
+          rm -rf "$lock"
+          continue
+        fi
+      fi
       fm_mrb_log "check already running (lock held), skipping this cycle"
       return 0
     fi
     sleep 1
   done
-  local tmp="$lock/owner.tmp.$$"
-  echo $$ > "$tmp"
-  mv "$tmp" "$owner_file"
-  trap 'rm -rf "$lock"' RETURN
-  "$@"
+
+  local status=0 current_owner
+  "$@" || status=$?
+  current_owner=$(cat "$lock" 2>/dev/null || true)
+  if [ "$current_owner" = "$owner_value" ]; then
+    rm -f "$lock"
+  fi
+  return "$status"
 }
 
 # fm_mrb_check_cycle: the full detect -> idle -> reboot decision for one
