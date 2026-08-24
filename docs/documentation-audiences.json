@@ -289,6 +289,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/mini-reboot-guard.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/orca-backend.md",
       "audience": "operator-current"
     },

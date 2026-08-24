@@ -78,6 +78,9 @@ config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitig
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
+config/host-role  must equal exactly "mini" to arm bin/fm-mini-reboot-guard.sh's reboot execution on this host; LOCAL, gitignored, and not inherited; see docs/mini-reboot-guard.md
+config/mini-reboot-homes  explicit registry of FM_HOME paths bin/fm-mini-reboot-guard.sh idle-checks before a reboot attempt; LOCAL, gitignored, and not inherited; absent or empty means the guard never reboots; see docs/mini-reboot-guard.md
+config/mini-reboot-helper  path to the root-authorized reboot helper bin/fm-mini-reboot-guard.sh invokes when both conditions hold; LOCAL, gitignored, and not inherited; absent blocks the reboot attempt rather than faking it; see docs/mini-reboot-guard.md
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
@@ -116,6 +119,7 @@ state/               runtime records and signals; gitignored
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
   decision-bindings/ private records marking a captured-answer source as feeding the keyed-answer intake, with a legacy origin on pre-collapse records; written only by bin/fm-captain-hold.sh bind, dropped by unbind and by source retirement (section 13; docs/captain-hold-lifecycle.md)
   when/              private condition->action watch specs, their trust bindings, and single-fire markers; written only by bin/fm-procevent-when.sh (section 13's process-event-sources trigger)
+  mini-reboot/       host-level (not per-task) samples, idle snapshots, the single-instance check lock, and the reboot-in-progress marker owned by bin/fm-mini-reboot-guard.sh; see docs/mini-reboot-guard.md
   inbox/             captain notes captured out of band by bin/fm-inbox.sh, including the voice handover's queued requests; each note appends one `check` wake and stays pending until acknowledged with `bin/fm-inbox.sh drain --ack <id>`, which moves it to inbox/handled/ (docs/voice-relay.md)
   x-inbox/           generated Relay pending mention payloads; fmx-respond drains it (section 14)
   x-context/         generated Relay durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)
