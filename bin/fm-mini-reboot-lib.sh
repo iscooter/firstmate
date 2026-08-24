@@ -476,7 +476,9 @@ fm_mrb_idle_check_home() {
     return 0
   fi
   if ! followup_n=$(printf '%s\n' "$followup" | jq -er \
-      '(.public_followups // []) | map(select((.state // "") != "done")) | length' 2>/dev/null); then
+      'if (.public_followups | type) == "array" then
+         .public_followups | map(select((.state // "") != "done")) | length
+       else error("public_followups must be an array") end' 2>/dev/null); then
     echo "busy: could not parse tasks-axi public-followup list for $backlog"
     return 0
   fi

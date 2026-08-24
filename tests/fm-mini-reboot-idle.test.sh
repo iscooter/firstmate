@@ -200,6 +200,26 @@ t_process_event_source_blocks() {
   pass "a registered process-event source blocks idleness"
 }
 
+t_malformed_public_followup_response_blocks() {
+  local home fb out
+  home="$TMP_ROOT/followup-malformed"
+  make_clear_home "$home"
+  fb=$(fm_fakebin "$home")
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = public-followup ]; then
+  printf '{}\n'
+else
+  printf 'count: 0\n'
+fi
+SH
+  chmod +x "$fb/tasks-axi"
+  out=$(PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_idle_check_home '$home'")
+  assert_contains "$out" "busy" "a malformed public-followup response must fail closed"
+  assert_contains "$out" "could not parse" "the malformed response should be diagnosed"
+  pass "a malformed public-followup response blocks idleness"
+}
+
 t_promised_public_reply_blocks() {
   local home req exp relation out
   home="$TMP_ROOT/followup"
@@ -352,6 +372,7 @@ t_unhandled_steering_inbox_blocks
 t_handled_steering_inbox_does_not_block
 t_pending_remote_reply_blocks
 t_process_event_source_blocks
+t_malformed_public_followup_response_blocks
 t_promised_public_reply_blocks
 t_empty_registry_is_busy
 t_registered_clear_home_is_idle_via_check_all
