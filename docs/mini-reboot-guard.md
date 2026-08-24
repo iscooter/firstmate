@@ -37,7 +37,7 @@ This script does not install its own schedule.
 
 ## Safety mechanics
 
-`check` runs under a single-instance lock (`state/mini-reboot/check.lock`) so an overlapping invocation never races; a lock left behind by a dead owner process is reclaimed, never left wedged.
+`check` uses `state/mini-reboot/check.lock` as best-effort redundancy prevention for overlapping scheduled invocations; a dead or ownerless lock is reclaimed. It is not a strict mutual-exclusion guarantee during concurrent reclamation, and reboot safety comes entirely from the resource-plus-idle gate.
 A successful reboot attempt writes a marker (`state/mini-reboot/reboot-in-progress`) before invoking the helper, so a hung or slow helper cannot cause an immediate re-fire on the next scheduled tick.
 The marker self-clears once the live boot-session id (`kern.bootsessionuuid`) differs from the recorded one - the reboot actually happened - or once it is older than 20 minutes and the machine evidently did not reboot.
 Nothing in this guard uses `--force`, kills a process, aborts a running validation, or discards a worktree to make a check pass; a blocking condition is meant to block.

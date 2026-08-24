@@ -52,6 +52,7 @@ fm_mrb_state_dir() {
 
 fm_mrb_samples_file() { echo "$(fm_mrb_state_dir)/samples.tsv"; }
 fm_mrb_idle_snapshot_file() { echo "$(fm_mrb_state_dir)/idle-snapshot.tsv"; }
+fm_mrb_boot_history_file() { echo "$(fm_mrb_state_dir)/boot-session"; }
 fm_mrb_lock_dir() { echo "$(fm_mrb_state_dir)/check.lock"; }
 fm_mrb_reboot_marker_file() { echo "$(fm_mrb_state_dir)/reboot-in-progress"; }
 fm_mrb_attempts_log() { echo "$(fm_mrb_state_dir)/reboot-attempts.log"; }
@@ -147,6 +148,22 @@ fm_mrb_boot_session_id() {
   sysctl -n kern.bootsessionuuid 2>/dev/null
 }
 
+fm_mrb_sync_boot_history() {
+  local file current recorded tmp
+  file=$(fm_mrb_boot_history_file)
+  current=$(fm_mrb_boot_session_id) || return 1
+  case "$current" in ''|*$'\t'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+  recorded=
+  [ ! -f "$file" ] || recorded=$(cat "$file" 2>/dev/null || true)
+  if [ "$recorded" != "$current" ]; then
+    rm -f "$(fm_mrb_samples_file)" "$(fm_mrb_idle_snapshot_file)"
+    tmp="$file.tmp.$$"
+    printf '%s\n' "$current" > "$tmp" || return 1
+    mv "$tmp" "$file" || return 1
+    [ -z "$recorded" ] || fm_mrb_log "boot session changed; reset sample and idle history"
+  fi
+}
+
 # fm_mrb_collect_sample: prints one TSV row of RAW metrics (no deltas - those
 # are computed and persisted by fm_mrb_append_sample against the prior row,
 # per the sample contract):
@@ -192,6 +209,10 @@ fm_mrb_collect_sample() {
 #   zone_delta wired_delta swapouts_delta
 fm_mrb_append_sample() {
   local file raw prev_zone=0 prev_wired=0 prev_swapouts=0 has_prev=0
+  if ! fm_mrb_sync_boot_history; then
+    fm_mrb_log "boot session unavailable; sample not recorded"
+    return 1
+  fi
   file=$(fm_mrb_samples_file)
   fm_mrb_prune_old_samples
   if [ -s "$file" ]; then
@@ -257,6 +278,11 @@ fm_mrb_sample_count() {
 # sample, or from an as-yet too-short history).
 fm_mrb_evaluate() {
   local file total maint_zone maint_wired hard_zone
+  if ! fm_mrb_sync_boot_history; then
+    echo "trigger=no"
+    echo "reason=boot-session-unavailable"
+    return 0
+  fi
   file=$(fm_mrb_samples_file)
   total=$(fm_mrb_sample_count "$file")
   maint_zone=$(fm_mrb_maint_zone_bytes)
@@ -568,6 +594,12 @@ fm_mrb_idle_check_all() {
 # regardless of the verdict.
 fm_mrb_idle_confirm() {
   local file now verdict prev_epoch prev_verdict confirmed=no reason
+  if ! fm_mrb_sync_boot_history; then
+    echo "confirmed=no"
+    echo "reason=boot-session-unavailable"
+    echo "verdict=busy: boot session unavailable"
+    return 0
+  fi
   file=$(fm_mrb_idle_snapshot_file)
   now=$(fm_mrb_now)
   verdict=$(fm_mrb_idle_check_all)
@@ -638,6 +670,7 @@ fm_mrb_reboot_marker_active() {
   cur_boot=$(fm_mrb_boot_session_id)
   if [ -n "$boot_id" ] && [ -n "$cur_boot" ] && [ "$boot_id" != "$cur_boot" ]; then
     fm_mrb_log "boot-session changed since marker ($boot_id -> $cur_boot): reboot happened, clearing marker"
+    fm_mrb_sync_boot_history >/dev/null 2>&1 || true
     rm -f "$file"
     return 1
   fi

@@ -161,6 +161,28 @@ t_invalid_zprint_does_not_append_a_sample() {
   pass "malformed zprint output is rejected without appending a sample"
 }
 
+t_boot_change_resets_detection_history() {
+  local dir fb home samples idle out
+  dir="$TMP_ROOT/boot-history"; mkdir -p "$dir"
+  fb=$(fake_bin "$dir"); home="$dir/home"
+  FM_HOME="$home" FM_MRB_NOW=1000 FM_FAKE_BOOT_ID=BOOT-A FM_FAKE_ZONE_BYTES=99999999999 \
+    FM_FAKE_PAGESIZE=1 PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_append_sample"
+  FM_HOME="$home" FM_MRB_NOW=1100 FM_FAKE_BOOT_ID=BOOT-A FM_FAKE_ZONE_BYTES=99999999999 \
+    FM_FAKE_PAGESIZE=1 PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_append_sample"
+  idle="$home/state/mini-reboot/idle-snapshot.tsv"
+  printf '1100\tidle\n' > "$idle"
+  FM_HOME="$home" FM_MRB_NOW=1200 FM_FAKE_BOOT_ID=BOOT-B FM_FAKE_ZONE_BYTES=99999999999 \
+    FM_FAKE_PAGESIZE=1 PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_append_sample"
+  samples="$home/state/mini-reboot/samples.tsv"
+  [ "$(wc -l < "$samples" | tr -d ' ')" -eq 1 ] || fail "a new boot must retain only its new sample"
+  assert_absent "$idle" "a new boot must clear the prior idle snapshot"
+  out=$(FM_HOME="$home" FM_MRB_NOW=1200 FM_FAKE_BOOT_ID=BOOT-B PATH="$fb:$PATH" \
+    bash -c ". '$LIB'; fm_mrb_evaluate")
+  assert_contains "$out" "trigger=no" "one post-boot sample must not combine with prior-boot history"
+  assert_contains "$out" "insufficient-samples" "the post-boot evaluation should start from one sample"
+  pass "a boot-session change resets sample and idle history"
+}
+
 # --- helper: append N samples with per-sample overrides ---------------------
 
 # append_series <dir> <fakebin> <home> "<epoch> <zone> <wired_pages> <pressure> <swapouts>" ...
@@ -178,8 +200,10 @@ append_series() {
 }
 
 evaluate_with() {
-  local home=$1 now=$2
-  FM_HOME="$home" FM_MRB_NOW="$now" bash -c ". '$LIB'; fm_mrb_evaluate"
+  local home=$1 now=$2 fb
+  fb="${home%/home}/fakebin"
+  FM_HOME="$home" FM_MRB_NOW="$now" FM_FAKE_BOOT_ID="${FM_FAKE_BOOT_ID:-BOOT-A}" \
+    PATH="$fb:$PATH" bash -c ". '$LIB'; fm_mrb_evaluate"
 }
 
 # --- (c) never triggers below the minimum sample count ----------------------
@@ -398,6 +422,7 @@ t_collect_sample_parses_metrics
 t_append_sample_persists_deltas
 t_first_sample_has_zero_deltas
 t_invalid_zprint_does_not_append_a_sample
+t_boot_change_resets_detection_history
 t_never_triggers_from_single_sample
 t_two_samples_do_not_trigger_threshold_condition
 t_three_consecutive_over_threshold_triggers
