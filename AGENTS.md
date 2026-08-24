@@ -78,7 +78,7 @@ config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitig
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
-config/host-role  must equal exactly "mini" to arm bin/fm-mini-reboot-guard.sh's reboot execution on this host; LOCAL, gitignored, and not inherited; see docs/mini-reboot-guard.md
+config/host-role  must equal exactly "mini" to arm bin/fm-mini-reboot-guard.sh's captain-authorized, narrowly scoped automatic reboot exception on this host (no per-reboot approval); LOCAL, gitignored, and not inherited; see docs/mini-reboot-guard.md
 config/mini-reboot-homes  explicit registry of FM_HOME paths bin/fm-mini-reboot-guard.sh idle-checks before a reboot attempt; LOCAL, gitignored, and not inherited; absent or empty means the guard never reboots; see docs/mini-reboot-guard.md
 config/mini-reboot-helper  path to the root-authorized reboot helper bin/fm-mini-reboot-guard.sh invokes when both conditions hold; LOCAL, gitignored, and not inherited; absent blocks the reboot attempt rather than faking it; see docs/mini-reboot-guard.md
 data/                personal fleet records; LOCAL, gitignored as a whole

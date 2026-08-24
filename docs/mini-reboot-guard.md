@@ -2,6 +2,7 @@
 
 `bin/fm-mini-reboot-guard.sh` and `bin/fm-mini-reboot-lib.sh` detect a genuine memory/kernel-zone leak on a mini host and reboot it, but only when the fleet on that mini is robustly idle.
 The guard has no drain, admission lock, work-blocking behavior, or per-reboot captain approval step.
+This is the captain-directed, narrowly scoped standing-autonomy exception for this host-maintenance action: deliberately provisioning the mini role, fleet registry, privileged helper, and scheduler opts into automatic execution when the two deterministic gates hold; it does not grant autonomy for any other destructive action.
 If both conditions do not hold, the guard does nothing and the machine handles load best-effort.
 This is mini-only by construction; a MacBook (or any unconfigured host) never reboots through this code.
 
@@ -10,7 +11,8 @@ This is mini-only by construction; a MacBook (or any unconfigured host) never re
 A resource sampler records zone bytes, wired memory, free memory, swap use, pressure, and their deltas.
 It raises the resource condition only when the maintenance threshold is crossed in three consecutive samples, a recent-window slope with a non-falling latest segment forecasts the hard ceiling before the forecast horizon, or warning/critical pressure coincides with swapouts rising across the selected trend window.
 It never triggers from a single sample.
-An idle check reuses `fm-crew-state.sh`, `tasks-axi`, and the documented `state/` layout to require every child task's reconciled current state to be done, no in-flight backlog item, no open captain decision, no unhandled steering inbox message, no pending remote reply, no promised public reply owed, and no registered process-event source, for every home in the registry.
+An idle check reuses `fm-crew-state.sh`, `tasks-axi`, and the documented `state/` layout to require every child task's reconciled current state to be done, no in-flight backlog item, no open captain decision, no unhandled steering inbox message, no unresolved remote reply, no promised public reply owed, and no registered `state/procevent/*.source` record, for every home in the registry.
+Resolved pending-reply history and process-event runner/publication artifacts are not outstanding work and do not block idleness.
 Any read failure, or a missing backlog file, blocks (fails closed) rather than reading as empty.
 Idleness is only confirmed after two consecutive idle reads at least 5 and at most 30 minutes apart, so a single lucky snapshot is never enough.
 Only when the resource condition and the confirmed idle window both hold does the guard attempt to execute a reboot.

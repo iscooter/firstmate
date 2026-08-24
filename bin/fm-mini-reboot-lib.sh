@@ -499,17 +499,26 @@ fm_mrb_idle_check_home() {
     return 0
   fi
 
-  # 4) no pending remote reply.
+  # 4) no unresolved remote reply. Resolved records are retained as durable
+  # history, so their presence alone is not pending work. Unknown or malformed
+  # records fail closed.
   if [ -d "$state/pending-replies" ]; then
-    local pr_paths
-    if ! pr_paths=$(find "$state/pending-replies" -mindepth 1 -print 2>&1); then
-      echo "busy: could not enumerate $state/pending-replies: $pr_paths"
-      return 0
-    fi
-    if [ -n "$pr_paths" ]; then
-      echo "busy: pending remote reply record(s) in $state/pending-replies"
-      return 0
-    fi
+    local pr_entry pr_phase
+    for pr_entry in "$state/pending-replies"/*; do
+      [ -e "$pr_entry" ] || continue
+      if [ ! -f "$pr_entry" ]; then
+        echo "busy: malformed pending remote reply entry: $pr_entry"
+        return 0
+      fi
+      if ! pr_phase=$(awk -F= '$1 == "phase" { value = $2 } END { print value }' "$pr_entry" 2>/dev/null); then
+        echo "busy: could not read pending remote reply record: $pr_entry"
+        return 0
+      fi
+      if [ "$pr_phase" != resolved ]; then
+        echo "busy: unresolved or malformed pending remote reply record: $pr_entry"
+        return 0
+      fi
+    done
   fi
 
   # 5) no promised public reply still owed. Both the backlog and tasks-axi
@@ -540,12 +549,13 @@ fm_mrb_idle_check_home() {
     return 0
   fi
 
-  # 6) no registered process-event source (presence alone keeps supervision
-  #    required, per AGENTS.md).
+  # 6) no registered process-event source. Registration is represented only
+  #    by state/procevent/*.source; runner and atomic-publication artifacts are
+  #    not registrations and must not keep an otherwise idle fleet busy.
   if [ -d "$state/procevent" ]; then
     local pe_paths
-    if ! pe_paths=$(find "$state/procevent" -mindepth 1 -print 2>&1); then
-      echo "busy: could not enumerate $state/procevent: $pe_paths"
+    if ! pe_paths=$(find "$state/procevent" -mindepth 1 -maxdepth 1 -name '*.source' -print 2>&1); then
+      echo "busy: could not enumerate $state/procevent/*.source: $pe_paths"
       return 0
     fi
     if [ -n "$pe_paths" ]; then

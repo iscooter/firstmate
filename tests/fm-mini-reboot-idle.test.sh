@@ -7,7 +7,7 @@
 # Pins:
 #   (a) each documented blocking condition individually blocks: child task
 #       metadata, in-flight backlog item, held captain decision, unhandled
-#       steering inbox, pending remote reply, promised public reply owed,
+#       steering inbox, unresolved remote reply, promised public reply owed,
 #       registered process-event source
 #   (b) a genuinely clear home reports idle
 #   (c) a missing backlog file is treated as busy (fail-closed), never as "no
@@ -205,11 +205,24 @@ t_pending_remote_reply_blocks() {
   home="$TMP_ROOT/pending-reply"
   make_clear_home "$home"
   mkdir -p "$home/state/pending-replies"
-  echo "corr=abc123" > "$home/state/pending-replies/abc123"
+  printf 'schema=fm-pending-reply.v1\nphase=awaiting_report\n' \
+    > "$home/state/pending-replies/abc123"
   local out
   out=$(run_idle_check_home "$home")
-  assert_contains "$out" "busy" "a pending remote reply must block idleness"
-  pass "a pending remote reply record blocks idleness"
+  assert_contains "$out" "busy" "an unresolved remote reply must block idleness"
+  pass "an unresolved pending-reply record blocks idleness"
+}
+
+t_resolved_remote_reply_does_not_block() {
+  local home out
+  home="$TMP_ROOT/resolved-reply"
+  make_clear_home "$home"
+  mkdir -p "$home/state/pending-replies"
+  printf 'schema=fm-pending-reply.v1\nphase=resolved\nresolved_epoch=1234\n' \
+    > "$home/state/pending-replies/abc123"
+  out=$(run_idle_check_home "$home")
+  [ "$out" = idle ] || fail "a retained resolved reply must not block idleness, got: $out"
+  pass "a retained resolved pending-reply record does not block idleness"
 }
 
 t_process_event_source_blocks() {
@@ -217,11 +230,22 @@ t_process_event_source_blocks() {
   home="$TMP_ROOT/procevent"
   make_clear_home "$home"
   mkdir -p "$home/state/procevent"
-  echo "source=github-pr-123" > "$home/state/procevent/github-pr-123"
+  echo "source=github-pr-123" > "$home/state/procevent/github-pr-123.source"
   local out
   out=$(run_idle_check_home "$home")
   assert_contains "$out" "busy" "a registered process-event source must block idleness"
   pass "a registered process-event source blocks idleness"
+}
+
+t_process_event_runner_artifact_does_not_block() {
+  local home out
+  home="$TMP_ROOT/procevent-runner-only"
+  make_clear_home "$home"
+  mkdir -p "$home/state/procevent"
+  printf 'runner\n' > "$home/state/procevent/retired.runner"
+  out=$(run_idle_check_home "$home")
+  [ "$out" = idle ] || fail "a runner artifact without a .source registration must not block idleness, got: $out"
+  pass "a process-event runner artifact alone does not block idleness"
 }
 
 t_malformed_public_followup_response_blocks() {
@@ -315,7 +339,8 @@ t_one_busy_home_blocks_the_whole_registry() {
 
 idle_confirm_at() {
   local coordinator=$1 now=$2
-  FM_HOME="$coordinator" FM_MRB_NOW="$now" bash -c ". '$LIB'; fm_mrb_idle_confirm"
+  FM_HOME="$coordinator" FM_MRB_NOW="$now" bash -c \
+    ". '$LIB'; fm_mrb_boot_session_id() { printf '%s\\n' test-boot-session; }; fm_mrb_idle_confirm"
 }
 
 t_single_idle_read_is_not_confirmed() {
@@ -396,7 +421,9 @@ t_held_captain_decision_blocks
 t_unhandled_steering_inbox_blocks
 t_handled_steering_inbox_does_not_block
 t_pending_remote_reply_blocks
+t_resolved_remote_reply_does_not_block
 t_process_event_source_blocks
+t_process_event_runner_artifact_does_not_block
 t_malformed_public_followup_response_blocks
 t_promised_public_reply_blocks
 t_empty_registry_is_busy
