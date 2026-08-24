@@ -22,7 +22,9 @@ This feature is Pi-only by construction and changes nothing anywhere else:
   Outcomes are written to the store before any note is handed to Pi, and rows that never reach that handoff replay once through the next locked session-start digest.
 - Consistency: `bin/fm-lease-lib.sh` owns the per-task lease contract, the main-only role partition, and the deliberate CONFUSED-AGENT-GRADE threat model these guards target (captain-decided; adversarial-grade separation is out of scope and tracked as follow-up design work); `bin/fm-lease.sh` is the command surface.
   The guards are wired into `fm-send.sh`, `fm-control.sh`, and `fm-teardown.sh` (overlap, lease-checked, with claim serialization retained through the mutation) and `fm-pr-merge.sh`, `fm-merge-local.sh`, and `fm-spawn.sh` (main-owned, branch refused; a relaunch through `fm-control` stays branch-legal recovery).
-- Captain autonomy grant: `config/pi-supervision-branch` (docs/configuration.md "Pi supervision branch"). Grants are explicit `project=<task-metadata project>` lines; the branch accepts a wake only when every unread row resolves wholly inside the listed projects, so sharing a home never broadens authority. Absence, malformed grants, fleet-wide wakes, and mixed-project drains stay on main.
+- Captain autonomy grant: `config/pi-supervision-branch` (docs/configuration.md "Pi supervision branch").
+  Grants are explicit `project=<task-metadata project>` lines; the branch accepts a wake only when every unread row resolves wholly inside the listed projects, so sharing a home never broadens authority.
+  Absence, malformed grants, fleet-wide wakes, and mixed-project drains stay on main.
 
 ## How the branch knows what the captain said
 
