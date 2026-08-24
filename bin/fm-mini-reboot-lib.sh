@@ -296,20 +296,27 @@ fm_mrb_evaluate() {
 
   # Condition 2: slope forecast over a recent window predicts the hard
   # ceiling before the forecast horizon.
-  local window recent oldest_line latest_line
+  local window recent oldest_line previous_line latest_line
   window=$(fm_mrb_slope_window_secs)
   recent=$(fm_mrb_recent_samples "$window")
   if [ -n "$recent" ] && [ "$(printf '%s\n' "$recent" | wc -l | tr -d ' ')" -ge 2 ]; then
     oldest_line=$(printf '%s\n' "$recent" | head -n 1)
+    previous_line=$(printf '%s\n' "$recent" | tail -n 2 | head -n 1)
     latest_line=$(printf '%s\n' "$recent" | tail -n 1)
-    local o_epoch o_zone l_epoch l_zone dt dz
+    local o_epoch o_zone p_epoch p_zone l_epoch l_zone dt dz recent_dt recent_dz
     o_epoch=$(printf '%s' "$oldest_line" | cut -f1)
     o_zone=$(printf '%s' "$oldest_line" | cut -f2)
+    p_epoch=$(printf '%s' "$previous_line" | cut -f1)
+    p_zone=$(printf '%s' "$previous_line" | cut -f2)
     l_epoch=$(printf '%s' "$latest_line" | cut -f1)
     l_zone=$(printf '%s' "$latest_line" | cut -f2)
     dt=$(( l_epoch - o_epoch ))
     dz=$(( l_zone - o_zone ))
-    if [ "$dt" -gt 0 ] && [ "$dz" -gt 0 ] && [ "$l_zone" -lt "$hard_zone" ]; then
+    recent_dt=$(( l_epoch - p_epoch ))
+    recent_dz=$(( l_zone - p_zone ))
+    if [ "$dt" -gt 0 ] && [ "$dz" -gt 0 ] \
+        && [ "$recent_dt" -gt 0 ] && [ "$recent_dz" -ge 0 ] \
+        && [ "$l_zone" -lt "$hard_zone" ]; then
       local remaining forecast_secs horizon
       remaining=$(( hard_zone - l_zone ))
       # forecast_secs = remaining / (dz/dt), rearranged to avoid float math.
