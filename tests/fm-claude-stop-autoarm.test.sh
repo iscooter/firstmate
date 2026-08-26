@@ -126,6 +126,16 @@ printf 'signal: task.status done: slow fixture\n'
 exit 0
 SH
       ;;
+    blocking-actionable)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$$" >> "$FM_HOME/state/arm-ran"
+sleep 6
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'stale: fixture-win actionable\n'
+exit 0
+SH
+      ;;
     meta-vanishes)
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -155,7 +165,21 @@ SH
 }
 
 epoch_outcome() {
-  sed -n 's/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$1/state/.claude-autoarm-epoch" 2>/dev/null || true
+  sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$1/state/.claude-autoarm-epoch" 2>/dev/null || true
+}
+
+# Run the hook in the background under the fake harness, output captured to a
+# file. Sets RUN_AUTOARM_BG_PID (a direct child of the calling shell, so the
+# caller can `wait` on it for the hook's exit status).
+RUN_AUTOARM_BG_PID=
+run_autoarm_bg() {
+  local dir=$1 out=$2
+  printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
+      ' > "$out" 2>&1 &
+  RUN_AUTOARM_BG_PID=$!
 }
 
 watcher_identity() {
@@ -534,7 +558,7 @@ test_single_flight_admits_exactly_one_owner() {
   pass "auto-arm: concurrent firings admit one owner and one rewake translation"
 }
 
-# --- abandoned single-flight claim recovery -----------------------------------
+# --- abandoned single-flight claim recovery (legacy shim) ----------------------
 # The 2026-08-14 lapse: one cycle armed, beat its beacon, delivered a single
 # rewake, and exited, leaving its owner lock behind with a live pid. The single
 # flight gate then turned every later firing into exit 0, so with two tasks in
@@ -543,6 +567,11 @@ test_single_flight_admits_exactly_one_owner() {
 # enough to prove that: the ledger naming that same pid with a finished outcome,
 # or a recorded pid-identity the live pid no longer matches, is what distinguishes
 # an abandoned claim from one still deciding.
+#
+# These fixtures fabricate the LOCK-HOLDING claim shape a pre-generation build
+# leaves behind, so this section pins the legacy shim: a live legacy owner
+# still defers the gate, and an abandoned one is reclaimed once so the home
+# re-arms. The generation-claim section below pins the current contract.
 
 # Fabricate a held owner lock: <dir> <pid> <role>. Plain-dir shape on purpose -
 # the hook must reclaim whatever a crashed or blocked owner left behind.
@@ -602,7 +631,7 @@ test_abandoned_owner_claim_is_reclaimed_and_rearms() {
   pass "auto-arm: an abandoned owner claim is reclaimed so a lapsed cycle re-arms"
 }
 
-test_arming_claim_is_never_reclaimed() {
+test_arming_claim_with_fresh_beacon_is_never_reclaimed() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/arming-claim")
   : > "$dir/state/task1.meta"
@@ -610,18 +639,75 @@ test_arming_claim_is_never_reclaimed() {
   sleep 60 &
   pid=$!
   record_autoarm_owner "$dir" "$pid"
-  # An owner foregrounds the arm for the whole watcher cycle, so "arming" is in
-  # progress no matter how old its ledger entry is.
+  # An owner foregrounds the arm for the whole watcher cycle, so an old "arming"
+  # entry is still in progress while its watcher keeps beating the beacon.
   record_autoarm_epoch "$dir" 464 "$pid" arming
+  : > "$dir/state/.last-watcher-beat"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  expect_code 0 "$status" "a claim still arming must keep the single-flight gate closed"
+  expect_code 0 "$status" "a claim still arming under a fresh beacon must keep the single-flight gate closed"
   [ -z "$out" ] || fail "deferring to an arming claim produced output: $out"
   assert_absent "$dir/state/arm-ran" "an arming claim was stolen and double-armed"
   [ "$(epoch_field "$dir" epoch)" = 464 ] || fail "deferred firing rewrote the arming ledger entry"
   assert_present "$dir/state/.claude-autoarm.lock" "an arming claim lost its owner lock"
-  pass "auto-arm: an owner still arming is never reclaimed, however long the cycle runs"
+  pass "auto-arm: an owner still arming is never reclaimed while its watcher keeps beating"
+}
+
+# The other legitimate arming shape: a claim that JUST started arming after a
+# real lapse, so the beacon is long stale but the entry is fresh. The arm's
+# bounded startup window must never be stolen out from under it.
+test_fresh_arming_claim_with_stale_beacon_is_never_reclaimed() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/fresh-arming-claim")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_owner "$dir" "$pid"
+  record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
+  printf 'epoch=464 owner_pid=%s outcome=arming updated_at=%s\n' "$pid" "$(date +%s)" \
+    > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a freshly arming claim must keep the single-flight gate closed even after a long lapse"
+  [ -z "$out" ] || fail "deferring to a fresh arming claim produced output: $out"
+  assert_absent "$dir/state/arm-ran" "a fresh arming claim was stolen and double-armed"
+  assert_present "$dir/state/.claude-autoarm.lock" "a fresh arming claim lost its owner lock"
+  pass "auto-arm: a fresh arming claim is never reclaimed while its startup window is still open"
+}
+
+# The 2026-08-26 watcher flap: a Stop-hook auto-arm HUNG mid-arm, alive for the
+# rest of the session with its ledger frozen at "arming" and no watcher beating.
+# Every later firing read the live owner as legitimate contention and exited 0,
+# so nothing ever re-armed and the home lapsed between manual arms. A live,
+# identity-matched owner whose entry AND beacon are both older than grace is
+# stuck, not in flight, and must be reclaimed so re-arming self-heals.
+test_stuck_arming_claim_is_reclaimed_and_rearms() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/stuck-arming-claim")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_owner "$dir" "$pid"
+  record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
+  record_autoarm_epoch "$dir" 464 "$pid" arming
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a live owner stuck arming past grace with a beacon just as stale must be reclaimed, not deferred to forever"
+  [ -e "$dir/state/arm-ran" ] || fail "a stuck arming claim left the home unarmed with work in flight"
+  assert_contains "$out" "firstmate watcher wake" "the reclaimed cycle must still translate its wake"
+  [ "$(epoch_field "$dir" epoch)" -gt 464 ] || fail "reclaimed cycle did not advance the frozen ledger: $(epoch_field "$dir" epoch)"
+  [ "$(epoch_field "$dir" owner_pid)" != "$pid" ] || fail "reclaimed ledger still names the stuck owner"
+  assert_absent "$dir/state/.claude-autoarm.lock" "reclaimed cycle left an owner lock behind"
+  assert_absent "$dir/state/.claude-autoarm.lock.steal" "reclaim left its serialization mutex behind"
+  pass "auto-arm: a hung owner frozen at arming with no watcher beat is reclaimed so re-arming self-heals"
 }
 
 test_claim_not_named_by_the_ledger_is_never_reclaimed() {
@@ -648,9 +734,10 @@ test_claim_not_named_by_the_ledger_is_never_reclaimed() {
 
 # The same unrecoverable lapse, reached where the ledger cannot prove it: a session
 # teardown kills the claim's whole process group before it records any outcome, so
-# the entry still reads "arming" (in flight however old, by contract) while the
-# recorded pid is later handed to an unrelated live process. Only the identity the
-# claim recorded inside its own lock separates that from a real arm in progress.
+# the entry still reads "arming" while the recorded pid is later handed to an
+# unrelated live process. Only the identity the claim recorded inside its own lock
+# separates that from a real arm in progress, so keep the beacon fresh here: this
+# case must reclaim on the identity leg alone, not the stuck-arming leg.
 test_pid_reused_arming_claim_is_reclaimed_and_rearms() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/reused-pid-arming")
@@ -662,6 +749,7 @@ test_pid_reused_arming_claim_is_reclaimed_and_rearms() {
   record_autoarm_owner "$dir" "$pid"
   record_autoarm_owner_identity "$dir" "$$" || fail "could not record a claim pid-identity"
   record_autoarm_epoch "$dir" 464 "$pid" arming
+  : > "$dir/state/.last-watcher-beat"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
@@ -700,7 +788,8 @@ test_pid_reused_claim_with_no_ledger_is_reclaimed_and_rearms() {
 
 # The negative control for the identity leg: a claim whose recorded identity still
 # matches the process holding the lock is genuinely in flight, so an arm that has
-# legitimately been running for hours must keep the single-flight gate closed.
+# legitimately been running for hours - its watcher beating the whole time - must
+# keep the single-flight gate closed.
 test_identity_matched_arming_claim_is_never_reclaimed() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/identity-matched-arming")
@@ -711,6 +800,7 @@ test_identity_matched_arming_claim_is_never_reclaimed() {
   record_autoarm_owner "$dir" "$pid"
   record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
   record_autoarm_epoch "$dir" 464 "$pid" arming
+  : > "$dir/state/.last-watcher-beat"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
@@ -741,6 +831,127 @@ test_terminal_check_claim_is_never_reclaimed() {
   assert_absent "$dir/state/arm-ran" "a terminal-check claim was stolen and double-armed"
   assert_present "$dir/state/.claude-autoarm.lock" "a terminal-check claim lost its owner lock"
   pass "auto-arm: the guard's terminal-check claim is never reclaimed"
+}
+
+# --- generation claims: optimistic single-flight and supersession --------------
+# The current claim is the two-line ledger entry itself (line 1 the classic
+# epoch record, line 2 the owner's pid-identity); no lock is held across arming
+# or output. A live open claim defers every firing; a stuck, dead,
+# identity-mismatched, or finished claim is superseded by taking the next
+# generation; a superseded owner re-verifies ownership before every ledger
+# write and every emit and goes silent.
+
+# Fabricate a v2 generation claim: <dir> <gen> <owner-pid> <outcome>
+# [identity-pid]. Passing an identity pid records that process's identity as
+# line 2 (the claim's own pid for a matched claim, another for pid reuse).
+record_autoarm_v2_claim() {
+  local dir=$1 gen=$2 owner=$3 outcome=$4 identity_pid=${5:-} identity=
+  if [ -n "$identity_pid" ]; then
+    identity=$(fm_test_pid_identity "$identity_pid") || return 1
+    [ -n "$identity" ] || return 1
+  fi
+  {
+    printf 'epoch=%s owner_pid=%s outcome=%s updated_at=1\n' "$gen" "$owner" "$outcome"
+    [ -z "$identity" ] || printf '%s\n' "$identity"
+  } > "$dir/state/.claude-autoarm-epoch"
+}
+
+# A live open generation claim needs no lock to keep the gate closed: the
+# ledger alone defers a concurrent firing, however old the entry, while the
+# watcher keeps beating the beacon.
+test_open_generation_claim_defers_without_any_lock() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/v2-open-claim")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_v2_claim "$dir" 464 "$pid" arming "$pid" || fail "could not record a v2 claim"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  : > "$dir/state/.last-watcher-beat"
+  assert_absent "$dir/state/.claude-autoarm.lock" "this case must start with no owner lock at all"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a live open generation claim must keep the single-flight gate closed with no lock held"
+  [ -z "$out" ] || fail "deferring to an open generation claim produced output: $out"
+  assert_absent "$dir/state/arm-ran" "an open generation claim was superseded and double-armed"
+  [ "$(epoch_field "$dir" epoch)" = 464 ] || fail "deferred firing rewrote the open claim's ledger entry"
+  pass "auto-arm: a live open generation claim defers concurrent firings with no lock held"
+}
+
+# The 2026-08-26 watcher flap in the generation model: a live, identity-matched
+# owner whose ledger entry and watcher beacon are both older than grace is
+# stuck, and the next firing supersedes it by taking the next generation.
+test_stuck_generation_claim_is_superseded_and_rearms() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/v2-stuck-claim")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_v2_claim "$dir" 464 "$pid" arming "$pid" || fail "could not record a v2 claim"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a live owner stuck arming past grace with a beacon just as stale must be superseded, not deferred to forever"
+  [ -e "$dir/state/arm-ran" ] || fail "a stuck generation claim left the home unarmed with work in flight"
+  assert_contains "$out" "firstmate watcher wake" "the superseding generation must still translate its wake"
+  [ "$(epoch_field "$dir" epoch)" -gt 464 ] || fail "superseding claim did not advance the frozen ledger: $(epoch_field "$dir" epoch)"
+  [ "$(epoch_field "$dir" owner_pid)" != "$pid" ] || fail "superseding claim left the stuck owner on the ledger"
+  assert_absent "$dir/state/.claude-autoarm.lock" "the generation claim left a lock held after finishing"
+  pass "auto-arm: a hung generation owner with no watcher beat is superseded so re-arming self-heals"
+}
+
+# End-to-end regression for all three concurrency edge classes at once, with a
+# REAL hook process hung mid-arm:
+#   1. no mutex across blocking steps - while owner A is mid-arm, a concurrent
+#      firing B defers promptly instead of queueing on any lock;
+#   2. stuck-owner supersession - once A's claim and the beacon age past grace
+#      while A is still alive arming, firing C takes the next generation and
+#      translates its own close (exit 2);
+#   3. no double-translation - when A's arm finally returns, A re-verifies
+#      generation ownership, finds itself superseded, and goes completely
+#      silent (exit 0, no banner, no ledger write), so one home never emits
+#      two continuations for one supersession episode.
+test_superseded_owner_goes_silent_and_never_double_translates() {
+  local dir a_out a_pid b_out b_status c_out c_status a_status i count
+  dir=$(make_primary_dir "$TMP_ROOT/v2-superseded-silence")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" blocking-actionable
+  a_out="$dir/state/a.out"
+  run_autoarm_bg "$dir" "$a_out"
+  a_pid=$RUN_AUTOARM_BG_PID
+  i=0
+  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
+    [ "$i" -lt 50 ] || fail "owner A never published its arming claim"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  b_out=$(run_autoarm "$dir" 2>/dev/null); b_status=$?
+  expect_code 0 "$b_status" "a firing during a live open claim must defer promptly (no mutex is held across arming)"
+  [ -z "$b_out" ] || fail "deferring firing produced output: $b_out"
+  count=$(wc -l < "$dir/state/arm-ran" | tr -d ' ')
+  [ "$count" -eq 1 ] || fail "deferring firing must not arm, saw $count arms"
+  # A is still alive mid-arm; make its claim stuck-shaped.
+  kill -0 "$a_pid" 2>/dev/null || fail "owner A finished before the supersession could be exercised"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  c_out=$(run_autoarm "$dir" 2>/dev/null); c_status=$?
+  expect_code 2 "$c_status" "the superseding generation must translate its own close"
+  assert_contains "$c_out" "firstmate watcher wake" "the superseding generation must carry the rewake banner"
+  wait "$a_pid"
+  a_status=$?
+  expect_code 0 "$a_status" "the superseded owner must exit 0 instead of double-translating"
+  [ ! -s "$a_out" ] || fail "the superseded owner emitted output after losing its generation: $(cat "$a_out")"
+  [ "$(epoch_field "$dir" epoch)" = 2 ] || fail "the superseded owner advanced the ledger past its successor: $(epoch_field "$dir" epoch)"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the superseding generation's outcome was overwritten: $(epoch_outcome "$dir")"
+  count=$(wc -l < "$dir/state/arm-ran" | tr -d ' ')
+  [ "$count" -eq 2 ] || fail "expected exactly the owner and superseder arms, saw $count"
+  pass "auto-arm: a superseded owner goes silent - one supersession episode, one translation, no held mutex"
 }
 
 test_need_vanished_mid_cycle_closes_quietly() {
@@ -805,12 +1016,17 @@ test_positive_recovery_budget_contention_preserves_episode
 test_arms_for_x_mode_poll_need_without_inflight
 test_single_flight_admits_exactly_one_owner
 test_abandoned_owner_claim_is_reclaimed_and_rearms
-test_arming_claim_is_never_reclaimed
+test_arming_claim_with_fresh_beacon_is_never_reclaimed
+test_fresh_arming_claim_with_stale_beacon_is_never_reclaimed
+test_stuck_arming_claim_is_reclaimed_and_rearms
 test_claim_not_named_by_the_ledger_is_never_reclaimed
 test_pid_reused_arming_claim_is_reclaimed_and_rearms
 test_pid_reused_claim_with_no_ledger_is_reclaimed_and_rearms
 test_identity_matched_arming_claim_is_never_reclaimed
 test_terminal_check_claim_is_never_reclaimed
+test_open_generation_claim_defers_without_any_lock
+test_stuck_generation_claim_is_superseded_and_rearms
+test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
 test_active_in_marked_secondmate_home
