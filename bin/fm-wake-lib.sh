@@ -989,14 +989,14 @@ fm_failure_episode_reset() {
 # generation. This is an optimistic, generation-based single-flight design:
 #
 #   - The CURRENT claim is the ledger's latest entry: line 1 is the classic
-#     "epoch=N owner_pid=P outcome=O updated_at=T" record, and line 2 (when the
-#     platform can compute it) is the claiming process's pid-identity, the same
-#     identity every other supervision lock in this repo records
-#     (fm_pid_identity above). A missing identity line keeps ledger-plus-
-#     liveness reasoning, exactly like a legacy lock missing its identity file.
+#     "epoch=N owner_pid=P outcome=O updated_at=T" record, and line 2 is the
+#     claiming process's pid-identity, the same identity every other supervision
+#     lock in this repo records (fm_pid_identity above). New claims fail closed
+#     when that identity cannot be recorded; a missing identity line is accepted
+#     only for a legacy ledger written during an upgrade window.
 #   - A claim is OPEN (fm_autoarm_claim_open) while its outcome is "arming",
-#     its owner pid is alive, its recorded identity (when present) still
-#     matches that pid, and it is not STUCK - stuck meaning both the ledger
+#     its owner pid is alive, its recorded identity (when present) can be
+#     recomputed and matches that pid, and it is not STUCK - stuck meaning both the ledger
 #     entry and the watcher beacon (state/.last-watcher-beat) are older than
 #     the guard grace, which proves the owner hung mid-arm with nothing
 #     supervising (every legitimate arming phase with no watcher is bounded in
@@ -1098,10 +1098,9 @@ fm_autoarm_claim_open() {  # <state-dir> [grace]
   fm_autoarm_ledger_read "$state" || return 1
   [ "$FM_AUTOARM_OUTCOME" = arming ] || return 1
   fm_pid_alive "$FM_AUTOARM_OWNER" || return 1
-  if [ -n "$FM_AUTOARM_IDENTITY" ] \
-    && current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) \
-    && [ -n "$current" ] && [ "$current" != "$FM_AUTOARM_IDENTITY" ]; then
-    return 1
+  if [ -n "$FM_AUTOARM_IDENTITY" ]; then
+    current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) || return 1
+    [ -n "$current" ] && [ "$current" = "$FM_AUTOARM_IDENTITY" ] || return 1
   fi
   if [ "$(fm_path_age "$epoch")" -ge "$grace" ] \
     && [ "$(fm_path_age "$state/.last-watcher-beat")" -ge "$grace" ]; then
@@ -1113,9 +1112,8 @@ fm_autoarm_claim_open() {  # <state-dir> [grace]
 # Atomically publish this process as the owner of generation N+1, under one
 # short micro-mutex hold. Returns 0 with FM_AUTOARM_MY_GEN set on success, 2
 # when a competing claimant won the race (the ledger holds an open claim), and
-# 1 when the micro-mutex is contended or the write failed. The identity line is
-# best effort: a platform where fm_pid_identity cannot answer claims with the
-# ledger-plus-liveness reasoning instead of losing the claim.
+# 1 when the micro-mutex is contended, identity cannot be established, or the
+# write failed. Every new claim contains its mandatory identity on line 2.
 fm_autoarm_claim_next() {  # <state-dir> [grace]
   local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch pid gen identity tmp
   lock="$state/.claude-autoarm.lock"
@@ -1130,17 +1128,21 @@ fm_autoarm_claim_next() {  # <state-dir> [grace]
     fm_lock_release "$lock"
     return 2
   fi
+  identity=$(fm_pid_identity "$pid" 2>/dev/null) || identity=
+  if [ -z "$identity" ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
   gen=$(_fm_autoarm_epoch_field "$epoch" epoch 2>/dev/null || true)
   case "$gen" in
     ''|*[!0-9]*) gen=0 ;;
   esac
   gen=$((gen + 1))
-  identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
   tmp="$epoch.tmp.$pid"
   if ! {
       printf 'epoch=%s owner_pid=%s outcome=arming updated_at=%s\n' \
         "$gen" "$pid" "$(date +%s)"
-      [ -z "$identity" ] || printf '%s\n' "$identity"
+      printf '%s\n' "$identity"
     } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$epoch" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
     fm_lock_release "$lock"

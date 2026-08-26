@@ -184,6 +184,13 @@ autoarm_finalize() {  # <outcome>
   esac
 }
 
+autoarm_emit_finalize() {  # <outcome> <message>
+  fm_autoarm_still_owner "$STATE" "$MY_GEN" || return 1
+  printf '%s\n' "$2" >&2
+  fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1" || true
+  return 0
+}
+
 # X mode cadence: source the generated config so an X instance polls at its
 # 30s cadence (fm-bootstrap.sh x_mode_setup contract).
 # shellcheck source=/dev/null
@@ -268,18 +275,15 @@ if [ -e "$FAILURE_ALARM" ]; then
 fi
 
 if [ "$ACTIONABLE" -eq 1 ]; then
-  # A newer generation superseded this owner while its arm was closing: the
-  # translation belongs to that generation now, so go silent instead of
-  # double-firing one event.
-  if ! autoarm_finalize rewake; then
-    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-    exit 0
-  fi
-  {
+  MESSAGE=$(
     printf 'firstmate watcher wake - one supervision event needs a handling turn now.\n'
     [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
     printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'
-  } >&2
+  )
+  if ! autoarm_emit_finalize rewake "$MESSAGE"; then
+    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    exit 0
+  fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   exit 2
 fi
@@ -288,15 +292,15 @@ fi
 # still exits 2 so Claude must continue into another Stop-owned retry without
 # creating a repeated operator notice or manual-arm loop.
 if [ ! -e "$FAILURE_NOTICE" ]; then
-  if ! autoarm_finalize failed; then
-    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-    exit 0
-  fi
-  {
+  MESSAGE=$(
     printf 'firstmate watcher auto-arm FAILED - the Stop-owned automatic supervision mechanism is broken after %s bounded attempts, and no live watcher with a fresh beacon was verified.\n' "$attempt"
     [ -n "$OUT" ] && grep -E '^(watcher:|signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
     printf 'Do not launch a manual background arm from this notice; investigate the automatic Stop hook and watcher startup before ending blind.\n'
-  } >&2
+  )
+  if ! autoarm_emit_finalize failed "$MESSAGE"; then
+    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    exit 0
+  fi
   : > "$FAILURE_NOTICE" 2>/dev/null || true
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   exit 2

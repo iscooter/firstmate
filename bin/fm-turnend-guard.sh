@@ -336,6 +336,10 @@ terminal_fail_open() {
     fm_lock_release "$OWNER_LOCK"
     return 1
   fi
+  if fm_autoarm_claim_open "$STATE" "$GRACE"; then
+    fm_lock_release "$OWNER_LOCK"
+    return 2
+  fi
   if ! fm_lock_try_acquire "$BUDGET_LOCK"; then
     fm_lock_release "$OWNER_LOCK"
     return 1
