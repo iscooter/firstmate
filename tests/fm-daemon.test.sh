@@ -1067,6 +1067,26 @@ test_classify_signal_dedup_against_scan() {
   pass "classify_signal dedupes against the catch-all scan seen marker"
 }
 
+test_classify_signal_reads_the_whole_batch_not_the_last_line() {
+  # One wake covers every byte appended since the previous one. A crew that
+  # raised a decision and then appended any routine line used to be classified
+  # "routine signal" and self-handled in bash, so away mode answered nobody and
+  # the work stalled with no supervisor turn at all.
+  local dir state out decision
+  dir=$(make_supercase classify-buried)
+  state="$dir/state"
+  decision="needs-decision [key=notebook]: two PRs review-ready; notebook run required"
+  printf '%s\nworking: continuing on the follow-up\n' "$decision" > "$state/buried-s1.status"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/buried-s1.status" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a decision behind a later routine append self-handled: $out" ;; esac
+  case "$out" in *"$decision"*) ;; *) fail "the escalated digest did not carry the decision line: $out" ;; esac
+  # And the escalation records THAT line, so the catch-all scan does not repeat it.
+  mark_escalated_seen signal "$state/buried-s1.status" "$state"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/buried-s1.status" "$state")
+  case "$out" in self\|*) ;; *) fail "an already-escalated buried decision escalated twice: $out" ;; esac
+  pass "classify_signal escalates a captain decision a later routine append hid"
+}
+
 test_classify_stale_dedup_against_signal() {
   # If the signal path already escalated a status (seen marker matches),
   # classify_stale must self-handle to avoid a duplicate in the digest.
@@ -1978,6 +1998,7 @@ test_tmux_composer_state_bordered_and_agent_rows_are_empty
 test_tmux_composer_state_requires_matching_box_borders
 test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
+test_classify_signal_reads_the_whole_batch_not_the_last_line
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale

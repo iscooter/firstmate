@@ -339,13 +339,19 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen
+  local reason=$1 state=$2 f last relevant distilled="" rel="" all_seen=1 task seen
   for f in $reason; do
     [ -e "$f" ] || continue
-    last=$(last_status_line "$f")
+    # One wake covers every byte appended since the last one, so the newest line
+    # is not the question: an event the captain must see, followed by any routine
+    # append, is still that file's captain-relevant event. Reading only the last
+    # line is what let such a batch be classified "routine signal" and
+    # self-handled with no supervisor turn at all.
+    relevant=$(last_captain_relevant_status_line "$f")
+    last=${relevant:-$(last_status_line "$f")}
     [ -n "$last" ] || continue
     distilled="${distilled}$(basename "$f"): ${last} | "
-    status_is_captain_relevant "$last" || continue
+    [ -n "$relevant" ] || continue
     rel=1
     # Dedupe against the catch-all scan: if this status was already escalated
     # (seen marker matches), skip escalating again. The seen marker is the
@@ -543,9 +549,8 @@ mark_escalated_seen() {  # <kind> <arg> <state>
     signal)
       for f in $arg; do
         [ -e "$f" ] || continue
-        last=$(last_status_line "$f")
+        last=$(last_captain_relevant_status_line "$f")
         [ -n "$last" ] || continue
-        status_is_captain_relevant "$last" || continue
         task=$(basename "$f"); task="${task%.status}"
         mark_status_seen "$state" "$task" "$last"
       done ;;
