@@ -1089,6 +1089,20 @@ test_classify_signal_skips_turn_markers_and_reports_all_statuses() {
   pass "classify_signal skips turn markers and reports every status sibling"
 }
 
+test_catchall_surfaces_untrusted_status_path() {
+  local dir state
+  dir=$(make_supercase catchall-untrusted-status)
+  state="$dir/state"
+  ln -s "$state/missing-status-target" "$state/untrusted.status" \
+    || fail "could not create broken status symlink"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" housekeeping "$state"
+  grep -F 'untrusted.status: unreadable or untrusted status path (catch-all scan)' \
+    "$state/.subsuper-escalations" >/dev/null \
+    || fail "catch-all silently omitted an untrusted status path"
+  pass "catch-all surfaces status paths excluded from trusted snapshots"
+}
+
 test_catchall_multiple_events_preserves_stale_dedupe() {
   local dir state out
   dir=$(make_supercase catchall-multiple-stale-dedupe)
@@ -2041,6 +2055,7 @@ test_tmux_composer_state_requires_matching_box_borders
 test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
 test_classify_signal_skips_turn_markers_and_reports_all_statuses
+test_catchall_surfaces_untrusted_status_path
 test_catchall_multiple_events_preserves_stale_dedupe
 test_classify_signal_reads_the_whole_batch_not_the_last_line
 test_classify_stale_dedup_against_signal

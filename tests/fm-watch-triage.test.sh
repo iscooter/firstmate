@@ -812,6 +812,23 @@ test_actionable_signal_surfaced() {
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
+test_broken_status_symlink_surfaced_despite_busy_crew() {
+  local dir state fakebin out status_file pid
+  dir=$(make_case broken-status-symlink); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  status_file="$state/task.status"
+  ln -s "$state/missing-status-target" "$status_file" \
+    || fail "could not create broken status symlink"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "watcher absorbed a broken status symlink while crew appeared working"
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "watcher did not surface the broken status symlink"
+  unset FM_FAKE_CREW_STATE
+  pass "watcher surfaces a broken status symlink as a trust refusal"
+}
+
 test_buried_captain_event_surfaced_despite_busy_crew() {
   local dir state fakebin out drain_out status_file pid decision
   dir=$(make_case buried-signal); state="$dir/state"; fakebin="$dir/fakebin"
@@ -2726,6 +2743,7 @@ test_working_note_not_working_surfaced
 test_secondmate_status_note_surfaced_despite_busy_agent
 test_self_announced_close_does_not_rewake_but_next_note_does
 test_actionable_signal_surfaced
+test_broken_status_symlink_surfaced_despite_busy_crew
 test_buried_captain_event_surfaced_despite_busy_crew
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run

@@ -1294,7 +1294,7 @@ window_to_task() {
 signal_reason_is_actionable() {  # <file> ...
   local f lines line
   for f in "$@"; do
-    [ -e "$f" ] || continue
+    [ -e "$f" ] || [ -L "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
     # A status path that exists but is not a readable regular file is exactly
     # what the cursor-backed readers refuse to trust, and a refusal must not

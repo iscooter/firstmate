@@ -379,7 +379,7 @@ classify_signal() {  # <reason-after-colon> <state> [<presentation-snapshot>]
   local reason=$1 state=$2 snapshot=${3:-} f last relevant distilled="" rel="" task endpoint ident row extra
   [ -n "$snapshot" ] || snapshot=$(status_presentation_snapshot "$state") || snapshot=
   for f in $reason; do
-    [ -e "$f" ] || continue
+    [ -e "$f" ] || [ -L "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
     task=$(basename "$f"); task="${task%.status}"
     endpoint= ident=
@@ -1142,11 +1142,23 @@ housekeeping() {  # <state>
   #     scan_captain_relevant_statuses; the daemon layers its digest dedup on top.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local snapshot endpoint ident f task relevant last
+    local snapshot endpoint ident f task relevant last row extra
     snapshot=$(status_presentation_snapshot "$state") || snapshot=
-    while IFS="$(printf '\t')" read -r task endpoint ident; do
-      [ -n "$task" ] || continue
-      f="$state/$task.status"
+    for f in "$state"/*.status; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      task=$(basename "$f"); task=${task%.status}
+      endpoint= ident=
+      while IFS="$(printf '\t')" read -r row endpoint ident extra; do
+        [ "$row" = "$task" ] || continue
+        [ -z "$extra" ] || { endpoint=; ident=; }
+        break
+      done <<EOF
+$snapshot
+EOF
+      if [ -z "$endpoint" ] || [ -z "$ident" ]; then
+        escalate_add "$state" "$(basename "$f"): unreadable or untrusted status path (catch-all scan)"
+        continue
+      fi
       relevant=$(daemon_unseen_relevant_lines "$f" "$state" "$task" "$endpoint" "$ident") || {
         escalate_add "$state" "$(basename "$f"): unreadable or untrusted status path (catch-all scan)"
         continue
@@ -1156,9 +1168,7 @@ housekeeping() {  # <state>
       relevant=${relevant//$'\n'/ - }
       escalate_add "$state" "$(basename "$f"): $relevant (catch-all scan)"
       mark_status_seen "$state" "$task" "$last" "$endpoint" "$ident"
-    done <<EOF
-$snapshot
-EOF
+    done
   fi
 }
 
