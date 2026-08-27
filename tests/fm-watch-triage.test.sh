@@ -2864,6 +2864,55 @@ test_captain_relevant_batch_reader_is_not_last_line() {
   pass "the captain-relevant batch reader surfaces hidden events without over-surfacing"
 }
 
+# A keyed decision the SAME batch also closed must not raise a supervisor turn:
+# the drain would show no open decision at all, so the wake is pure noise and is
+# the over-surfacing this reader exists to avoid. A decision that is still OPEN
+# behind a later routine append must keep surfacing - that is the original stall.
+test_closed_keyed_decision_does_not_surface() {
+  local dir state closed still_open
+  dir=$(make_case closed-decision); state="$dir/state"
+  closed="$state/t-closed.status"
+  still_open="$state/t-open.status"
+  { printf 'needs-decision: [key=k1] pick an auth approach\n'
+    printf 'resolved: [key=k1] chose oauth\n'; } > "$closed"
+  [ -z "$(last_captain_relevant_status_line "$closed")" ] \
+    || fail "a decision opened and closed in one batch was still read as captain-relevant"
+  signal_reason_is_actionable "$closed" \
+    && fail "a decision opened and closed in one batch classified as actionable"
+  # The stall this task fixes must survive: an OPEN decision behind a routine
+  # append still surfaces.
+  { printf 'needs-decision: [key=k2] pick a storage engine\n'
+    printf 'working: still drafting the options\n'; } > "$still_open"
+  [ "$(last_captain_relevant_status_line "$still_open")" = \
+    "needs-decision: [key=k2] pick a storage engine" ] \
+    || fail "an OPEN decision behind a routine append stopped surfacing"
+  signal_reason_is_actionable "$still_open" \
+    || fail "an OPEN decision behind a routine append classified as routine"
+  pass "a closed keyed decision is not surfaced while an open one still is"
+}
+
+# The end-to-end statement of the same fact through the real watcher: a crew that
+# raises and then closes a decision while provably working must be absorbed, with
+# no exit and no queued supervisor turn.
+test_closed_keyed_decision_absorbed_end_to_end() {
+  local dir state fakebin out status_file pid
+  dir=$(make_case closed-decision-e2e); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  status_file="$state/task.status"
+  { printf 'needs-decision: [key=k1] pick an auth approach\n'
+    printf 'resolved: [key=k1] chose oauth\n'; } > "$status_file"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher raised a supervisor turn for a decision closed in the same batch: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a closed keyed decision printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a closed keyed decision enqueued a durable wake record"
+  reap "$pid"
+  pass "a decision opened and closed in one batch is absorbed end to end"
+}
+
 # --- beacon stays fresh while absorbing -------------------------------------
 
 test_beacon_stays_fresh_while_absorbing() {
@@ -3018,6 +3067,8 @@ test_heartbeat_backstop_surfaces_unsurfaced_status
 test_actionable_event_behind_routine_append_surfaces
 test_release_install_completion_surfaces_and_wakes
 test_captain_relevant_batch_reader_is_not_last_line
+test_closed_keyed_decision_does_not_surface
+test_closed_keyed_decision_absorbed_end_to_end
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

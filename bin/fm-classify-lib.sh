@@ -103,15 +103,40 @@ last_status_line() {
 # <status-file>, or nothing when it has none. The occurrence count distinguishes
 # repeated events with identical text, and the final field preserves free-form
 # status bytes for consumers that peel off the fixed prefix without IFS splitting.
+#
+# A keyed decision that the SAME batch also closed is not something firstmate
+# must be shown: raising a supervisor turn for a `needs-decision:` or `blocked:`
+# whose matching `resolved:`/`captain-held:` already landed is exactly the
+# over-surfacing this reader must avoid. status_open_decisions owns what "still
+# open" means, so this consults that fold instead of re-deriving the rule.
+# A file the fold cannot be trusted to read, an unparsable key, or a transition
+# the fold itself would refuse all keep the event, because surfacing a closed
+# decision costs one wasted turn while dropping a live one restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
-  local f=$1 line relevant="" count=0
+  local f=$1 line relevant="" count=0 open="" folded="" key verb
   [ -e "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ]; then
+    open=$(status_open_decisions "$f" 2>/dev/null) || open=""
+    folded=1
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
-    if status_is_captain_relevant "$line"; then
-      relevant=$line
-      count=$((count + 1))
+    status_is_captain_relevant "$line" || continue
+    if [ -n "$folded" ]; then
+      verb=$(status_line_verb "$line")
+      case "$verb" in
+        needs-decision|blocked)
+          key=$(_fm_decision_key "$line") || key=""
+          if [ -n "$key" ] \
+            && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
+            && ! _fm_open_set_has "$open" "$key"; then
+            continue
+          fi
+          ;;
+      esac
     fi
+    relevant=$line
+    count=$((count + 1))
   done < "$f" 2>/dev/null
   [ -n "$relevant" ] || return 0
   printf '%s\t%s\n' "$count" "$relevant"
