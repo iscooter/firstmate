@@ -1136,6 +1136,41 @@ SH
   pass "auto-arm: refused terminal writes discard already-collected hook output"
 }
 
+test_interrupted_failure_marker_commit_does_not_repeat_notice() {
+  local dir out status out2 status2 marker
+  dir=$(make_primary_dir "$TMP_ROOT/v2-interrupted-notice-commit")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" failed
+  cat >> "$dir/bin/fm-wake-lib.sh" <<'SH'
+mv() {
+  local destination=
+  for destination in "$@"; do :; done
+  if [ "${FM_TEST_FAIL_NOTICE_COMMIT:-0}" = 1 ] \
+    && [ "$destination" = "$FM_HOME/state/.claude-autoarm-failure-notified" ]; then
+    return 1
+  fi
+  command mv "$@"
+}
+SH
+
+  export FM_TEST_FAIL_NOTICE_COMMIT=1
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  unset FM_TEST_FAIL_NOTICE_COMMIT
+  expect_code 2 "$status" "a terminal ledger commit must preserve the emitted failure translation when marker promotion is interrupted"
+  assert_contains "$out" "watcher auto-arm FAILED" "the interrupted marker fixture did not emit its first notice"
+  [ "$(epoch_outcome "$dir")" = failed ] || fail "the interrupted marker promotion lost the failed commit point"
+  marker=$(cat "$dir/state/.claude-autoarm-failure-notified")
+  assert_contains "$marker" "state=pending" "the interrupted marker fixture did not preserve its pending reservation"
+
+  out2=$(run_autoarm "$dir" 2>/dev/null); status2=$?
+  expect_code 2 "$status2" "the next failure cycle must continue after promoting the committed pending notice"
+  [ -z "$out2" ] || fail "a committed pending notice was emitted twice: $out2"
+  marker=$(cat "$dir/state/.claude-autoarm-failure-notified")
+  assert_contains "$marker" "state=committed" "the successor did not preserve the prior notice before replacing its ledger generation"
+  [ "$(epoch_outcome "$dir")" = failed-suppressed ] || fail "the successor did not advance the existing failure episode"
+  pass "auto-arm: interrupted failure-marker promotion preserves exactly one notice"
+}
+
 test_successful_terminal_write_commits_translation() {
   local dir out status failure_dir failure_out failure_status
   dir=$(make_primary_dir "$TMP_ROOT/v2-committed-rewake")
@@ -1253,6 +1288,7 @@ test_superseded_owner_goes_silent_and_never_double_translates
 test_superseded_owner_preserves_new_failure_episode
 test_superseded_failed_owner_cannot_create_notice
 test_refused_terminal_writes_discard_collected_output
+test_interrupted_failure_marker_commit_does_not_repeat_notice
 test_successful_terminal_write_commits_translation
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake

@@ -17,6 +17,7 @@ The stale-owner claim occurs only after the existing AFK and supervision-need ga
 After each non-actionable arm close, the hook rechecks the identity-matched watcher lock and fresh beacon before retrying a bounded number of times.
 A cycle-end failure is benign when that live-watcher predicate is true, and the hook suppresses the arm output and continues silently.
 Only an exhausted failure with no verified watcher emits one last-resort notice for the continuous failure episode; later consecutive Stop cycles exit 2 to guarantee another Stop-owned retry without repeating the notice until the turn-end guard consumes the attended fail-open.
+The post-emit `outcome=failed` ledger rename commits that notice. If interruption leaves its reservation at `state=pending`, readers still recognize the matching failed generation as notified and the next claimant promotes the marker before advancing the generation, so interruption cannot repeat the notice or hide the episode from the guard.
 The Claude turn-end guard owns the monotonic failure progression, one-time attended fail-open, post-alarm continuation suppression, and positive recovery reset described in [`turnend-guard.md`](turnend-guard.md#harness-integrations).
 While supervision is still needed and away mode remains inactive, an actionable close wakes the idle session through exit 2.
 

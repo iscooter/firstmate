@@ -1670,6 +1670,21 @@ test_hook_claude_mode_verified_failure_alarm_is_loud_and_once() {
   pass "fm-turnend-guard --claude: verified fail-open is loud, bounded, attended, and non-repeating"
 }
 
+test_hook_claude_mode_pending_notice_with_failed_commit_can_fail_open() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-pending-notice-commit")
+  : > "$dir/state/task1.meta"
+  printf 'epoch=3 state=pending\n' > "$dir/state/.claude-autoarm-failure-notified"
+  printf 'epoch=3 owner_pid=999 outcome=failed updated_at=%s\n' "$(date +%s)" > "$dir/state/.claude-autoarm-epoch"
+  seed_claude_budget "$dir" 3 2
+
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
+  expect_code 0 "$status" "a failed ledger commit must prove its matching pending notice was emitted"
+  assert_contains "$out" 'FIRSTMATE SUPERVISION IS GENUINELY DOWN' "the committed pending notice did not permit the attended fail-open"
+  assert_present "$dir/state/.claude-autoarm-failure-alarmed" "the committed pending notice did not consume the episode alarm"
+  pass "fm-turnend-guard --claude: failed ledger commit makes an interrupted pending notice eligible for attended fail-open"
+}
+
 test_hook_claude_mode_fail_open_requires_notice_and_failure_epoch() {
   local no_notice notice_only out status
   no_notice=$(make_primary_dir "$TMP_ROOT/hook-claude-alarm-no-notice")
@@ -1839,6 +1854,7 @@ test_hook_claude_mode_concurrent_recovery_resets_are_idempotent
 test_hook_claude_mode_stale_rewake_epoch_blocks
 test_hook_claude_mode_budget_without_verified_failure_keeps_blocking
 test_hook_claude_mode_verified_failure_alarm_is_loud_and_once
+test_hook_claude_mode_pending_notice_with_failed_commit_can_fail_open
 test_hook_claude_mode_fail_open_requires_notice_and_failure_epoch
 test_hook_claude_mode_away_mode_never_uses_stop_autoarm_fail_open
 test_hook_claude_mode_allow_resets_budget

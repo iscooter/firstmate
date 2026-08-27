@@ -84,6 +84,7 @@ A legacy build's lock-holding claim (recognizable by its `autoarm` role file) st
 Fresh `failed` and `failed-suppressed` outcomes enter or advance the failure progression instead of acting as unconditional recovery proof.
 The auto-arm itself rechecks the healthy watcher predicate and retries a bounded number of times before reporting a genuine failure.
 The first fresh exhausted-failure epoch preserves its handoff without consuming a blocked-stop count, while later fresh failed epochs advance the same monotonic progression instead of resetting it.
+For that first notice, the owned `outcome=failed` ledger rename is the post-emit commit point. A matching `state=pending` notice reservation therefore counts as consumed if interruption prevents its cosmetic promotion to `state=committed`; the next claimant promotes it before replacing the ledger generation, preventing both a duplicate notice and loss of the attended fail-open proof.
 When none of those proofs appears, it re-blocks up to `FM_CLAUDE_TURNEND_BLOCK_BUDGET` times (default 3, below Claude's 8-block override).
 In Claude mode, positive watcher recovery clears the block budget, failure notice, and attended alarm together under the existing budget lock before either hook reports ordinary recovery.
 The one loud attended fail-open is available only when the auto-arm has recorded an exhausted failure, its one notice is already consumed, the block budget is exhausted, and a final check finds neither a healthy watcher nor an automatic continuation.

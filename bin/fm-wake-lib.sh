@@ -1119,9 +1119,10 @@ fm_autoarm_claim_open() {  # <state-dir> [grace]
 # 1 when the micro-mutex is contended, identity cannot be established, or the
 # write failed. Every new claim contains its mandatory identity on line 2.
 fm_autoarm_claim_next() {  # <state-dir> [grace]
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch pid gen identity tmp
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch notice pid gen identity tmp line marker_gen notice_tmp
   lock="$state/.claude-autoarm.lock"
   epoch="$state/.claude-autoarm-epoch"
+  notice="$state/.claude-autoarm-failure-notified"
   FM_AUTOARM_MY_GEN=
   # Resolve the pid into a variable FIRST: expanding ${BASHPID:-$$} inside a
   # command substitution would resolve it in that subshell, recording the
@@ -1137,6 +1138,26 @@ fm_autoarm_claim_next() {  # <state-dir> [grace]
     fm_lock_release "$lock"
     return 1
   fi
+  # A predecessor may have committed its notice by publishing outcome=failed
+  # and then died before changing the reservation's cosmetic state. Preserve
+  # that proof before replacing the ledger generation; otherwise the new
+  # arming entry would erase the evidence and could repeat the notice.
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  case "$line" in
+    'epoch='*' state=pending')
+      if fm_autoarm_failure_notice_present "$state"; then
+        marker_gen=${line#epoch=}
+        marker_gen=${marker_gen%% *}
+        notice_tmp="$notice.tmp.$pid"
+        if ! printf 'epoch=%s state=committed\n' "$marker_gen" > "$notice_tmp" 2>/dev/null \
+          || ! mv -f "$notice_tmp" "$notice" 2>/dev/null; then
+          rm -f "$notice_tmp" 2>/dev/null || true
+          fm_lock_release "$lock"
+          return 1
+        fi
+      fi
+      ;;
+  esac
   gen=$(_fm_autoarm_epoch_field "$epoch" epoch 2>/dev/null || true)
   case "$gen" in
     ''|*[!0-9]*) gen=0 ;;
@@ -1234,12 +1255,26 @@ fm_autoarm_failure_episode_reset_owned() {  # <state-dir> <gen>
 }
 
 fm_autoarm_failure_notice_present() {  # <state-dir>
-  local state=$1 notice line
+  local state=$1 notice epoch line marker_gen ledger_gen outcome
   notice="$state/.claude-autoarm-failure-notified"
+  epoch="$state/.claude-autoarm-epoch"
   [ -e "$notice" ] || return 1
   line=$(sed -n '1p' "$notice" 2>/dev/null || true)
   case "$line" in
-    'epoch='*' state=pending') return 1 ;;
+    'epoch='*' state=pending')
+      # Publishing outcome=failed is the post-emit commit point. If the owner
+      # dies before replacing pending with committed (or that cosmetic marker
+      # update fails), the matching terminal ledger entry proves the notice was
+      # already emitted. Treating it as absent would repeat the notice and keep
+      # the guard from recognizing the attended fail-open episode.
+      marker_gen=${line#epoch=}
+      marker_gen=${marker_gen%% *}
+      ledger_gen=$(_fm_autoarm_epoch_field "$epoch" epoch 2>/dev/null || true)
+      outcome=$(_fm_autoarm_epoch_field "$epoch" outcome 2>/dev/null || true)
+      [ -n "$marker_gen" ] && [ "$marker_gen" = "$ledger_gen" ] \
+        && [ "$outcome" = failed ]
+      return
+      ;;
     *) return 0 ;;
   esac
 }
@@ -1294,7 +1329,7 @@ fm_autoarm_failure_notice_cancel() {  # <state-dir> <gen>
 }
 
 fm_autoarm_failure_notice_finalize() {  # <state-dir> <gen>
-  local state=$1 gen=$2 lock epoch notice pid identity tmp line
+  local state=$1 gen=$2 lock epoch notice pid identity tmp notice_tmp line
   lock="$state/.claude-autoarm.lock"
   epoch="$state/.claude-autoarm-epoch"
   notice="$state/.claude-autoarm-failure-notified"
@@ -1323,9 +1358,15 @@ fm_autoarm_failure_notice_finalize() {  # <state-dir> <gen>
     fm_lock_release "$lock"
     return 1
   fi
-  if ! printf 'epoch=%s state=committed\n' "$gen" > "$notice" 2>/dev/null; then
-    fm_lock_release "$lock"
-    return 1
+  # The terminal ledger rename above is the durable post-emit commit point.
+  # Replace the marker atomically when possible; if this cosmetic promotion
+  # fails, keep the pending reservation intact. Readers recognize pending plus
+  # the matching failed ledger as committed, and the next claimant promotes it
+  # before replacing that ledger generation.
+  notice_tmp="$notice.tmp.$pid"
+  if ! printf 'epoch=%s state=committed\n' "$gen" > "$notice_tmp" 2>/dev/null \
+    || ! mv -f "$notice_tmp" "$notice" 2>/dev/null; then
+    rm -f "$notice_tmp" 2>/dev/null || true
   fi
   fm_lock_release "$lock"
   return 0
