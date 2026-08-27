@@ -158,6 +158,22 @@ _hb_surfaced_path() {  # <task> [state]
   printf '%s/.hb-surfaced-%s' "$state" "$(printf '%s' "$task" | tr ':/.' '___')"
 }
 
+captain_relevant_record_is_unsurfaced() {  # <record> <surfaced-record>
+  local record=$1 surfaced=$2 tab occurrence surfaced_occurrence
+  [ -n "$record" ] || return 1
+  [ "$record" = "$surfaced" ] && return 1
+  [ -n "$surfaced" ] || return 0
+  tab=$(printf '\t')
+  case "$record" in *"$tab"*) ;; *) return 0 ;; esac
+  case "$surfaced" in *"$tab"*) ;; *) return 0 ;; esac
+  occurrence=${record%%"$tab"*}
+  surfaced_occurrence=${surfaced%%"$tab"*}
+  case "$occurrence:$surfaced_occurrence" in
+    *[!0-9:]*|:*|*:) return 0 ;;
+  esac
+  [ "$occurrence" -ge "$surfaced_occurrence" ]
+}
+
 # 0 if the given (last) status line's leading verb is a real terminal captain verb
 # (done, needs-decision, blocked, failed). Free-text tokens alone never count here;
 # callers that need legacy free-text matching use status_is_captain_relevant.
@@ -1324,7 +1340,7 @@ signal_reason_is_actionable() {  # <file> ...
     [ -n "$record" ] || continue
     task=$(basename "$f"); task=${task%.status}
     surfaced=$(cat "$(_hb_surfaced_path "$task" "$(dirname "$f")")" 2>/dev/null || true)
-    [ "$surfaced" = "$record" ] || return 0
+    captain_relevant_record_is_unsurfaced "$record" "$surfaced" && return 0
   done
   return 1
 }

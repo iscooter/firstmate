@@ -945,7 +945,7 @@ run_check_capture() {
 # heartbeat backstop enqueues its wake, so the same statuses are not re-surfaced
 # by the next heartbeat.
 mark_all_captain_relevant_surfaced() {
-  local f task identity record rest tab
+  local f task identity record rest surfaced tab
   tab=$(printf '\t')
   while IFS= read -r record; do
     f=${record%%"$tab"*}
@@ -953,6 +953,8 @@ mark_all_captain_relevant_surfaced() {
     task=${rest%%"$tab"*}
     identity=${rest#*"$tab"}
     [ -n "$f" ] || continue
+    surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
+    captain_relevant_record_is_unsurfaced "$identity" "$surfaced" || continue
     printf '%s' "$identity" > "$(_hb_surfaced_path "$task")"
   done < <(scan_captain_relevant_statuses "$STATE" full-batch)
 }
@@ -975,7 +977,7 @@ heartbeat_scan_finds_actionable() {
     identity=${rest#*"$tab"}
     [ -n "$f" ] || continue
     surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
-    [ "$surfaced" = "$identity" ] && continue
+    captain_relevant_record_is_unsurfaced "$identity" "$surfaced" || continue
     return 0
   done < <(scan_captain_relevant_statuses "$STATE" full-batch)
   return 1

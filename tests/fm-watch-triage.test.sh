@@ -2922,6 +2922,56 @@ test_closed_keyed_decision_absorbed_end_to_end() {
   pass "a decision opened and closed in one batch is absorbed end to end"
 }
 
+test_closing_latest_event_does_not_replay_older_event() {
+  local dir state fakebin first_out second_out replay_out drain_out status_file pid queue_lines replay_queue_lines i marker
+  dir=$(make_case closed-latest-event); state="$dir/state"; fakebin="$dir/fakebin"
+  first_out="$dir/first.out"; second_out="$dir/second.out"; replay_out="$dir/replay.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  { printf 'done: older release complete\n'
+    printf 'working: preparing follow-up\n'; } > "$status_file"
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$first_out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher missed the older actionable event"; }
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || { unset FM_FAKE_CREW_STATE; fail "drain after the older event failed"; }
+  { printf 'needs-decision: [key=k1] choose the rollout window\n'
+    printf 'working: drafting rollout options\n'; } >> "$status_file"
+  watch_bg "$state" "$fakebin" "$second_out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher missed the newer open decision"; }
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || { unset FM_FAKE_CREW_STATE; fail "drain after the newer decision failed"; }
+  marker=$(cat "$state/.hb-surfaced-task" 2>/dev/null || true)
+  queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  { printf 'resolved: [key=k1] chose tomorrow\n'
+    printf 'working: cleanup\n'; } >> "$status_file"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$replay_out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 200 ]; do
+    [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  unset FM_FAKE_CREW_STATE
+  kill -0 "$pid" 2>/dev/null \
+    || fail "closing the latest decision replayed an older surfaced event: $(cat "$replay_out")"
+  [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] \
+    || { reap "$pid"; fail "the closure follow-up heartbeat did not run"; }
+  [ ! -s "$replay_out" ] \
+    || { reap "$pid"; fail "the closure printed a duplicate wake: $(cat "$replay_out")"; }
+  replay_queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  [ "$replay_queue_lines" = "$queue_lines" ] \
+    || { reap "$pid"; fail "the closure queued an older event again"; }
+  [ "$(cat "$state/.hb-surfaced-task" 2>/dev/null || true)" = "$marker" ] \
+    || { reap "$pid"; fail "the surfaced boundary regressed after the closure"; }
+  reap "$pid"
+  pass "closing the latest decision preserves the surfaced boundary"
+}
+
 # --- beacon stays fresh while absorbing -------------------------------------
 
 test_beacon_stays_fresh_while_absorbing() {
@@ -3078,6 +3128,7 @@ test_release_install_completion_surfaces_and_wakes
 test_captain_relevant_batch_reader_is_not_last_line
 test_closed_keyed_decision_does_not_surface
 test_closed_keyed_decision_absorbed_end_to_end
+test_closing_latest_event_does_not_replay_older_event
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
