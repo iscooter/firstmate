@@ -99,16 +99,10 @@ last_status_line() {
   grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
 }
 
-# Print the most recent captain-relevant line in <status-file>, or nothing when
-# it has none. A status stream is an append-only EVENT log, so its newest line is
-# the newest EVENT - never a summary of what firstmate has still not seen. A
-# done:, needs-decision:, blocked:, or failed: event followed by any routine
-# append (working:, resolved:, a declared pause) is still the captain-relevant
-# fact about that file, and one wake covers every byte appended since the last
-# one. last_status_line answers "what is this crew's current declaration"; this
-# answers "what must firstmate be shown". The two differ exactly when a routine
-# append lands behind an actionable one - the batch that classified as routine
-# and stalled the work with no supervisor turn at all.
+# Print "<occurrence>\t<line>" for the latest captain-relevant event in
+# <status-file>, or nothing when it has none. The occurrence count distinguishes
+# repeated events with identical text, and the final field preserves free-form
+# status bytes for consumers that peel off the fixed prefix without IFS splitting.
 last_captain_relevant_status_record() {  # <status-file>
   local f=$1 line relevant="" count=0
   [ -e "$f" ] || return 0

@@ -959,8 +959,8 @@ mark_all_captain_relevant_surfaced() {
 
 # Cheap heartbeat fleet-scan (the always-on twin of the daemon's catch-all). 0 if
 # any captain-relevant status has NOT already been surfaced to firstmate (its
-# occurrence identity differs from the .hb-surfaced-<task> marker). Pure detect, no side
-# effects: the caller enqueues first, then marks surfaced. Because every
+# occurrence identity differs from the .hb-surfaced-<task> marker). Pure detect,
+# with no side effects: the caller enqueues first, then marks surfaced. Because every
 # captain-relevant signal/stale already marks itself surfaced when it wakes
 # firstmate, this normally finds nothing and the heartbeat is absorbed; it
 # surfaces only a captain-relevant status the per-wake path absorbed by mistake -
