@@ -1437,6 +1437,8 @@ test_hook_claude_mode_terminal_fail_open_clears_abandoned_claim() {
   sleep 60 &
   pid=$!
   record_autoarm_owner "$dir" "$pid"
+  fm_test_pid_identity "$pid" > "$dir/state/.claude-autoarm.lock/pid-identity" \
+    || fail "could not record a claim pid-identity"
   printf 'epoch=3 owner_pid=%s outcome=failed-suppressed updated_at=1\n' "$pid" > "$dir/state/.claude-autoarm-epoch"
   touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=200 run_hook_claude "$dir" true); status=$?

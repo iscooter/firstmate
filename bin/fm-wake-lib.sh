@@ -1017,8 +1017,14 @@ fm_failure_episode_reset() {
 #     owns the highest generation (fm_autoarm_write_owned re-checks under the
 #     micro-mutex; fm_autoarm_still_owner is the lockless pre-emit check). A
 #     superseded owner goes silent: it never writes, never emits, and exits 0,
-#     so one event epoch translates on exactly one generation and a stuck or
-#     resuming predecessor can neither clobber the ledger nor double-fire.
+#     so one event epoch normally translates on exactly one generation and a
+#     stuck or resuming predecessor can neither clobber the ledger nor double-fire.
+#     Two bounded pathological duplicates are accepted: an owner blocked inside
+#     its final emit syscall after the ownership check can finish after
+#     supersession, and a legacy upgrade can leave one residual continuation.
+#     Either costs at most one extra exit-2 turn absorbed by the durable,
+#     idempotent wake queue; eliminating both would require the rejected
+#     cross-output mutex or steady-state predecessor revocation.
 #
 # This structurally removes the three failure classes the lock-held-across-arm
 # design produced: a hung owner deferring every later firing forever (observed
@@ -1243,7 +1249,7 @@ fm_autoarm_claim_abandoned() {  # <state-dir> [grace]
 # is held no other process can publish the primary lock, so the window between
 # proving abandonment and removing the lock cannot swallow a genuine new claim.
 fm_autoarm_release_abandoned() {  # <state-dir> [grace]
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock steal epoch lock_pid recorded owner line1 tmp
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock steal epoch lock_pid recorded current owner line1 tmp i retired
   lock="$state/.claude-autoarm.lock"
   steal="$lock.steal"
   epoch="$state/.claude-autoarm-epoch"
@@ -1253,12 +1259,43 @@ fm_autoarm_release_abandoned() {  # <state-dir> [grace]
     fm_lock_release "$steal"
     return 1
   fi
+  lock_pid=$(cat "$lock/pid" 2>/dev/null || true)
+  recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
+  if fm_pid_alive "$lock_pid"; then
+    current=$(fm_pid_identity "$lock_pid" 2>/dev/null || true)
+    if [ -n "$recorded" ] && [ "$current" = "$recorded" ]; then
+      kill -TERM "$lock_pid" 2>/dev/null || {
+        fm_lock_release "$steal"
+        return 1
+      }
+      i=0
+      retired=0
+      while [ "$i" -lt 20 ]; do
+        if ! fm_pid_alive "$lock_pid"; then
+          retired=1
+          break
+        fi
+        current=$(fm_pid_identity "$lock_pid" 2>/dev/null || true)
+        if [ "$current" != "$recorded" ]; then
+          retired=1
+          break
+        fi
+        sleep 0.05
+        i=$((i + 1))
+      done
+      if [ "$retired" -ne 1 ]; then
+        fm_lock_release "$steal"
+        return 1
+      fi
+    elif [ -z "$recorded" ] || [ -z "$current" ]; then
+      fm_lock_release "$steal"
+      return 1
+    fi
+  fi
   # Preserve the legacy lock's identity evidence in the ledger before the lock
   # disappears: without it, a reused-pid arming claim would read as open again
   # the moment the lock is gone. Best effort - the stuck proof still bounds the
   # lapse when the graft cannot be written.
-  lock_pid=$(cat "$lock/pid" 2>/dev/null || true)
-  recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
   if [ -n "$recorded" ] && [ -n "$lock_pid" ] \
     && owner=$(_fm_autoarm_epoch_field "$epoch" owner_pid 2>/dev/null) \
     && [ "$owner" = "$lock_pid" ] \

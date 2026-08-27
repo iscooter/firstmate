@@ -263,6 +263,7 @@ if [ "$HEALTHY" -eq 1 ]; then
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   [ -e "$FAILURE_ALARM" ] && exit 0
+  fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
   exit 2
 fi
 
@@ -310,4 +311,5 @@ if ! autoarm_finalize failed-suppressed; then
   exit 0
 fi
 [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
 exit 2

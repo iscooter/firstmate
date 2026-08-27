@@ -616,10 +616,11 @@ test_abandoned_owner_claim_is_reclaimed_and_rearms() {
   sleep 60 &
   pid=$!
   record_autoarm_owner "$dir" "$pid"
+  record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
   record_autoarm_epoch "$dir" 464 "$pid" rewake
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  ! kill -0 "$pid" 2>/dev/null || fail "reclaimed legacy owner remained able to resume"
   expect_code 2 "$status" "a claim whose ledger outcome is already terminal must be reclaimed, not deferred to forever"
   [ -e "$dir/state/arm-ran" ] || fail "abandoned claim left the home unarmed with work in flight"
   assert_contains "$out" "firstmate watcher wake" "the reclaimed cycle must still translate its wake"
@@ -698,8 +699,8 @@ test_stuck_arming_claim_is_reclaimed_and_rearms() {
   record_autoarm_epoch "$dir" 464 "$pid" arming
   touch -t 202001010000 "$dir/state/.last-watcher-beat"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  ! kill -0 "$pid" 2>/dev/null || fail "stuck legacy owner remained able to resume after reclaim"
   expect_code 2 "$status" "a live owner stuck arming past grace with a beacon just as stale must be reclaimed, not deferred to forever"
   [ -e "$dir/state/arm-ran" ] || fail "a stuck arming claim left the home unarmed with work in flight"
   assert_contains "$out" "firstmate watcher wake" "the reclaimed cycle must still translate its wake"
@@ -751,6 +752,7 @@ test_pid_reused_arming_claim_is_reclaimed_and_rearms() {
   record_autoarm_epoch "$dir" 464 "$pid" arming
   : > "$dir/state/.last-watcher-beat"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill -0 "$pid" 2>/dev/null || fail "identity-mismatched pid was signalled during legacy reclaim"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 2 "$status" "a claim whose recorded identity no longer matches its live pid must be reclaimed, arming entry or not"
