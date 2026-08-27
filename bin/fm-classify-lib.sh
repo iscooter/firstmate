@@ -1512,7 +1512,7 @@ scan_captain_relevant_statuses() {  # <state> [full-batch]
     [ -n "$relevant" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     if [ -n "$occurrence" ]; then
-      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$occurrence" "$relevant"
+      printf '%s\t%s\t%s\n' "$f" "$task" "$record"
     else
       printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"
     fi

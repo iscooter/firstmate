@@ -2781,12 +2781,14 @@ test_actionable_event_behind_routine_append_surfaces() {
 # for, so it must SURFACE and wake the main session - not merely be deduplicated
 # - including when a routine line is appended after it.
 test_release_install_completion_surfaces_and_wakes() {
-  local dir state fakebin out drain_out replay_out status_file pid replay_pid queue_lines replay_queue_lines
+  local dir state fakebin out drain_out replay_out status_file trailing_file pid replay_pid queue_lines replay_queue_lines i
   dir=$(make_case release-install-done); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; replay_out="$dir/replay.out"
-  status_file="$state/t-backpass.status"
-  printf 'done:\tBackpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
+  status_file="$state/t-backpass.status"; trailing_file="$state/t-trailing.status"
+  printf 'done:\t\tBackpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
   printf 'working: tidying the release notes\n' >> "$status_file"
+  printf 'done: trailing whitespace matters\t\n' > "$trailing_file"
+  printf 'working: preparing the next report\n' >> "$trailing_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
@@ -2798,24 +2800,40 @@ test_release_install_completion_surfaces_and_wakes() {
     || fail "drain after the release/install completion failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "the release/install completion was not queued for the main session"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$trailing_file" >/dev/null \
+    || fail "the trailing-tab status was not queued for the main session"
   [ "$(cat "$state/.hb-surfaced-t-backpass" 2>/dev/null || true)" = \
-    "1$(printf '\t')done:$(printf '\t')Backpass 0.1.7 release plus local installation completed successfully" ] \
-    || fail "the tabbed hidden completion occurrence was not recorded as surfaced"
+    "1$(printf '\t')done:$(printf '\t\t')Backpass 0.1.7 release plus local installation completed successfully" ] \
+    || fail "the consecutive-tab completion occurrence was not recorded as surfaced"
+  [ "$(cat "$state/.hb-surfaced-t-trailing" 2>/dev/null || true)" = \
+    "1$(printf '\t')done: trailing whitespace matters$(printf '\t')" ] \
+    || fail "the trailing-tab occurrence was not recorded as surfaced"
   queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
   printf 'working: cleanup continued\n' >> "$status_file"
+  printf 'working: cleanup continued\n' >> "$trailing_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
-  watch_bg "$state" "$fakebin" "$replay_out"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$replay_out" &
   replay_pid=$!
-  wait_poll_cycle "$state" "$replay_pid" \
-    || { unset FM_FAKE_CREW_STATE; fail "later routine work repeated the already surfaced completion: $(cat "$replay_out")"; }
+  i=0
+  while [ "$i" -lt 200 ]; do
+    [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] && break
+    kill -0 "$replay_pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
   unset FM_FAKE_CREW_STATE
+  kill -0 "$replay_pid" 2>/dev/null \
+    || fail "later routine work or heartbeat repeated a whitespace-bearing event: $(cat "$replay_out")"
+  [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] \
+    || { reap "$replay_pid"; fail "the follow-up heartbeat did not run"; }
   [ ! -s "$replay_out" ] \
     || { reap "$replay_pid"; fail "later routine work surfaced a duplicate wake: $(cat "$replay_out")"; }
   replay_queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
   [ "$replay_queue_lines" = "$queue_lines" ] \
-    || { reap "$replay_pid"; fail "later routine work queued the historical completion again"; }
+    || { reap "$replay_pid"; fail "later routine work queued a whitespace-bearing event again"; }
   reap "$replay_pid"
-  pass "a terminal release/install completion surfaces once and later routine work stays quiet"
+  pass "whitespace-bearing terminal events surface once and stay quiet after routine work"
 }
 
 # The classifier-level statement of the same two facts, as pure functions: the
