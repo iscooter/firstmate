@@ -109,15 +109,26 @@ last_status_line() {
 # answers "what must firstmate be shown". The two differ exactly when a routine
 # append lands behind an actionable one - the batch that classified as routine
 # and stalled the work with no supervisor turn at all.
-last_captain_relevant_status_line() {  # <status-file>
-  local f=$1 line relevant=""
+last_captain_relevant_status_record() {  # <status-file>
+  local f=$1 line relevant="" count=0
   [ -e "$f" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
-    if status_is_captain_relevant "$line"; then relevant=$line; fi
+    if status_is_captain_relevant "$line"; then
+      relevant=$line
+      count=$((count + 1))
+    fi
   done < "$f" 2>/dev/null
   [ -n "$relevant" ] || return 0
-  printf '%s\n' "$relevant"
+  printf '%s\t%s\n' "$count" "$relevant"
+}
+
+last_captain_relevant_status_line() {  # <status-file>
+  local record tab
+  record=$(last_captain_relevant_status_record "$1")
+  [ -n "$record" ] || return 0
+  tab=$(printf '\t')
+  printf '%s\n' "${record#*"$tab"}"
 }
 
 _hb_surfaced_path() {  # <task> [state]
@@ -1278,15 +1289,15 @@ window_to_task() {
 # crew is also provably working (signal_crew_provably_working below); otherwise it
 # surfaces.
 signal_reason_is_actionable() {  # <file> ...
-  local f relevant surfaced task
+  local f record surfaced task
   for f in "$@"; do
     [ -e "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
-    relevant=$(last_captain_relevant_status_line "$f")
-    [ -n "$relevant" ] || continue
+    record=$(last_captain_relevant_status_record "$f")
+    [ -n "$record" ] || continue
     task=$(basename "$f"); task=${task%.status}
     surfaced=$(cat "$(_hb_surfaced_path "$task" "$(dirname "$f")")" 2>/dev/null || true)
-    [ "$surfaced" = "$relevant" ] || return 0
+    [ "$surfaced" = "$record" ] || return 0
   done
   return 1
 }
@@ -1483,18 +1494,27 @@ stale_is_terminal() {  # <window> <state>
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
 # daemon against .subsuper-seen-status-*, the watcher against surfaced markers).
 scan_captain_relevant_statuses() {  # <state> [full-batch]
-  local state=$1 mode=${2:-current} f relevant task
+  local state=$1 mode=${2:-current} f occurrence record relevant task tab
+  tab=$(printf '\t')
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
     if [ "$mode" = full-batch ]; then
-      relevant=$(last_captain_relevant_status_line "$f")
+      record=$(last_captain_relevant_status_record "$f")
+      [ -n "$record" ] || continue
+      occurrence=${record%%"$tab"*}
+      relevant=${record#*"$tab"}
     else
       relevant=$(last_status_line "$f")
       status_is_captain_relevant "$relevant" || continue
+      occurrence=
     fi
     [ -n "$relevant" ] || continue
     task=$(basename "$f"); task="${task%.status}"
-    printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"
+    if [ -n "$occurrence" ]; then
+      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$relevant" "$occurrence"
+    else
+      printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"
+    fi
   done
   return 0
 }

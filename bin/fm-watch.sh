@@ -945,27 +945,27 @@ run_check_capture() {
 # heartbeat backstop enqueues its wake, so the same statuses are not re-surfaced
 # by the next heartbeat.
 mark_all_captain_relevant_surfaced() {
-  local f task last
-  while IFS=$(printf '\t') read -r f task last; do
+  local f task last occurrence
+  while IFS=$(printf '\t') read -r f task last occurrence; do
     [ -n "$f" ] || continue
-    printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+    printf '%s\t%s' "$occurrence" "$last" > "$(_hb_surfaced_path "$task")"
   done < <(scan_captain_relevant_statuses "$STATE" full-batch)
 }
 
 # Cheap heartbeat fleet-scan (the always-on twin of the daemon's catch-all). 0 if
 # any captain-relevant status has NOT already been surfaced to firstmate (its
-# content differs from the .hb-surfaced-<task> marker). Pure detect, no side
+# occurrence identity differs from the .hb-surfaced-<task> marker). Pure detect, no side
 # effects: the caller enqueues first, then marks surfaced. Because every
 # captain-relevant signal/stale already marks itself surfaced when it wakes
 # firstmate, this normally finds nothing and the heartbeat is absorbed; it
 # surfaces only a captain-relevant status the per-wake path absorbed by mistake -
 # the fail-safe backstop.
 heartbeat_scan_finds_actionable() {
-  local f task last surfaced
-  while IFS=$(printf '\t') read -r f task last; do
+  local f task last occurrence surfaced
+  while IFS=$(printf '\t') read -r f task last occurrence; do
     [ -n "$f" ] || continue
     surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
-    [ "$surfaced" = "$last" ] && continue
+    [ "$surfaced" = "$(printf '%s\t%s' "$occurrence" "$last")" ] && continue
     return 0
   done < <(scan_captain_relevant_statuses "$STATE" full-batch)
   return 1

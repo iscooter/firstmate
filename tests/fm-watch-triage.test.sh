@@ -2721,8 +2721,9 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   pid=$!
   wait_for_exit "$pid" 100 || fail "heartbeat backstop did not surface an unsurfaced captain-relevant status"
   grep -Fx "heartbeat" "$out" >/dev/null || fail "backstop did not exit with a heartbeat wake"
-  [ "$(cat "$state/.hb-surfaced-miss" 2>/dev/null || true)" = "done: PR https://example.test/pr/5" ] \
-    || fail "backstop did not record the status as surfaced (would re-fire next heartbeat)"
+  [ "$(cat "$state/.hb-surfaced-miss" 2>/dev/null || true)" = \
+    "1$(printf '\t')done: PR https://example.test/pr/5" ] \
+    || fail "backstop did not record the status occurrence as surfaced (would re-fire next heartbeat)"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the backstop heartbeat failed"
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null || fail "backstop heartbeat was not queued"
   pass "heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed"
@@ -2737,9 +2738,9 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
 # provably-working crew made the watcher absorb it: no queue entry, no exit, no
 # supervisor turn at all. The whole unread batch must decide.
 test_actionable_event_behind_routine_append_surfaces() {
-  local dir state fakebin out drain_out status_file pid
+  local dir state fakebin out drain_out replay_out status_file pid replay_pid queue_lines replay_queue_lines
   dir=$(make_case hidden-actionable); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; replay_out="$dir/replay.out"
   status_file="$state/t-hidden.status"
   # The actionable event, then a routine append landing behind it.
   printf 'needs-decision: [key=k1] pick an auth approach\n' > "$status_file"
@@ -2756,7 +2757,22 @@ test_actionable_event_behind_routine_append_surfaces() {
     || fail "drain after the hidden actionable event failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "the hidden actionable event was not queued"
-  pass "a captain decision hidden behind a later routine append still surfaces"
+  queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  printf 'resolved: [key=k1] selected the auth approach\n' >> "$status_file"
+  printf 'needs-decision: [key=k1] pick an auth approach\n' >> "$status_file"
+  printf 'working: still drafting the options\n' >> "$status_file"
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$replay_out"
+  replay_pid=$!
+  wait_for_exit "$replay_pid" 100 \
+    || { unset FM_FAKE_CREW_STATE; fail "watcher absorbed a reopened decision with identical wording"; }
+  unset FM_FAKE_CREW_STATE
+  grep -F "signal: $status_file" "$replay_out" >/dev/null \
+    || fail "watcher did not report the reopened identical decision"
+  replay_queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  [ "$replay_queue_lines" -gt "$queue_lines" ] \
+    || fail "the reopened identical decision was not queued"
+  pass "hidden and identically reopened captain decisions surface as distinct events"
 }
 
 # The captain's reported case: "Backpass 0.1.7 release plus local installation
@@ -2783,8 +2799,8 @@ test_release_install_completion_surfaces_and_wakes() {
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "the release/install completion was not queued for the main session"
   [ "$(cat "$state/.hb-surfaced-t-backpass" 2>/dev/null || true)" = \
-    "done: Backpass 0.1.7 release plus local installation completed successfully" ] \
-    || fail "the hidden completion was not recorded as surfaced"
+    "1$(printf '\t')done: Backpass 0.1.7 release plus local installation completed successfully" ] \
+    || fail "the hidden completion occurrence was not recorded as surfaced"
   queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
   printf 'working: cleanup continued\n' >> "$status_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
