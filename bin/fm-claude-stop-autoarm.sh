@@ -70,7 +70,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
 OWNER_LOCK="$STATE/.claude-autoarm.lock"
-FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
 FAILURE_ALARM="$STATE/.claude-autoarm-failure-alarmed"
 AUTOARM_ATTEMPTS=${FM_CLAUDE_AUTOARM_ATTEMPTS:-2}
 case "$AUTOARM_ATTEMPTS" in
@@ -250,11 +249,19 @@ if ! need_supervision; then
 fi
 
 if [ "$HEALTHY" -eq 1 ]; then
-  if fm_failure_episode_reset "$STATE"; then
-    autoarm_finalize clean || true
-    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-    exit 0
-  fi
+  RESET_RC=0
+  fm_autoarm_failure_episode_reset_owned "$STATE" "$MY_GEN" || RESET_RC=$?
+  case "$RESET_RC" in
+    0)
+      autoarm_finalize clean || true
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 0
+      ;;
+    2)
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 0
+      ;;
+  esac
   # A bare exit 2 is still an emission (it forces a continuation turn), so a
   # superseded owner goes silent here too.
   if ! autoarm_finalize failed-suppressed; then
@@ -292,20 +299,32 @@ fi
 # Notify only once for this continuous failure episode; every later invocation
 # still exits 2 so Claude must continue into another Stop-owned retry without
 # creating a repeated operator notice or manual-arm loop.
-if [ ! -e "$FAILURE_NOTICE" ]; then
-  MESSAGE=$(
-    printf 'firstmate watcher auto-arm FAILED - the Stop-owned automatic supervision mechanism is broken after %s bounded attempts, and no live watcher with a fresh beacon was verified.\n' "$attempt"
-    [ -n "$OUT" ] && grep -E '^(watcher:|signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
-    printf 'Do not launch a manual background arm from this notice; investigate the automatic Stop hook and watcher startup before ending blind.\n'
-  )
-  if ! autoarm_emit_finalize failed "$MESSAGE"; then
+NOTICE_RC=0
+fm_autoarm_failure_notice_reserve "$STATE" "$MY_GEN" || NOTICE_RC=$?
+case "$NOTICE_RC" in
+  0)
+    MESSAGE=$(
+      printf 'firstmate watcher auto-arm FAILED - the Stop-owned automatic supervision mechanism is broken after %s bounded attempts, and no live watcher with a fresh beacon was verified.\n' "$attempt"
+      [ -n "$OUT" ] && grep -E '^(watcher:|signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
+      printf 'Do not launch a manual background arm from this notice; investigate the automatic Stop hook and watcher startup before ending blind.\n'
+    )
+    if ! fm_autoarm_still_owner "$STATE" "$MY_GEN"; then
+      fm_autoarm_failure_notice_cancel "$STATE" "$MY_GEN" || true
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 0
+    fi
+    printf '%s\n' "$MESSAGE" >&2
+    fm_autoarm_failure_notice_finalize "$STATE" "$MY_GEN" || true
+    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    exit 2
+    ;;
+  1|2)
+    fm_autoarm_failure_notice_cancel "$STATE" "$MY_GEN" || true
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 0
-  fi
-  : > "$FAILURE_NOTICE" 2>/dev/null || true
-  [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-  exit 2
-fi
+    ;;
+  3) ;;
+esac
 if ! autoarm_finalize failed-suppressed; then
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   exit 0

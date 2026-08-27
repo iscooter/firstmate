@@ -136,6 +136,30 @@ printf 'stale: fixture-win actionable\n'
 exit 0
 SH
       ;;
+    blocking-benign)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$$" >> "$FM_HOME/state/arm-ran"
+sleep 6
+printf 'watcher: FAILED - cycle ended without an actionable reason\n'
+exit 1
+SH
+      ;;
+    supersede-failed)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$$" >> "$FM_HOME/state/arm-ran"
+count=$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')
+if [ "$count" -eq 1 ]; then
+  sleep 6
+elif [ "$count" -eq 2 ]; then
+  printf 'stale: superseding fixture actionable\n'
+  exit 0
+fi
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+      ;;
     meta-vanishes)
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -956,6 +980,73 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   pass "auto-arm: a superseded owner goes silent - one supersession episode, one translation, no held mutex"
 }
 
+test_superseded_owner_preserves_new_failure_episode() {
+  local dir a_out a_pid b_out b_status a_status watcher_pid identity i
+  dir=$(make_primary_dir "$TMP_ROOT/v2-superseded-reset")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" blocking-benign
+  a_out="$dir/state/a.out"
+  run_autoarm_bg "$dir" "$a_out"
+  a_pid=$RUN_AUTOARM_BG_PID
+  i=0
+  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
+    [ "$i" -lt 50 ] || fail "owner A never published its arming claim"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  write_arm_fixture "$dir" actionable
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  b_out=$(run_autoarm "$dir" 2>/dev/null); b_status=$?
+  expect_code 2 "$b_status" "the superseding generation must translate its close"
+  assert_contains "$b_out" "firstmate watcher wake" "the superseding generation lost its wake"
+  printf 'session=sess-autoarm\ncount=4\nepoch=2\n' > "$dir/state/.turnend-claude-blocks"
+  printf 'new-notice\n' > "$dir/state/.claude-autoarm-failure-notified"
+  printf 'new-alarm\n' > "$dir/state/.claude-autoarm-failure-alarmed"
+  sleep 60 &
+  watcher_pid=$!
+  identity=$(watcher_identity "$dir" "$watcher_pid") || fail "could not identify successor watcher"
+  record_watcher_lock "$dir" "$watcher_pid" "$identity"
+  : > "$dir/state/.last-watcher-beat"
+  wait "$a_pid"
+  a_status=$?
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  expect_code 0 "$a_status" "the superseded owner must silently leave successor episode state alone"
+  [ "$(cat "$dir/state/.claude-autoarm-failure-notified")" = new-notice ] || fail "superseded owner reset the successor notice"
+  [ "$(cat "$dir/state/.claude-autoarm-failure-alarmed")" = new-alarm ] || fail "superseded owner reset the successor alarm"
+  [ "$(sed -n '2s/^count=//p' "$dir/state/.turnend-claude-blocks")" = 4 ] || fail "superseded owner reset the successor budget"
+  pass "auto-arm: a superseded owner cannot reset its successor's failure episode"
+}
+
+test_superseded_failed_owner_cannot_create_notice() {
+  local dir a_out a_pid b_out b_status a_status i
+  dir=$(make_primary_dir "$TMP_ROOT/v2-superseded-notice")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" supersede-failed
+  a_out="$dir/state/a.out"
+  run_autoarm_bg "$dir" "$a_out"
+  a_pid=$RUN_AUTOARM_BG_PID
+  i=0
+  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
+    [ "$i" -lt 50 ] || fail "owner A never published its arming claim"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  b_out=$(run_autoarm "$dir" 2>/dev/null); b_status=$?
+  expect_code 2 "$b_status" "the superseding generation must translate its close"
+  assert_contains "$b_out" "stale: superseding fixture actionable" "the successor did not own the actionable close"
+  wait "$a_pid"
+  a_status=$?
+  expect_code 0 "$a_status" "the superseded failed owner must go silent"
+  [ ! -s "$a_out" ] || fail "the superseded failed owner emitted a notice"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" "the superseded failed owner created a failure notice"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the superseded failed owner replaced the successor ledger outcome"
+  pass "auto-arm: a superseded failed owner cannot publish the failure notice"
+}
+
 test_need_vanished_mid_cycle_closes_quietly() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/vanished")
@@ -1029,6 +1120,8 @@ test_terminal_check_claim_is_never_reclaimed
 test_open_generation_claim_defers_without_any_lock
 test_stuck_generation_claim_is_superseded_and_rearms
 test_superseded_owner_goes_silent_and_never_double_translates
+test_superseded_owner_preserves_new_failure_episode
+test_superseded_failed_owner_cannot_create_notice
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
 test_active_in_marked_secondmate_home

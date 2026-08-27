@@ -1204,6 +1204,135 @@ fm_autoarm_still_owner() {  # <state-dir> <gen>
   [ "$FM_AUTOARM_GEN" = "$gen" ] && [ "$FM_AUTOARM_OWNER" = "$pid" ]
 }
 
+fm_autoarm_failure_episode_reset_owned() {  # <state-dir> <gen>
+  local state=$1 gen=$2 owner_lock budget_lock pid
+  owner_lock="$state/.claude-autoarm.lock"
+  budget_lock="$state/.turnend-claude-blocks.lock"
+  pid=${BASHPID:-$$}
+  fm_lock_try_acquire "$owner_lock" || return 1
+  if ! fm_autoarm_ledger_read "$state" \
+    || [ "$FM_AUTOARM_GEN" != "$gen" ] || [ "$FM_AUTOARM_OWNER" != "$pid" ]; then
+    fm_lock_release "$owner_lock"
+    return 2
+  fi
+  if ! fm_lock_try_acquire "$budget_lock"; then
+    fm_lock_release "$owner_lock"
+    return 1
+  fi
+  if ! fm_autoarm_ledger_read "$state" \
+    || [ "$FM_AUTOARM_GEN" != "$gen" ] || [ "$FM_AUTOARM_OWNER" != "$pid" ]; then
+    fm_lock_release "$budget_lock"
+    fm_lock_release "$owner_lock"
+    return 2
+  fi
+  if ! fm_failure_episode_reset "$state" held; then
+    fm_lock_release "$budget_lock"
+    fm_lock_release "$owner_lock"
+    return 1
+  fi
+  fm_lock_release "$budget_lock"
+  fm_lock_release "$owner_lock"
+  return 0
+}
+
+fm_autoarm_failure_notice_present() {  # <state-dir>
+  local state=$1 notice line
+  notice="$state/.claude-autoarm-failure-notified"
+  [ -e "$notice" ] || return 1
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  case "$line" in
+    'epoch='*' state=pending') return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+fm_autoarm_failure_notice_reserve() {  # <state-dir> <gen>
+  local state=$1 gen=$2 lock notice pid line marker_gen
+  lock="$state/.claude-autoarm.lock"
+  notice="$state/.claude-autoarm-failure-notified"
+  pid=${BASHPID:-$$}
+  fm_lock_try_acquire "$lock" || return 1
+  if ! fm_autoarm_ledger_read "$state" \
+    || [ "$FM_AUTOARM_GEN" != "$gen" ] || [ "$FM_AUTOARM_OWNER" != "$pid" ]; then
+    fm_lock_release "$lock"
+    return 2
+  fi
+  if fm_autoarm_failure_notice_present "$state"; then
+    fm_lock_release "$lock"
+    return 3
+  fi
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  marker_gen=${line#epoch=}
+  marker_gen=${marker_gen%% *}
+  if [ -e "$notice" ] && [ "$marker_gen" != "$gen" ]; then
+    rm -f "$notice" 2>/dev/null || {
+      fm_lock_release "$lock"
+      return 1
+    }
+  fi
+  if [ ! -e "$notice" ] \
+    && ! (set -C; printf 'epoch=%s state=pending\n' "$gen" > "$notice") 2>/dev/null; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  if [ "$line" != "epoch=$gen state=pending" ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  fm_lock_release "$lock"
+  return 0
+}
+
+fm_autoarm_failure_notice_cancel() {  # <state-dir> <gen>
+  local state=$1 gen=$2 lock notice line
+  lock="$state/.claude-autoarm.lock"
+  notice="$state/.claude-autoarm-failure-notified"
+  fm_lock_try_acquire "$lock" || return 1
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  [ "$line" != "epoch=$gen state=pending" ] || rm -f "$notice" 2>/dev/null || true
+  fm_lock_release "$lock"
+  return 0
+}
+
+fm_autoarm_failure_notice_finalize() {  # <state-dir> <gen>
+  local state=$1 gen=$2 lock epoch notice pid identity tmp line
+  lock="$state/.claude-autoarm.lock"
+  epoch="$state/.claude-autoarm-epoch"
+  notice="$state/.claude-autoarm-failure-notified"
+  pid=${BASHPID:-$$}
+  fm_lock_try_acquire "$lock" || return 1
+  if ! fm_autoarm_ledger_read "$state" \
+    || [ "$FM_AUTOARM_GEN" != "$gen" ] || [ "$FM_AUTOARM_OWNER" != "$pid" ]; then
+    line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+    [ "$line" != "epoch=$gen state=pending" ] || rm -f "$notice" 2>/dev/null || true
+    fm_lock_release "$lock"
+    return 2
+  fi
+  line=$(sed -n '1p' "$notice" 2>/dev/null || true)
+  if [ "$line" != "epoch=$gen state=pending" ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  identity=$(sed -n '2p' "$epoch" 2>/dev/null || true)
+  tmp="$epoch.tmp.$pid"
+  if ! {
+      printf 'epoch=%s owner_pid=%s outcome=failed updated_at=%s\n' \
+        "$gen" "$pid" "$(date +%s)"
+      [ -z "$identity" ] || printf '%s\n' "$identity"
+    } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$epoch" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    fm_lock_release "$lock"
+    return 1
+  fi
+  if ! printf 'epoch=%s state=committed\n' "$gen" > "$notice" 2>/dev/null; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  fm_lock_release "$lock"
+  return 0
+}
+
 # LEGACY shim (see the contract comment above): the abandonment proof for a
 # lock-holding claim from a pre-generation build, recognizable by the role file
 # only such claims and the guard's short terminal-check hold publish.

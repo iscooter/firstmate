@@ -150,7 +150,6 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 BUDGET_FILE="$STATE/.turnend-claude-blocks"
 BUDGET_LOCK="$STATE/.turnend-claude-blocks.lock"
 OWNER_LOCK="$STATE/.claude-autoarm.lock"
-FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
 FAILURE_ALARM="$STATE/.claude-autoarm-failure-alarmed"
 SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null || printf 'unknown')
 budget_reset() {
@@ -162,7 +161,7 @@ budget_reset() {
 
 fm_supervision_status "$STATE" "$GRACE"
 if [ "$FM_SUP_NEEDED" = false ]; then
-  [ -e "$FAILURE_NOTICE" ] || budget_reset
+  fm_autoarm_failure_notice_present "$STATE" || budget_reset
   exit 0
 fi
 if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
@@ -233,7 +232,7 @@ budget_account_current_epoch() {
   if [ ! -f "$BUDGET_FILE" ] || [ "${old_session:-}" != "$SESSION_ID" ]; then
     case "$outcome" in
       failed|failed-suppressed)
-        if [ -e "$FAILURE_NOTICE" ]; then
+        if fm_autoarm_failure_notice_present "$STATE"; then
           initialized=1
           COUNT=0
         else
@@ -268,7 +267,7 @@ autoarm_owns_recovery() {
   # cover a claim that finished moments ago, so a genuine handoff is not
   # duplicated, while a stale one now reaches the block.
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
-    [ ! -e "$FAILURE_NOTICE" ] || budget_account_current_epoch || true
+    ! fm_autoarm_failure_notice_present "$STATE" || budget_account_current_epoch || true
     return 0
   fi
   # Legacy shim: a pre-generation build's claim holds the owner lock with the
@@ -278,7 +277,7 @@ autoarm_owns_recovery() {
   role=$(fm_lock_role "$OWNER_LOCK" 2>/dev/null || true)
   if fm_pid_alive "$pid" && [ "$role" = autoarm ] \
     && ! fm_autoarm_claim_abandoned "$STATE" "$GRACE"; then
-    [ ! -e "$FAILURE_NOTICE" ] || budget_account_current_epoch || true
+    ! fm_autoarm_failure_notice_present "$STATE" || budget_account_current_epoch || true
     return 0
   fi
   outcome=$(sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$STATE/.claude-autoarm-epoch" 2>/dev/null || true)
@@ -286,20 +285,22 @@ autoarm_owns_recovery() {
     rewake)
       age=$(fm_path_age "$STATE/.claude-autoarm-epoch")
       if [ "$age" -lt "$EPOCH_FRESH" ]; then
-        [ ! -e "$FAILURE_NOTICE" ] || budget_account_current_epoch || true
+        ! fm_autoarm_failure_notice_present "$STATE" || budget_account_current_epoch || true
         return 0
       fi
       ;;
     failed)
       age=$(fm_path_age "$STATE/.claude-autoarm-epoch")
-      if [ "$age" -lt "$EPOCH_FRESH" ] && [ -e "$FAILURE_NOTICE" ] \
+      if [ "$age" -lt "$EPOCH_FRESH" ] \
+        && fm_autoarm_failure_notice_present "$STATE" \
         && budget_account_current_epoch; then
         [ "$BUDGET_INITIALIZED_FAILURE" -eq 1 ] && return 0
       fi
       ;;
     failed-suppressed)
       age=$(fm_path_age "$STATE/.claude-autoarm-epoch")
-      if [ "$age" -lt "$EPOCH_FRESH" ] && [ -e "$FAILURE_NOTICE" ] \
+      if [ "$age" -lt "$EPOCH_FRESH" ] \
+        && fm_autoarm_failure_notice_present "$STATE" \
         && budget_account_current_epoch; then
         :
       fi
@@ -380,7 +381,7 @@ terminal_fail_open() {
 failure_episode_verified() {
   local outcome
   [ ! -e "$STATE/.afk" ] || return 1
-  [ -e "$FAILURE_NOTICE" ] || return 1
+  fm_autoarm_failure_notice_present "$STATE" || return 1
   outcome=$(sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$STATE/.claude-autoarm-epoch" 2>/dev/null || true)
   case "$outcome" in
     failed|failed-suppressed) return 0 ;;
