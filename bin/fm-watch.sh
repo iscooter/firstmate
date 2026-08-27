@@ -946,7 +946,7 @@ run_check_capture() {
 # by the next heartbeat.
 mark_all_captain_relevant_surfaced() {
   local f task last occurrence
-  while IFS=$(printf '\t') read -r f task last occurrence; do
+  while IFS=$(printf '\t') read -r f task occurrence last; do
     [ -n "$f" ] || continue
     printf '%s\t%s' "$occurrence" "$last" > "$(_hb_surfaced_path "$task")"
   done < <(scan_captain_relevant_statuses "$STATE" full-batch)
@@ -962,7 +962,7 @@ mark_all_captain_relevant_surfaced() {
 # the fail-safe backstop.
 heartbeat_scan_finds_actionable() {
   local f task last occurrence surfaced
-  while IFS=$(printf '\t') read -r f task last occurrence; do
+  while IFS=$(printf '\t') read -r f task occurrence last; do
     [ -n "$f" ] || continue
     surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
     [ "$surfaced" = "$(printf '%s\t%s' "$occurrence" "$last")" ] && continue

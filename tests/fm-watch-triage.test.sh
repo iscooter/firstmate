@@ -2785,7 +2785,7 @@ test_release_install_completion_surfaces_and_wakes() {
   dir=$(make_case release-install-done); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; replay_out="$dir/replay.out"
   status_file="$state/t-backpass.status"
-  printf 'done: Backpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
+  printf 'done:\tBackpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
   printf 'working: tidying the release notes\n' >> "$status_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
   watch_bg "$state" "$fakebin" "$out"
@@ -2799,8 +2799,8 @@ test_release_install_completion_surfaces_and_wakes() {
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "the release/install completion was not queued for the main session"
   [ "$(cat "$state/.hb-surfaced-t-backpass" 2>/dev/null || true)" = \
-    "1$(printf '\t')done: Backpass 0.1.7 release plus local installation completed successfully" ] \
-    || fail "the hidden completion occurrence was not recorded as surfaced"
+    "1$(printf '\t')done:$(printf '\t')Backpass 0.1.7 release plus local installation completed successfully" ] \
+    || fail "the tabbed hidden completion occurrence was not recorded as surfaced"
   queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
   printf 'working: cleanup continued\n' >> "$status_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'

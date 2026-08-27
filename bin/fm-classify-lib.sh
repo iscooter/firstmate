@@ -1487,10 +1487,11 @@ stale_is_terminal() {  # <window> <state>
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
 
-# Print "<file>\t<task>\t<last-line>" for every state/*.status whose selected line
-# is captain-relevant. The default selects the current last line for away-mode
-# compatibility; full-batch selects the latest captain-relevant event for the
-# main-session watcher's catch-all recovery paths.
+# Print "<file>\t<task>\t<last-line>" by default, or
+# "<file>\t<task>\t<occurrence>\t<last-line>" in full-batch mode, for every
+# state/*.status whose selected line is captain-relevant. The default selects the
+# current last line for away-mode compatibility; full-batch selects the latest
+# captain-relevant event for the main-session watcher's catch-all recovery paths.
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
 # daemon against .subsuper-seen-status-*, the watcher against surfaced markers).
 scan_captain_relevant_statuses() {  # <state> [full-batch]
@@ -1511,7 +1512,7 @@ scan_captain_relevant_statuses() {  # <state> [full-batch]
     [ -n "$relevant" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     if [ -n "$occurrence" ]; then
-      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$relevant" "$occurrence"
+      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$occurrence" "$relevant"
     else
       printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"
     fi
