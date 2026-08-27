@@ -2740,9 +2740,8 @@ test_actionable_event_behind_routine_append_surfaces() {
   printf 'needs-decision: [key=k1] pick an auth approach\n' > "$status_file"
   printf 'working: still drafting the options\n' >> "$status_file"
   # Provably working: this is exactly the state that used to absorb the wake.
-  export FM_FAKE_CREW_STATE='state: busy · source: pane · actively working'
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$out"
   pid=$!
   wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher absorbed a decision hidden behind a later routine append"; }
   unset FM_FAKE_CREW_STATE
@@ -2767,9 +2766,8 @@ test_release_install_completion_surfaces_and_wakes() {
   status_file="$state/t-backpass.status"
   printf 'done: Backpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
   printf 'working: tidying the release notes\n' >> "$status_file"
-  export FM_FAKE_CREW_STATE='state: busy · source: pane · actively working'
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$out"
   pid=$!
   wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher did not wake on a terminal release/install completion"; }
   unset FM_FAKE_CREW_STATE
