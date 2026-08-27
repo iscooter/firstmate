@@ -1414,7 +1414,7 @@ fm_autoarm_release_abandoned() {  # <state-dir> [grace]
         fm_lock_release "$steal"
         return 1
       fi
-    elif [ -z "$recorded" ] || [ -z "$current" ]; then
+    elif [ -n "$recorded" ] && [ -z "$current" ]; then
       fm_lock_release "$steal"
       return 1
     fi

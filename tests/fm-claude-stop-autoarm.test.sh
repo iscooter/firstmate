@@ -640,12 +640,12 @@ test_abandoned_owner_claim_is_reclaimed_and_rearms() {
   sleep 60 &
   pid=$!
   record_autoarm_owner "$dir" "$pid"
-  record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
   record_autoarm_epoch "$dir" 464 "$pid" rewake
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill -0 "$pid" 2>/dev/null || fail "identityless legacy owner was signalled during reclaim"
+  kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  ! kill -0 "$pid" 2>/dev/null || fail "reclaimed legacy owner remained able to resume"
-  expect_code 2 "$status" "a claim whose ledger outcome is already terminal must be reclaimed, not deferred to forever"
+  expect_code 2 "$status" "an identityless claim whose ledger outcome is terminal must be reclaimed, not deferred to forever"
   [ -e "$dir/state/arm-ran" ] || fail "abandoned claim left the home unarmed with work in flight"
   assert_contains "$out" "firstmate watcher wake" "the reclaimed cycle must still translate its wake"
   [ "$(epoch_field "$dir" epoch)" -gt 464 ] || fail "reclaimed cycle did not advance the frozen ledger: $(epoch_field "$dir" epoch)"
