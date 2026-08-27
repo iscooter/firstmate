@@ -113,15 +113,17 @@ last_status_line() {
 # the fold itself would refuse all keep the event, because surfacing a closed
 # decision costs one wasted turn while dropping a live one restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
-  local f=$1 line relevant="" count=0 open="" folded="" key verb
+  local f=$1 line relevant="" count=0 occurrence=0 open="" folded="" key verb snapshot
   [ -e "$f" ] || return 0
+  snapshot=$(cat "$f" 2>/dev/null) || return 0
   if [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ]; then
-    open=$(status_open_decisions "$f" 2>/dev/null) || open=""
+    open=$(status_open_decisions "$f" "$snapshot" 2>/dev/null) || open=""
     folded=1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     status_is_captain_relevant "$line" || continue
+    count=$((count + 1))
     if [ -n "$folded" ]; then
       verb=$(status_line_verb "$line")
       case "$verb" in
@@ -136,10 +138,10 @@ last_captain_relevant_status_record() {  # <status-file>
       esac
     fi
     relevant=$line
-    count=$((count + 1))
-  done < "$f" 2>/dev/null
+    occurrence=$count
+  done <<< "$snapshot"
   [ -n "$relevant" ] || return 0
-  printf '%s\t%s\n' "$count" "$relevant"
+  printf '%s\t%s\n' "$occurrence" "$relevant"
 }
 
 last_captain_relevant_status_line() {  # <status-file>
@@ -496,14 +498,20 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
 # before any read - a cheap builtin, unlike fm_wake_latest_event's O_NOFOLLOW
 # subprocess read, which exists for that function's much narrower payload-driven
 # path resolution rather than this directory-local glob.
-status_open_decisions() {  # <status-file>
+status_open_decisions() {  # <status-file> [snapshot]
   local f=$1 line resolve held open=''
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  while IFS= read -r line || [ -n "$line" ]; do
-    open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held")
-  done < "$f"
+  if [ "$#" -ge 2 ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held")
+    done <<< "$2"
+  else
+    while IFS= read -r line || [ -n "$line" ]; do
+      open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held")
+    done < "$f"
+  fi
   printf '%s' "$open"
 }
 

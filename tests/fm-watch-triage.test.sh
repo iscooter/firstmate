@@ -2869,10 +2869,11 @@ test_captain_relevant_batch_reader_is_not_last_line() {
 # the over-surfacing this reader exists to avoid. A decision that is still OPEN
 # behind a later routine append must keep surfacing - that is the original stall.
 test_closed_keyed_decision_does_not_surface() {
-  local dir state closed still_open
+  local dir state closed still_open mixed before after
   dir=$(make_case closed-decision); state="$dir/state"
   closed="$state/t-closed.status"
   still_open="$state/t-open.status"
+  mixed="$state/t-mixed.status"
   { printf 'needs-decision: [key=k1] pick an auth approach\n'
     printf 'resolved: [key=k1] chose oauth\n'; } > "$closed"
   [ -z "$(last_captain_relevant_status_line "$closed")" ] \
@@ -2888,7 +2889,15 @@ test_closed_keyed_decision_does_not_surface() {
     || fail "an OPEN decision behind a routine append stopped surfacing"
   signal_reason_is_actionable "$still_open" \
     || fail "an OPEN decision behind a routine append classified as routine"
-  pass "a closed keyed decision is not surfaced while an open one still is"
+  { printf 'needs-decision: [key=k3] choose a release channel\n'
+    printf 'done: release complete\n'; } > "$mixed"
+  before=$(last_captain_relevant_status_record "$mixed")
+  { printf 'resolved: [key=k3] chose stable\n'
+    printf 'working: cleanup\n'; } >> "$mixed"
+  after=$(last_captain_relevant_status_record "$mixed")
+  [ "$after" = "$before" ] \
+    || fail "closing an earlier decision changed a later event identity"
+  pass "closed decisions stay quiet without renumbering later actionable events"
 }
 
 # The end-to-end statement of the same fact through the real watcher: a crew that
