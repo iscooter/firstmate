@@ -166,28 +166,15 @@ MY_GEN=$FM_AUTOARM_MY_GEN
 [ -n "$MY_GEN" ] || exit 0
 
 # Publish <outcome> for this generation, refusing when a newer generation has
-# superseded this owner: rc 1 means go silent - no write happened and no emit
-# may follow. A best-effort write miss with ownership still standing proceeds,
-# because this process exits right after and a dead owner's claim is
-# supersedable anyway.
+# superseded this owner or the owned write cannot be committed.
 autoarm_finalize() {  # <outcome>
-  local rc=0
-  fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1" || rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    2) return 1 ;;
-    *)
-      fm_autoarm_still_owner "$STATE" "$MY_GEN" && return 0
-      return 1
-      ;;
-  esac
+  fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1"
 }
 
 autoarm_emit_finalize() {  # <outcome> <message>
   fm_autoarm_still_owner "$STATE" "$MY_GEN" || return 1
   printf '%s\n' "$2" >&2
-  fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1" || true
-  return 0
+  fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1"
 }
 
 # X mode cadence: source the generated config so an X instance polls at its
@@ -293,6 +280,7 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     exit 0
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+  fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
   exit 2
 fi
 
@@ -314,8 +302,12 @@ case "$NOTICE_RC" in
       exit 0
     fi
     printf '%s\n' "$MESSAGE" >&2
-    fm_autoarm_failure_notice_finalize "$STATE" "$MY_GEN" || true
+    if ! fm_autoarm_failure_notice_finalize "$STATE" "$MY_GEN"; then
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 0
+    fi
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
     exit 2
     ;;
   1|2)

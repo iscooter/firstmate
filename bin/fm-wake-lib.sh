@@ -1019,12 +1019,11 @@ fm_failure_episode_reset() {
 #     superseded owner goes silent: it never writes, never emits, and exits 0,
 #     so one event epoch normally translates on exactly one generation and a
 #     stuck or resuming predecessor can neither clobber the ledger nor double-fire.
-#     Two bounded pathological duplicates are accepted: an owner blocked inside
-#     its final emit syscall after the ownership check can finish after
-#     supersession, and a legacy upgrade can leave one residual continuation.
-#     Either costs at most one extra exit-2 turn absorbed by the durable,
-#     idempotent wake queue; eliminating both would require the rejected
-#     cross-output mutex or steady-state predecessor revocation.
+#     The exit status is the translation commit: output from an owner whose
+#     terminal write is refused is discarded with exit 0. The bounded residuals
+#     are a process frozen after its owned terminal write but before its own exit
+#     (process-death territory) and one legacy-upgrade continuation. Either costs
+#     at most one extra exit-2 turn absorbed by the durable, idempotent wake queue.
 #
 # This structurally removes the three failure classes the lock-held-across-arm
 # design produced: a hung owner deferring every later firing forever (observed
