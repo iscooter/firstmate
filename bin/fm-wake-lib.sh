@@ -1376,7 +1376,7 @@ fm_autoarm_claim_abandoned() {  # <state-dir> [grace]
 # is held no other process can publish the primary lock, so the window between
 # proving abandonment and removing the lock cannot swallow a genuine new claim.
 fm_autoarm_release_abandoned() {  # <state-dir> [grace]
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock steal epoch lock_pid recorded current owner line1 tmp i retired
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock steal epoch lock_pid recorded current owner line1 tmp i
   lock="$state/.claude-autoarm.lock"
   steal="$lock.steal"
   epoch="$state/.claude-autoarm-epoch"
@@ -1396,23 +1396,23 @@ fm_autoarm_release_abandoned() {  # <state-dir> [grace]
         return 1
       }
       i=0
-      retired=0
       while [ "$i" -lt 20 ]; do
-        if ! fm_pid_alive "$lock_pid"; then
-          retired=1
-          break
-        fi
+        fm_pid_alive "$lock_pid" || break
         current=$(fm_pid_identity "$lock_pid" 2>/dev/null || true)
+        [ -n "$current" ] || break
         if [ "$current" != "$recorded" ]; then
-          retired=1
-          break
+          fm_lock_release "$steal"
+          return 1
         fi
         sleep 0.05
         i=$((i + 1))
       done
-      if [ "$retired" -ne 1 ]; then
-        fm_lock_release "$steal"
-        return 1
+      if fm_pid_alive "$lock_pid"; then
+        current=$(fm_pid_identity "$lock_pid" 2>/dev/null || true)
+        if [ -n "$current" ] && [ "$current" != "$recorded" ]; then
+          fm_lock_release "$steal"
+          return 1
+        fi
       fi
     elif [ -n "$recorded" ] && [ -z "$current" ]; then
       fm_lock_release "$steal"

@@ -735,6 +735,42 @@ test_stuck_arming_claim_is_reclaimed_and_rearms() {
   pass "auto-arm: a hung owner frozen at arming with no watcher beat is reclaimed so re-arming self-heals"
 }
 
+test_stopped_legacy_owner_with_pending_term_is_reclaimed() {
+  local dir out status pid before after i
+  dir=$(make_primary_dir "$TMP_ROOT/stopped-stuck-legacy-claim")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
+  write_arm_fixture "$dir" actionable
+  bash -c ': > "$1"; kill -STOP $$; printf resumed > "$2"' \
+    _ "$dir/state/legacy-ready" "$dir/state/legacy-resumed" &
+  pid=$!
+  i=0
+  while [ ! -e "$dir/state/legacy-ready" ]; do
+    [ "$i" -lt 50 ] || fail "legacy owner did not reach its stopped boundary"
+    sleep 0.02
+    i=$((i + 1))
+  done
+  kill -STOP "$pid" 2>/dev/null || fail "could not stop the legacy owner"
+  record_autoarm_owner "$dir" "$pid"
+  record_autoarm_owner_identity "$dir" "$pid" || fail "could not record a claim pid-identity"
+  record_autoarm_epoch "$dir" 464 "$pid" arming
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a stopped legacy owner with TERM pending must not retain the owner lock"
+  assert_contains "$out" "firstmate watcher wake" "reclaiming the stopped legacy owner did not re-arm"
+  assert_absent "$dir/state/.claude-autoarm.lock" "a stopped signalled legacy owner retained its lock"
+  before=$(sed -n '1p' "$dir/state/.claude-autoarm-epoch")
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -CONT "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  ! kill -0 "$pid" 2>/dev/null || fail "the queued TERM did not retire the continued legacy owner"
+  after=$(sed -n '1p' "$dir/state/.claude-autoarm-epoch")
+  [ "$after" = "$before" ] || fail "the continued legacy owner wrote the ledger after queued TERM"
+  assert_absent "$dir/state/legacy-resumed" "the continued legacy owner ran user code after queued TERM"
+  pass "auto-arm: queued TERM cannot leave a stopped legacy owner blocking reclaim"
+}
+
 test_claim_not_named_by_the_ledger_is_never_reclaimed() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/unnamed-claim")
@@ -1204,6 +1240,7 @@ test_abandoned_owner_claim_is_reclaimed_and_rearms
 test_arming_claim_with_fresh_beacon_is_never_reclaimed
 test_fresh_arming_claim_with_stale_beacon_is_never_reclaimed
 test_stuck_arming_claim_is_reclaimed_and_rearms
+test_stopped_legacy_owner_with_pending_term_is_reclaimed
 test_claim_not_named_by_the_ledger_is_never_reclaimed
 test_pid_reused_arming_claim_is_reclaimed_and_rearms
 test_pid_reused_claim_with_no_ledger_is_reclaimed_and_rearms
