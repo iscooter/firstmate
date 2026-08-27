@@ -1067,6 +1067,41 @@ test_classify_signal_dedup_against_scan() {
   pass "classify_signal dedupes against the catch-all scan seen marker"
 }
 
+test_classify_signal_skips_turn_markers_and_reports_all_statuses() {
+  local dir state out snapshot
+  dir=$(make_supercase classify-coalesced-paths)
+  state="$dir/state"
+  printf 'turn ended\n' > "$state/good.turn-ended"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/good.turn-ended" "$state")
+  case "$out" in self\|*) ;; *) fail "a bare turn-ended marker escalated: $out" ;; esac
+
+  printf 'needs-decision [key=good]: choose the release target\n' > "$state/good.status"
+  ln -s "$state/good.status" "$state/bad.status" || fail "could not create untrusted status fixture"
+  snapshot=$(status_presentation_snapshot "$state") || fail "could not snapshot status positions"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal \
+    "$state/bad.status $state/good.status $state/good.turn-ended" "$state" "$snapshot")
+  case "$out" in escalate\|*) ;; *) fail "mixed trusted and untrusted statuses did not escalate: $out" ;; esac
+  case "$out" in *"bad.status: unreadable or untrusted status path"*) ;; *) fail "untrusted status was absent from digest: $out" ;; esac
+  case "$out" in *"choose the release target"*) ;; *) fail "trusted sibling decision was absent from digest: $out" ;; esac
+  mark_escalated_seen signal "$state/bad.status $state/good.status $state/good.turn-ended" "$state" "$snapshot"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/good.status" "$state")
+  case "$out" in self\|*) ;; *) fail "reported trusted sibling was not position-deduped: $out" ;; esac
+  pass "classify_signal skips turn markers and reports every status sibling"
+}
+
+test_catchall_multiple_events_preserves_stale_dedupe() {
+  local dir state out
+  dir=$(make_supercase catchall-multiple-stale-dedupe)
+  state="$dir/state"
+  printf 'blocked [key=a]: first blocker\ndone: final result\n' > "$state/multi.status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" housekeeping "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "catch-all did not escalate multiple relevant events"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-multi" "$state")
+  case "$out" in self\|*already\ escalated*) ;; *) fail "catch-all marker did not dedupe terminal stale: $out" ;; esac
+  pass "catch-all multi-event markers preserve terminal stale dedupe"
+}
+
 test_classify_signal_reads_the_whole_batch_not_the_last_line() {
   # One wake covers every byte appended since the previous one. A crew that
   # raised a decision and then appended any routine line used to be classified
@@ -2005,6 +2040,8 @@ test_tmux_composer_state_bordered_and_agent_rows_are_empty
 test_tmux_composer_state_requires_matching_box_borders
 test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
+test_classify_signal_skips_turn_markers_and_reports_all_statuses
+test_catchall_multiple_events_preserves_stale_dedupe
 test_classify_signal_reads_the_whole_batch_not_the_last_line
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging

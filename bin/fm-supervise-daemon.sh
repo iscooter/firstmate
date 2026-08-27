@@ -380,6 +380,7 @@ classify_signal() {  # <reason-after-colon> <state> [<presentation-snapshot>]
   [ -n "$snapshot" ] || snapshot=$(status_presentation_snapshot "$state") || snapshot=
   for f in $reason; do
     [ -e "$f" ] || continue
+    case "$f" in *.status) ;; *) continue ;; esac
     task=$(basename "$f"); task="${task%.status}"
     endpoint= ident=
     while IFS=$(printf '\t') read -r row endpoint ident extra; do
@@ -390,13 +391,15 @@ classify_signal() {  # <reason-after-colon> <state> [<presentation-snapshot>]
 $snapshot
 EOF
     if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ] || [ -z "$endpoint" ] || [ -z "$ident" ]; then
-      printf 'escalate|%s: unreadable or untrusted status path' "$(basename "$f")"
-      return
+      rel=1
+      distilled="${distilled}$(basename "$f"): unreadable or untrusted status path | "
+      continue
     fi
-    relevant=$(daemon_unseen_relevant_lines "$f" "$state" "$task" "$endpoint" "$ident") || {
-      printf 'escalate|%s: unreadable or untrusted status path' "$(basename "$f")"
-      return
-    }
+    if ! relevant=$(daemon_unseen_relevant_lines "$f" "$state" "$task" "$endpoint" "$ident"); then
+      rel=1
+      distilled="${distilled}$(basename "$f"): unreadable or untrusted status path | "
+      continue
+    fi
     if [ -n "$relevant" ]; then
       rel=1
       relevant=${relevant//$'\n'/ - }
@@ -595,6 +598,7 @@ mark_escalated_seen() {  # <kind> <arg> <state> [<presentation-snapshot>]
       [ -n "$snapshot" ] || snapshot=$(status_presentation_snapshot "$state") || snapshot=
       for f in $arg; do
         [ -e "$f" ] || continue
+        case "$f" in *.status) ;; *) continue ;; esac
         task=$(basename "$f"); task="${task%.status}"
         endpoint= ident=
         while IFS=$(printf '\t') read -r row endpoint ident extra; do
@@ -1138,7 +1142,7 @@ housekeeping() {  # <state>
   #     scan_captain_relevant_statuses; the daemon layers its digest dedup on top.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local snapshot endpoint ident f task relevant
+    local snapshot endpoint ident f task relevant last
     snapshot=$(status_presentation_snapshot "$state") || snapshot=
     while IFS="$(printf '\t')" read -r task endpoint ident; do
       [ -n "$task" ] || continue
@@ -1148,9 +1152,10 @@ housekeeping() {  # <state>
         continue
       }
       [ -n "$relevant" ] || continue
+      last=${relevant##*$'\n'}
       relevant=${relevant//$'\n'/ - }
       escalate_add "$state" "$(basename "$f"): $relevant (catch-all scan)"
-      mark_status_seen "$state" "$task" "$relevant" "$endpoint" "$ident"
+      mark_status_seen "$state" "$task" "$last" "$endpoint" "$ident"
     done <<EOF
 $snapshot
 EOF
