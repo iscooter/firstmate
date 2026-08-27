@@ -56,7 +56,8 @@ When any diagnostic needs captain attention, report the plain consequence and re
   A recorded deadline means the complete refresh did not finish inside `FM_HOME_SUMMARY_TIMEOUT`, so inspect lock acquisition and producer completion before validation or publication, and fix the blocked phase rather than raising this load-bearing bound.
 
 - `BACKLOG_RECONCILE: <id>: recorded backlog close could not be replayed: <reason>` - an interrupted cleanup recorded exactly which backlog item it still owed a close, and this session start could not land it.
-  The task's own record is already gone, so the item is showing as running when the work is finished; read the named reason, fix what is blocking the backlog file, and rerun session start so the same recorded close replays.
+  The endpoint and local copy are already gone; the task record is normally gone too, but remains paired with the marker when recovery could not remove it safely.
+  Read the named reason, fix the record or backlog-file problem, and rerun session start so the same recorded close replays.
   Never hand-close the item by deleting `state/<id>.backlog-close` - that discards the completion link the cleanup captured.
 - `BACKLOG_RECONCILE: <id>: worker record exists but its backlog item could not be moved to In flight: <reason>` - this home owns a worker whose backlog item is still queued, and the reconciliation could not correct it.
   Until it is corrected, the fleet view reads that worker as work no backlog item owns; resolve the named backlog problem and rerun session start.
