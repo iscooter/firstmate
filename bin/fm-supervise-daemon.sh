@@ -354,7 +354,7 @@ daemon_seen_offset() {  # <state> <task> <ident> <end-offset>
 }
 
 daemon_unseen_relevant_lines() {  # <status-file> <state> <task> <end-offset> <ident>
-  local f=$1 state=$2 task=$3 end=$4 ident=$5 floor= lines line relevant='' seen
+  local f=$1 state=$2 task=$3 end=$4 ident=$5 floor="" lines line relevant='' seen
   floor=$(daemon_seen_offset "$state" "$task" "$ident" "$end" 2>/dev/null) || floor=
   if ! lines=$(status_new_lines_since_cursor "$f" "$end" "$floor"); then
     lines=$(LC_ALL=C command cat "$f" 2>/dev/null) || return 1
@@ -382,7 +382,7 @@ classify_signal() {  # <reason-after-colon> <state> [<presentation-snapshot>]
     [ -e "$f" ] || [ -L "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
     task=$(basename "$f"); task="${task%.status}"
-    endpoint= ident=
+    endpoint="" ident=""
     while IFS=$(printf '\t') read -r row endpoint ident extra; do
       [ "$row" = "$task" ] || continue
       [ -z "$extra" ] || { endpoint=; ident=; }
@@ -600,7 +600,7 @@ mark_escalated_seen() {  # <kind> <arg> <state> [<presentation-snapshot>]
         [ -e "$f" ] || continue
         case "$f" in *.status) ;; *) continue ;; esac
         task=$(basename "$f"); task="${task%.status}"
-        endpoint= ident=
+        endpoint="" ident=""
         while IFS=$(printf '\t') read -r row endpoint ident extra; do
           [ "$row" = "$task" ] || continue
           [ -z "$extra" ] || { endpoint=; ident=; }
@@ -1147,7 +1147,7 @@ housekeeping() {  # <state>
     for f in "$state"/*.status; do
       [ -e "$f" ] || [ -L "$f" ] || continue
       task=$(basename "$f"); task=${task%.status}
-      endpoint= ident=
+      endpoint="" ident=""
       while IFS="$(printf '\t')" read -r row endpoint ident extra; do
         [ "$row" = "$task" ] || continue
         [ -z "$extra" ] || { endpoint=; ident=; }
