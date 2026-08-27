@@ -909,6 +909,26 @@ test_open_generation_claim_defers_without_any_lock() {
 # The 2026-08-26 watcher flap in the generation model: a live, identity-matched
 # owner whose ledger entry and watcher beacon are both older than grace is
 # stuck, and the next firing supersedes it by taking the next generation.
+test_identityless_generation_ledger_does_not_defer() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/v2-identityless-claim")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_v2_claim "$dir" 464 "$pid" arming
+  : > "$dir/state/.last-watcher-beat"
+  assert_absent "$dir/state/.claude-autoarm.lock" "this case must start without a legacy owner lock"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "an identityless generation ledger must not defer the hook"
+  assert_contains "$out" "firstmate watcher wake" "the hook did not supersede the identityless ledger"
+  [ "$(epoch_field "$dir" epoch)" -gt 464 ] || fail "the identityless ledger was treated as an open claim"
+  [ "$(epoch_field "$dir" owner_pid)" != "$pid" ] || fail "the identityless ledger retained its unrelated live pid"
+  pass "auto-arm: an identityless generation ledger cannot defer recovery"
+}
+
 test_stuck_generation_claim_is_superseded_and_rearms() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/v2-stuck-claim")
@@ -1151,6 +1171,7 @@ test_pid_reused_claim_with_no_ledger_is_reclaimed_and_rearms
 test_identity_matched_arming_claim_is_never_reclaimed
 test_terminal_check_claim_is_never_reclaimed
 test_open_generation_claim_defers_without_any_lock
+test_identityless_generation_ledger_does_not_defer
 test_stuck_generation_claim_is_superseded_and_rearms
 test_superseded_owner_goes_silent_and_never_double_translates
 test_superseded_owner_preserves_new_failure_episode

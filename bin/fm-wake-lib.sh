@@ -992,11 +992,11 @@ fm_failure_episode_reset() {
 #     "epoch=N owner_pid=P outcome=O updated_at=T" record, and line 2 is the
 #     claiming process's pid-identity, the same identity every other supervision
 #     lock in this repo records (fm_pid_identity above). New claims fail closed
-#     when that identity cannot be recorded; a missing identity line is accepted
-#     only for a legacy ledger written during an upgrade window.
+#     when that identity cannot be recorded; only the role-bearing legacy lock
+#     shim accepts a one-line ledger during an upgrade window.
 #   - A claim is OPEN (fm_autoarm_claim_open) while its outcome is "arming",
-#     its owner pid is alive, its recorded identity (when present) can be
-#     recomputed and matches that pid, and it is not STUCK - stuck meaning both the ledger
+#     its owner pid is alive, its recorded identity can be recomputed and matches
+#     that pid, and it is not STUCK - stuck meaning both the ledger
 #     entry and the watcher beacon (state/.last-watcher-beat) are older than
 #     the guard grace, which proves the owner hung mid-arm with nothing
 #     supervising (every legitimate arming phase with no watcher is bounded in
@@ -1089,7 +1089,7 @@ fm_autoarm_ledger_read() {  # <state-dir>
 
 # True while the CURRENT ledger claim is open and healthy - the defer predicate
 # both Stop participants use. Open means: outcome "arming", a live owner whose
-# recorded identity (when present) still matches its pid, and not stuck (the
+# mandatory recorded identity still matches its pid, and not stuck (the
 # contract comment above owns the stuck proof: ledger entry AND watcher beacon
 # both older than grace). fm_path_age reports an absent beacon as ancient,
 # which is exactly right: arming for a full grace window without producing a
@@ -1103,10 +1103,9 @@ fm_autoarm_claim_open() {  # <state-dir> [grace]
   fm_autoarm_ledger_read "$state" || return 1
   [ "$FM_AUTOARM_OUTCOME" = arming ] || return 1
   fm_pid_alive "$FM_AUTOARM_OWNER" || return 1
-  if [ -n "$FM_AUTOARM_IDENTITY" ]; then
-    current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) || return 1
-    [ -n "$current" ] && [ "$current" = "$FM_AUTOARM_IDENTITY" ] || return 1
-  fi
+  [ -n "$FM_AUTOARM_IDENTITY" ] || return 1
+  current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) || return 1
+  [ -n "$current" ] && [ "$current" = "$FM_AUTOARM_IDENTITY" ] || return 1
   if [ "$(fm_path_age "$epoch")" -ge "$grace" ] \
     && [ "$(fm_path_age "$state/.last-watcher-beat")" -ge "$grace" ]; then
     return 1

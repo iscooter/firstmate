@@ -1382,6 +1382,26 @@ test_hook_claude_mode_blocks_on_stuck_arming_claim() {
 # The generation model's ownership proof: a live open ledger claim (two-line
 # entry, identity-matched owner, watcher still beating) owns recovery with no
 # lock held at all.
+test_hook_claude_mode_blocks_on_identityless_generation_ledger() {
+  local dir out status pid
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-identityless-generation")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
+  sleep 60 &
+  pid=$!
+  printf 'epoch=464 owner_pid=%s outcome=arming updated_at=%s\n' "$pid" "$(date +%s)" \
+    > "$dir/state/.claude-autoarm-epoch"
+  : > "$dir/state/.last-watcher-beat"
+  [ ! -e "$dir/state/.claude-autoarm.lock" ] || fail "this case must start without a legacy owner lock"
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=200 run_hook_claude "$dir" true); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "an identityless generation ledger must not count as recovery"
+  assert_contains "$out" "TURN WOULD END BLIND" "identityless generation ledger allowed a blind stop"
+  assert_contains "$out" "2 task(s) in flight" "identityless generation block lost the supervision reason"
+  pass "fm-turnend-guard --claude: an identityless generation ledger cannot own recovery"
+}
+
 test_hook_claude_mode_allows_on_open_generation_claim() {
   local dir out status pid identity
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-open-generation")
@@ -1809,6 +1829,7 @@ test_hook_claude_mode_allows_on_fresh_rewake_epoch
 test_hook_claude_mode_blocks_on_abandoned_autoarm_claim
 test_hook_claude_mode_blocks_on_pid_reused_arming_claim
 test_hook_claude_mode_blocks_on_stuck_arming_claim
+test_hook_claude_mode_blocks_on_identityless_generation_ledger
 test_hook_claude_mode_allows_on_open_generation_claim
 test_hook_claude_mode_blocks_on_stuck_generation_claim
 test_hook_claude_mode_terminal_fail_open_clears_abandoned_claim
