@@ -2758,9 +2758,11 @@ test_actionable_event_behind_routine_append_surfaces() {
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "the hidden actionable event was not queued"
   queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
-  printf 'resolved: [key=k1] selected the auth approach\n' >> "$status_file"
-  printf 'needs-decision: [key=k1] pick an auth approach\n' >> "$status_file"
-  printf 'working: still drafting the options\n' >> "$status_file"
+  {
+    printf 'resolved: [key=k1] selected the auth approach\n'
+    printf 'needs-decision: [key=k1] pick an auth approach\n'
+    printf 'working: still drafting the options\n'
+  } >> "$status_file"
   export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
   watch_bg "$state" "$fakebin" "$replay_out"
   replay_pid=$!
