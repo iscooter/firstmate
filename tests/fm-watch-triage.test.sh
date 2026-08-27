@@ -2972,6 +2972,35 @@ test_closing_latest_event_does_not_replay_older_event() {
   pass "closing the latest decision preserves the surfaced boundary"
 }
 
+test_captain_regex_change_keeps_occurrence_monotonic() {
+  local dir state fakebin first_out second_out drain_out status_file pid
+  dir=$(make_case captain-regex-change); state="$dir/state"; fakebin="$dir/fakebin"
+  first_out="$dir/first.out"; second_out="$dir/second.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  { printf 'alert: first custom event\n'
+    printf 'alert: second custom event\n'
+    printf 'done: older release\n'; } > "$status_file"
+  export FM_CAPTAIN_RE='alert:|done:'
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$first_out"
+  pid=$!
+  wait_for_exit "$pid" 100 \
+    || { unset FM_CAPTAIN_RE FM_FAKE_CREW_STATE; fail "watcher missed the initial custom-regex event"; }
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || { unset FM_CAPTAIN_RE FM_FAKE_CREW_STATE; fail "drain after the custom-regex event failed"; }
+  export FM_CAPTAIN_RE='done:'
+  { printf 'done: newly appended release\n'
+    printf 'working: cleanup\n'; } >> "$status_file"
+  watch_bg "$state" "$fakebin" "$second_out"
+  pid=$!
+  wait_for_exit "$pid" 100 \
+    || { unset FM_CAPTAIN_RE FM_FAKE_CREW_STATE; fail "a regex change hid the newly appended actionable event"; }
+  unset FM_CAPTAIN_RE FM_FAKE_CREW_STATE
+  grep -F "signal: $status_file" "$second_out" >/dev/null \
+    || fail "the newly appended event did not surface after the regex change"
+  pass "captain regex changes cannot regress actionable occurrence identity"
+}
+
 # --- beacon stays fresh while absorbing -------------------------------------
 
 test_beacon_stays_fresh_while_absorbing() {
@@ -3129,6 +3158,7 @@ test_captain_relevant_batch_reader_is_not_last_line
 test_closed_keyed_decision_does_not_surface
 test_closed_keyed_decision_absorbed_end_to_end
 test_closing_latest_event_does_not_replay_older_event
+test_captain_regex_change_keeps_occurrence_monotonic
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

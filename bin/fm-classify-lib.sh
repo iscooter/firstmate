@@ -121,9 +121,9 @@ last_captain_relevant_status_record() {  # <status-file>
     folded=1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
+    count=$((count + 1))
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     status_is_captain_relevant "$line" || continue
-    count=$((count + 1))
     if [ -n "$folded" ]; then
       verb=$(status_line_verb "$line")
       case "$verb" in
