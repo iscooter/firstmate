@@ -1100,6 +1100,45 @@ SH
   pass "auto-arm: refused terminal writes discard already-collected hook output"
 }
 
+test_successful_terminal_write_commits_translation() {
+  local dir out status failure_dir failure_out failure_status
+  dir=$(make_primary_dir "$TMP_ROOT/v2-committed-rewake")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  cat >> "$dir/bin/fm-wake-lib.sh" <<'SH'
+fm_autoarm_still_owner() {
+  local calls="$1/.still-owner-calls" count
+  count=$(cat "$calls" 2>/dev/null || echo 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$calls"
+  [ "$count" -eq 1 ]
+}
+SH
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a successful rewake terminal write must commit the translation"
+  assert_contains "$out" "firstmate watcher wake" "the committed rewake lost its banner"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the committed rewake lost its terminal outcome"
+
+  failure_dir=$(make_primary_dir "$TMP_ROOT/v2-committed-failure")
+  : > "$failure_dir/state/task1.meta"
+  write_arm_fixture "$failure_dir" failed
+  cat >> "$failure_dir/bin/fm-wake-lib.sh" <<'SH'
+fm_autoarm_still_owner() {
+  local calls="$1/.still-owner-calls" count
+  count=$(cat "$calls" 2>/dev/null || echo 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$calls"
+  [ "$count" -eq 1 ]
+}
+SH
+  failure_out=$(run_autoarm "$failure_dir" 2>/dev/null); failure_status=$?
+  expect_code 2 "$failure_status" "a successful failure terminal write must commit the notice translation"
+  assert_contains "$failure_out" "watcher auto-arm FAILED" "the committed failure lost its notice banner"
+  assert_present "$failure_dir/state/.claude-autoarm-failure-notified" "the committed failure lost its notice marker"
+  [ "$(epoch_outcome "$failure_dir")" = failed ] || fail "the committed failure lost its terminal outcome"
+  pass "auto-arm: successful terminal writes irrevocably commit their translations"
+}
+
 test_need_vanished_mid_cycle_closes_quietly() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/vanished")
@@ -1177,6 +1216,7 @@ test_superseded_owner_goes_silent_and_never_double_translates
 test_superseded_owner_preserves_new_failure_episode
 test_superseded_failed_owner_cannot_create_notice
 test_refused_terminal_writes_discard_collected_output
+test_successful_terminal_write_commits_translation
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
 test_active_in_marked_secondmate_home

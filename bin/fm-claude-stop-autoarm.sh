@@ -249,15 +249,16 @@ if [ "$HEALTHY" -eq 1 ]; then
       exit 0
       ;;
   esac
-  # A bare exit 2 is still an emission (it forces a continuation turn), so a
-  # superseded owner goes silent here too.
+  if [ -e "$FAILURE_ALARM" ]; then
+    autoarm_finalize failed-suppressed || true
+    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    exit 0
+  fi
   if ! autoarm_finalize failed-suppressed; then
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 0
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-  [ -e "$FAILURE_ALARM" ] && exit 0
-  fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
   exit 2
 fi
 
@@ -280,7 +281,6 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     exit 0
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-  fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
   exit 2
 fi
 
@@ -307,7 +307,6 @@ case "$NOTICE_RC" in
       exit 0
     fi
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-    fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
     exit 2
     ;;
   1|2)
@@ -322,5 +321,4 @@ if ! autoarm_finalize failed-suppressed; then
   exit 0
 fi
 [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-fm_autoarm_still_owner "$STATE" "$MY_GEN" || exit 0
 exit 2
