@@ -949,7 +949,7 @@ mark_all_captain_relevant_surfaced() {
   while IFS=$(printf '\t') read -r f task last; do
     [ -n "$f" ] || continue
     printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
-  done < <(scan_captain_relevant_statuses "$STATE")
+  done < <(scan_captain_relevant_statuses "$STATE" full-batch)
 }
 
 # Cheap heartbeat fleet-scan (the always-on twin of the daemon's catch-all). 0 if
@@ -967,7 +967,7 @@ heartbeat_scan_finds_actionable() {
     surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
     [ "$surfaced" = "$last" ] && continue
     return 0
-  done < <(scan_captain_relevant_statuses "$STATE")
+  done < <(scan_captain_relevant_statuses "$STATE" full-batch)
   return 1
 }
 

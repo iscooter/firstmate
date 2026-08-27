@@ -120,6 +120,12 @@ last_captain_relevant_status_line() {  # <status-file>
   printf '%s\n' "$relevant"
 }
 
+_hb_surfaced_path() {  # <task> [state]
+  local task=$1 state=${2:-${STATE:-}}
+  [ -n "$state" ] || return 1
+  printf '%s/.hb-surfaced-%s' "$state" "$(printf '%s' "$task" | tr ':/.' '___')"
+}
+
 # 0 if the given (last) status line's leading verb is a real terminal captain verb
 # (done, needs-decision, blocked, failed). Free-text tokens alone never count here;
 # callers that need legacy free-text matching use status_is_captain_relevant.
@@ -1264,20 +1270,23 @@ window_to_task() {
   t="${w##*:}"; t="${t#fm-}"; printf '%s' "$t"
 }
 
-# 0 (actionable) if ANY status file listed in a "signal:" wake carries a
-# captain-relevant last line; 1 otherwise. Pass the space-separated file list that
-# follows the "signal:" prefix. Non-.status arguments (e.g. .turn-ended markers,
-# which never carry a verb) are skipped. A 1 here is NOT "benign" on its own: a
-# no-verb signal (a bare turn-end, a working: note) is only benign when the crew is
-# also provably working (signal_crew_provably_working below); otherwise it surfaces.
+# 0 (actionable) if ANY status file listed in a "signal:" wake carries an
+# unsurfaced captain-relevant event; 1 otherwise. Pass the space-separated file
+# list that follows the "signal:" prefix. Non-.status arguments (e.g. .turn-ended
+# markers, which never carry a verb) are skipped. A 1 here is NOT "benign" on its
+# own: a no-verb signal (a bare turn-end, a working: note) is only benign when the
+# crew is also provably working (signal_crew_provably_working below); otherwise it
+# surfaces.
 signal_reason_is_actionable() {  # <file> ...
-  local f
+  local f relevant surfaced task
   for f in "$@"; do
     [ -e "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
-    # The whole unread batch decides, not its newest line: an actionable event
-    # behind a later routine append is still this wake's actionable event.
-    [ -n "$(last_captain_relevant_status_line "$f")" ] && return 0
+    relevant=$(last_captain_relevant_status_line "$f")
+    [ -n "$relevant" ] || continue
+    task=$(basename "$f"); task=${task%.status}
+    surfaced=$(cat "$(_hb_surfaced_path "$task" "$(dirname "$f")")" 2>/dev/null || true)
+    [ "$surfaced" = "$relevant" ] || return 0
   done
   return 1
 }
@@ -1467,19 +1476,22 @@ stale_is_terminal() {  # <window> <state>
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
 
-# Print "<file>\t<task>\t<last-line>" for every state/*.status whose last line is
-# captain-relevant. This is the cheap fleet-scan both supervisors run as a
-# catch-all backstop for a captain-relevant status the per-wake path might miss.
+# Print "<file>\t<task>\t<last-line>" for every state/*.status whose selected line
+# is captain-relevant. The default selects the current last line for away-mode
+# compatibility; full-batch selects the latest captain-relevant event for the
+# main-session watcher's catch-all recovery paths.
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
-# daemon against .subsuper-seen-status-*, the watcher against .seen-* signatures).
-scan_captain_relevant_statuses() {  # <state>
-  local state=$1 f relevant task
+# daemon against .subsuper-seen-status-*, the watcher against surfaced markers).
+scan_captain_relevant_statuses() {  # <state> [full-batch]
+  local state=$1 mode=${2:-current} f relevant task
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    # The backstop reads the same "what must firstmate be shown" question as the
-    # per-wake path, so an event hidden behind a routine append cannot slip past
-    # both and leave the fleet with no supervisor turn.
-    relevant=$(last_captain_relevant_status_line "$f")
+    if [ "$mode" = full-batch ]; then
+      relevant=$(last_captain_relevant_status_line "$f")
+    else
+      relevant=$(last_status_line "$f")
+      status_is_captain_relevant "$relevant" || continue
+    fi
     [ -n "$relevant" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"

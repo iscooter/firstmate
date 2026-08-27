@@ -201,16 +201,20 @@ test_stale_is_terminal_classifier() {
 }
 
 test_scan_captain_relevant_statuses_classifier() {
-  local dir state out
+  local dir state out batch_out
   dir=$(make_case classify-scan); state="$dir/state"
   printf 'working: a\n' > "$state/one.status"
   printf 'blocked: no perms\n' > "$state/two.status"
   printf 'done: PR https://x/y/pull/1\n' > "$state/three.status"
+  printf 'done: release complete\nworking: cleanup\n' > "$state/four.status"
   out=$(scan_captain_relevant_statuses "$state")
+  batch_out=$(scan_captain_relevant_statuses "$state" full-batch)
   printf '%s' "$out" | grep -F "two.status" >/dev/null || fail "scan missed a blocked: status"
   printf '%s' "$out" | grep -F "three.status" >/dev/null || fail "scan missed a done: status"
   printf '%s' "$out" | grep -F "one.status" >/dev/null && fail "scan surfaced a benign working: status"
-  pass "scan_captain_relevant_statuses lists only captain-relevant statuses"
+  printf '%s' "$out" | grep -F "four.status" >/dev/null && fail "the default scan stopped using current last-line semantics"
+  printf '%s' "$batch_out" | grep -F "four.status" >/dev/null || fail "the full-batch scan missed an actionable event behind routine work"
+  pass "scan_captain_relevant_statuses preserves its default and opts into full batches"
 }
 
 test_classifier_primitives() {
@@ -2710,6 +2714,7 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   # .hb-surfaced-* marker). This stands in for a per-wake-path miss; the heartbeat
   # fleet-scan backstop must catch it and wake firstmate.
   printf 'done: PR https://example.test/pr/5\n' > "$state/miss.status"
+  printf 'working: preparing the next change\n' >> "$state/miss.status"
   sig=$(seen_sig "$state/miss.status"); printf '%s' "$sig" > "$state/.seen-miss_status"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
@@ -2760,7 +2765,7 @@ test_actionable_event_behind_routine_append_surfaces() {
 # for, so it must SURFACE and wake the main session - not merely be deduplicated
 # - including when a routine line is appended after it.
 test_release_install_completion_surfaces_and_wakes() {
-  local dir state fakebin out drain_out replay_out status_file pid replay_pid i
+  local dir state fakebin out drain_out replay_out status_file pid replay_pid queue_lines replay_queue_lines
   dir=$(make_case release-install-done); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; replay_out="$dir/replay.out"
   status_file="$state/t-backpass.status"
@@ -2780,24 +2785,21 @@ test_release_install_completion_surfaces_and_wakes() {
   [ "$(cat "$state/.hb-surfaced-t-backpass" 2>/dev/null || true)" = \
     "done: Backpass 0.1.7 release plus local installation completed successfully" ] \
     || fail "the hidden completion was not recorded as surfaced"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$replay_out" &
+  queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  printf 'working: cleanup continued\n' >> "$status_file"
+  export FM_FAKE_CREW_STATE='state: working · source: pane · actively working'
+  watch_bg "$state" "$fakebin" "$replay_out"
   replay_pid=$!
-  i=0
-  while [ "$i" -lt 200 ]; do
-    [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] && break
-    kill -0 "$replay_pid" 2>/dev/null || break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  kill -0 "$replay_pid" 2>/dev/null \
-    || fail "the next heartbeat repeated the already surfaced hidden completion: $(cat "$replay_out")"
-  [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] \
-    || { reap "$replay_pid"; fail "the follow-up heartbeat did not run"; }
+  wait_poll_cycle "$state" "$replay_pid" \
+    || { unset FM_FAKE_CREW_STATE; fail "later routine work repeated the already surfaced completion: $(cat "$replay_out")"; }
+  unset FM_FAKE_CREW_STATE
   [ ! -s "$replay_out" ] \
-    || { reap "$replay_pid"; fail "the follow-up heartbeat surfaced a duplicate wake: $(cat "$replay_out")"; }
+    || { reap "$replay_pid"; fail "later routine work surfaced a duplicate wake: $(cat "$replay_out")"; }
+  replay_queue_lines=$(wc -l < "$state/.wake-queue" | tr -d ' ')
+  [ "$replay_queue_lines" = "$queue_lines" ] \
+    || { reap "$replay_pid"; fail "later routine work queued the historical completion again"; }
   reap "$replay_pid"
-  pass "a terminal release/install completion surfaces once and wakes the main session"
+  pass "a terminal release/install completion surfaces once and later routine work stays quiet"
 }
 
 # The classifier-level statement of the same two facts, as pure functions: the

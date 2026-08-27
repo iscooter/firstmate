@@ -108,10 +108,6 @@ wake() {
   exit 0
 }
 
-_hb_surfaced_path() {
-  printf '%s/.hb-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"
-}
-
 # Record a captain-relevant status after its durable wake has been enqueued.
 mark_surfaced() {  # <status-file>
   local f=$1 task relevant
