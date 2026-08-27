@@ -787,7 +787,7 @@ test_signal_escalate_marks_seen_no_catchall_refire() {
   FM_STATE_OVERRIDE="$state" handle_wake "signal: $state/sig-t8.status" "$state"
   [ -s "$state/.subsuper-escalations" ] || fail "captain signal was not escalated"
   key=$(printf '%s' "sig-t8" | tr ':/.' '___')
-  [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "done: PR https://x/y/pull/8" ] \
+  [ "$(tail -1 "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "done: PR https://x/y/pull/8" ] \
     || fail "captain signal escalate did not write the seen-status marker"
   : > "$state/.subsuper-escalations"
   rm -f "$state/.subsuper-last-scan"
@@ -1057,7 +1057,7 @@ test_classify_signal_dedup_against_scan() {
   printf 'done: PR https://x/y/pull/9\n' > "$state/dup-s9.status"
   # Simulate the catch-all scan having already escalated this status.
   key=$(printf '%s' "dup-s9" | tr ':/.' '___')
-  printf 'done: PR https://x/y/pull/9' > "$state/.subsuper-seen-status-$key"
+  mark_escalated_seen signal "$state/dup-s9.status" "$state"
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/dup-s9.status" "$state")
   case "$out" in self\|*) ;; *) fail "signal not deduped against scan: $out" ;; esac
   # Without the seen marker, it should escalate.
@@ -1080,11 +1080,18 @@ test_classify_signal_reads_the_whole_batch_not_the_last_line() {
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/buried-s1.status" "$state")
   case "$out" in escalate\|*) ;; *) fail "a decision behind a later routine append self-handled: $out" ;; esac
   case "$out" in *"$decision"*) ;; *) fail "the escalated digest did not carry the decision line: $out" ;; esac
-  # And the escalation records THAT line, so the catch-all scan does not repeat it.
+  # And the escalation records that byte position, so the catch-all scan does not repeat it.
   mark_escalated_seen signal "$state/buried-s1.status" "$state"
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/buried-s1.status" "$state")
   case "$out" in self\|*) ;; *) fail "an already-escalated buried decision escalated twice: $out" ;; esac
-  pass "classify_signal escalates a captain decision a later routine append hid"
+
+  # Content equality cannot hide an earlier new event in a later unread span.
+  printf 'needs-decision [key=other]: choose the release target\n%s\nworking: routine tail\n' "$decision" \
+    >> "$state/buried-s1.status"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/buried-s1.status" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a new decision before repeated seen content was dropped: $out" ;; esac
+  case "$out" in *"choose the release target"*) ;; *) fail "the earlier unseen decision was absent from the digest: $out" ;; esac
+  pass "classify_signal escalates every unseen event despite repeated seen content"
 }
 
 test_classify_stale_dedup_against_signal() {

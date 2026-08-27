@@ -1103,13 +1103,17 @@ status_open_decisions_cursor_offset() {  # <status-file>
 # changed status identity reads the current file from offset 0; malformed or
 # unreadable cursor state fails the scan. Symlinks and unreadable status files
 # print nothing.
-status_new_lines_since_cursor() {  # <status-file> [<captured-end-offset>]
-  local f=$1 captured_end=${2:-} cf offset size actual_size chunk_file line rc=0
+status_new_lines_since_cursor() {  # <status-file> [<captured-end-offset>] [<handled-offset>]
+  local f=$1 captured_end=${2:-} handled_offset=${3:-} cf offset size actual_size chunk_file line rc=0
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
   cf=$(_fm_open_decisions_cursor_path "$f")
   chunk_file="$cf.unread.$$"
   offset=$(status_presentation_cursor_offset "$f") || return 1
   case "$offset" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "$handled_offset" ]; then
+    case "$handled_offset" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$handled_offset" -le "$offset" ] || offset=$handled_offset
+  fi
   actual_size=$(_fm_status_file_size "$f") || return 1
   actual_size=${actual_size//[[:space:]]/}
   case "$actual_size" in ''|*[!0-9]*) return 1 ;; esac
