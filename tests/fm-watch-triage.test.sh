@@ -2723,6 +2723,91 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   pass "heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed"
 }
 
+# --- actionable event hidden behind a later routine append -------------------
+
+# The reported stall: one wake covers every byte appended since the last one, so
+# a crew that raises a decision / reports review-ready PRs / hits a blocker and
+# then appends any routine line puts the actionable event BEHIND the newest one.
+# Judging the file by its last line classified the whole batch routine, and a
+# provably-working crew made the watcher absorb it: no queue entry, no exit, no
+# supervisor turn at all. The whole unread batch must decide.
+test_actionable_event_behind_routine_append_surfaces() {
+  local dir state fakebin out drain_out status_file pid
+  dir=$(make_case hidden-actionable); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/t-hidden.status"
+  # The actionable event, then a routine append landing behind it.
+  printf 'needs-decision: [key=k1] pick an auth approach\n' > "$status_file"
+  printf 'working: still drafting the options\n' >> "$status_file"
+  # Provably working: this is exactly the state that used to absorb the wake.
+  export FM_FAKE_CREW_STATE='state: busy · source: pane · actively working'
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher absorbed a decision hidden behind a later routine append"; }
+  unset FM_FAKE_CREW_STATE
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "watcher did not report the hidden actionable event as a signal"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after the hidden actionable event failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
+    || fail "the hidden actionable event was not queued"
+  pass "a captain decision hidden behind a later routine append still surfaces"
+}
+
+# The captain's reported case: "Backpass 0.1.7 release plus local installation
+# completed successfully" was classified ROUTINE and never surfaced. A terminal
+# captain-requested release/install COMPLETION is an outcome the captain asked
+# for, so it must SURFACE and wake the main session - not merely be deduplicated
+# - including when a routine line is appended after it.
+test_release_install_completion_surfaces_and_wakes() {
+  local dir state fakebin out drain_out status_file pid
+  dir=$(make_case release-install-done); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/t-backpass.status"
+  printf 'done: Backpass 0.1.7 release plus local installation completed successfully\n' > "$status_file"
+  printf 'working: tidying the release notes\n' >> "$status_file"
+  export FM_FAKE_CREW_STATE='state: busy · source: pane · actively working'
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || { unset FM_FAKE_CREW_STATE; fail "watcher did not wake on a terminal release/install completion"; }
+  unset FM_FAKE_CREW_STATE
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "the release/install completion was not reported as a signal"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after the release/install completion failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
+    || fail "the release/install completion was not queued for the main session"
+  pass "a terminal release/install completion surfaces and wakes the main session"
+}
+
+# The classifier-level statement of the same two facts, as pure functions: the
+# batch question ("what must firstmate be shown") is not the last-line question
+# ("what is this crew's current declaration").
+test_captain_relevant_batch_reader_is_not_last_line() {
+  local dir state f
+  dir=$(make_case batch-reader); state="$dir/state"
+  f="$state/t-batch.status"
+  printf 'done: Backpass 0.1.7 release plus local installation completed successfully\n' > "$f"
+  printf 'working: tidying the release notes\n' >> "$f"
+  [ "$(last_status_line "$f")" = "working: tidying the release notes" ] \
+    || fail "last_status_line no longer reports the crew's current declaration"
+  [ "$(last_captain_relevant_status_line "$f")" = \
+    "done: Backpass 0.1.7 release plus local installation completed successfully" ] \
+    || fail "the release/install completion was not read as the captain-relevant event"
+  signal_reason_is_actionable "$f" \
+    || fail "a batch whose actionable event is behind a routine append read as routine"
+  # A file with only routine lines stays routine - the fix must not make
+  # everything actionable.
+  printf 'working: a\nworking: b\n' > "$state/t-routine.status"
+  [ -z "$(last_captain_relevant_status_line "$state/t-routine.status")" ] \
+    || fail "a routine-only status reported a captain-relevant event"
+  signal_reason_is_actionable "$state/t-routine.status" \
+    && fail "a routine-only status classified as actionable"
+  pass "the captain-relevant batch reader surfaces hidden events without over-surfacing"
+}
+
 # --- beacon stays fresh while absorbing -------------------------------------
 
 test_beacon_stays_fresh_while_absorbing() {
@@ -2874,6 +2959,9 @@ test_procevent_surface_crash_boundaries
 test_procevent_marker_failure_exits_and_replays
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
+test_actionable_event_behind_routine_append_surfaces
+test_release_install_completion_surfaces_and_wakes
+test_captain_relevant_batch_reader_is_not_last_line
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

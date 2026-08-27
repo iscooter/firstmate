@@ -99,6 +99,27 @@ last_status_line() {
   grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
 }
 
+# Print the most recent captain-relevant line in <status-file>, or nothing when
+# it has none. A status stream is an append-only EVENT log, so its newest line is
+# the newest EVENT - never a summary of what firstmate has still not seen. A
+# done:, needs-decision:, blocked:, or failed: event followed by any routine
+# append (working:, resolved:, a declared pause) is still the captain-relevant
+# fact about that file, and one wake covers every byte appended since the last
+# one. last_status_line answers "what is this crew's current declaration"; this
+# answers "what must firstmate be shown". The two differ exactly when a routine
+# append lands behind an actionable one - the batch that classified as routine
+# and stalled the work with no supervisor turn at all.
+last_captain_relevant_status_line() {  # <status-file>
+  local f=$1 line relevant=""
+  [ -e "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    if status_is_captain_relevant "$line"; then relevant=$line; fi
+  done < "$f" 2>/dev/null
+  [ -n "$relevant" ] || return 0
+  printf '%s\n' "$relevant"
+}
+
 # 0 if the given (last) status line's leading verb is a real terminal captain verb
 # (done, needs-decision, blocked, failed). Free-text tokens alone never count here;
 # callers that need legacy free-text matching use status_is_captain_relevant.
@@ -1250,13 +1271,13 @@ window_to_task() {
 # no-verb signal (a bare turn-end, a working: note) is only benign when the crew is
 # also provably working (signal_crew_provably_working below); otherwise it surfaces.
 signal_reason_is_actionable() {  # <file> ...
-  local f last
+  local f
   for f in "$@"; do
     [ -e "$f" ] || continue
     case "$f" in *.status) ;; *) continue ;; esac
-    last=$(last_status_line "$f")
-    [ -n "$last" ] || continue
-    status_is_captain_relevant "$last" && return 0
+    # The whole unread batch decides, not its newest line: an actionable event
+    # behind a later routine append is still this wake's actionable event.
+    [ -n "$(last_captain_relevant_status_line "$f")" ] && return 0
   done
   return 1
 }
@@ -1452,13 +1473,16 @@ stale_is_terminal() {  # <window> <state>
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
 # daemon against .subsuper-seen-status-*, the watcher against .seen-* signatures).
 scan_captain_relevant_statuses() {  # <state>
-  local state=$1 f last task
+  local state=$1 f relevant task
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    last=$(last_status_line "$f")
-    status_is_captain_relevant "$last" || continue
+    # The backstop reads the same "what must firstmate be shown" question as the
+    # per-wake path, so an event hidden behind a routine append cannot slip past
+    # both and leave the fleet with no supervisor turn.
+    relevant=$(last_captain_relevant_status_line "$f")
+    [ -n "$relevant" ] || continue
     task=$(basename "$f"); task="${task%.status}"
-    printf '%s\t%s\t%s\n' "$f" "$task" "$last"
+    printf '%s\t%s\t%s\n' "$f" "$task" "$relevant"
   done
   return 0
 }
