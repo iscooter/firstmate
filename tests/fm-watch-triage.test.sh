@@ -186,6 +186,28 @@ test_signal_reason_is_actionable_classifier() {
   pass "signal_reason_is_actionable: benign absorbed, captain verbs and coalesced batches surfaced"
 }
 
+test_unreadable_status_is_actionable() {
+  local dir state f actionable batch_out
+  dir=$(make_case unreadable-status); state="$dir/state"
+  f="$state/task.status"
+  printf 'needs-decision: [key=k1] choose a database\n' > "$f"
+  chmod 600 "$f"
+  chmod 000 "$f"
+  if signal_reason_is_actionable "$f"; then
+    actionable=1
+  else
+    actionable=0
+  fi
+  batch_out=$(scan_captain_relevant_statuses "$state" full-batch)
+  chmod 600 "$f"
+  [ "$actionable" = 1 ] || fail "an unreadable status was absorbed by signal triage"
+  case "$batch_out" in
+    *"$f"*) ;;
+    *) fail "the heartbeat scan skipped an unreadable status" ;;
+  esac
+  pass "unreadable statuses surface through signal triage and heartbeat recovery"
+}
+
 test_stale_is_terminal_classifier() {
   local dir state
   dir=$(make_case classify-stale); state="$dir/state"
@@ -3134,6 +3156,7 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
 }
 
 test_signal_reason_is_actionable_classifier
+test_unreadable_status_is_actionable
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
 test_classifier_primitives

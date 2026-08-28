@@ -120,9 +120,24 @@ last_status_line() {
 last_captain_relevant_status_record() {  # <status-file>
   local f=$1 line relevant="" count=0 occurrence=0 folded="" closes=""
   local key verb resolve held snapshot tab close_record close_key close_position
-  [ -e "$f" ] || return 0
-  snapshot=$(cat "$f" 2>/dev/null) || return 0
-  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] && folded=1
+  if [ ! -e "$f" ]; then
+    [ -L "$f" ] || return 0
+    printf 'read-error\tfailed: status file could not be read\n'
+    return 0
+  fi
+  if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
+    printf 'read-error\tfailed: status file could not be read\n'
+    return 0
+  fi
+  snapshot=$(cat "$f" 2>/dev/null) || {
+    printf 'read-error\tfailed: status file could not be read\n'
+    return 0
+  }
+  if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
+    printf 'read-error\tfailed: status file could not be read\n'
+    return 0
+  fi
+  folded=1
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   tab=$(printf '\t')
