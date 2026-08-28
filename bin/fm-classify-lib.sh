@@ -104,36 +104,53 @@ last_status_line() {
 # repeated events with identical text, and the final field preserves free-form
 # status bytes for consumers that peel off the fixed prefix without IFS splitting.
 #
-# A keyed decision that the SAME batch also closed is not something firstmate
-# must be shown: raising a supervisor turn for a `needs-decision:` or `blocked:`
-# whose matching `resolved:`/`captain-held:` already landed is exactly the
-# over-surfacing this reader must avoid. status_open_decisions owns what "still
-# open" means, so this consults that fold instead of re-deriving the rule.
-# A file the fold cannot be trusted to read, an unparsable key, or a transition
-# the fold itself would refuse all keep the event, because surfacing a closed
-# decision costs one wasted turn while dropping a live one restores the stall.
+# A keyed decision that a LATER line closed is not something firstmate must be
+# shown: raising a supervisor turn for a `needs-decision:` or `blocked:` whose
+# matching `resolved:`/`captain-held:` already landed is exactly the
+# over-surfacing this reader must avoid. The question is whether THIS event was
+# closed after it, not whether its key is open at end of file - a later reopening
+# the caller's own captain-relevance rule excludes (an `FM_CAPTAIN_RE` home) must
+# not resurrect the stale line it already resolved. A genuinely captain-relevant
+# reopening simply becomes the candidate itself. Key parsing and the legal
+# transitions stay with `_fm_decision_key` and
+# `_fm_decision_key_transition_allowed`, so this never re-derives that grammar.
+# An unparsable key, a transition those owners refuse, and an unreadable status
+# path all keep the event, because surfacing a closed decision costs one wasted
+# turn while dropping a live one restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
-  local f=$1 line relevant="" count=0 occurrence=0 open="" folded="" key verb snapshot
+  local f=$1 line relevant="" relevant_key="" count=0 occurrence=0 folded=""
+  local key verb resolve held snapshot
   [ -e "$f" ] || return 0
   snapshot=$(cat "$f" 2>/dev/null) || return 0
-  if [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ]; then
-    open=$(status_open_decisions "$f" "$snapshot" 2>/dev/null) || open=""
-    folded=1
-  fi
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] && folded=1
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   while IFS= read -r line || [ -n "$line" ]; do
     count=$((count + 1))
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    verb=$(status_line_verb "$line")
+    # A closing record retires the candidate it closes. Closing verbs are never
+    # captain-relevant themselves, so this can never drop a live candidate.
+    if [ -n "$relevant_key" ]; then
+      case "$verb" in
+        "$resolve"|"$held")
+          key=$(_fm_decision_key "$line") || key=""
+          if [ -n "$key" ] && [ "$key" = "$relevant_key" ] \
+            && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
+            relevant=""; relevant_key=""; occurrence=0
+          fi
+          ;;
+      esac
+    fi
     status_is_captain_relevant "$line" || continue
+    relevant_key=""
     if [ -n "$folded" ]; then
-      verb=$(status_line_verb "$line")
       case "$verb" in
         needs-decision|blocked)
           key=$(_fm_decision_key "$line") || key=""
-          if [ -n "$key" ] \
+          [ -n "$key" ] \
             && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
-            && ! _fm_open_set_has "$open" "$key"; then
-            continue
-          fi
+            && relevant_key=$key
           ;;
       esac
     fi

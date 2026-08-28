@@ -2900,6 +2900,36 @@ test_closed_keyed_decision_does_not_surface() {
   pass "closed decisions stay quiet without renumbering later actionable events"
 }
 
+# A home that overrides captain-relevance with FM_CAPTAIN_RE (a documented
+# operator knob) can have a reopening its own rule excludes. That excluded
+# reopening must not resurrect the stale line the batch already resolved: the
+# question is whether THIS event was closed after it, not whether its key is
+# open at end of file.
+test_excluded_reopen_does_not_resurface_closed_event() {
+  local dir state f
+  dir=$(make_case excluded-reopen); state="$dir/state"
+  f="$state/t-reopen.status"
+  { printf 'blocked: [key=k1] urgent thing\n'
+    printf 'resolved: [key=k1] fixed it\n'
+    printf 'needs-decision: [key=k1] pick something\n'; } > "$f"
+  # Only "urgent" is captain-relevant here, so the reopening is excluded by the
+  # home's own rule while the opening line is not.
+  FM_CAPTAIN_RE='urgent' status_is_captain_relevant 'blocked: [key=k1] urgent thing' \
+    || fail "the fixture's opening line is not captain-relevant under the override"
+  FM_CAPTAIN_RE='urgent' status_is_captain_relevant 'needs-decision: [key=k1] pick something' \
+    && fail "the fixture's reopening line is captain-relevant under the override"
+  [ -z "$(FM_CAPTAIN_RE='urgent' last_captain_relevant_status_line "$f")" ] \
+    || fail "an excluded reopening resurrected the already-resolved event"
+  FM_CAPTAIN_RE='urgent' signal_reason_is_actionable "$f" \
+    && fail "an excluded reopening raised a supervisor turn for a resolved decision"
+  # A reopening the home DOES treat as captain-relevant surfaces as itself,
+  # never as the stale line it replaced.
+  [ "$(last_captain_relevant_status_line "$f")" = \
+    "needs-decision: [key=k1] pick something" ] \
+    || fail "a captain-relevant reopening did not surface as itself"
+  pass "an excluded reopening cannot resurface a closed event, while a relevant one surfaces as itself"
+}
+
 # The end-to-end statement of the same fact through the real watcher: a crew that
 # raises and then closes a decision while provably working must be absorbed, with
 # no exit and no queued supervisor turn.
@@ -3157,6 +3187,7 @@ test_release_install_completion_surfaces_and_wakes
 test_captain_relevant_batch_reader_is_not_last_line
 test_closed_keyed_decision_does_not_surface
 test_closed_keyed_decision_absorbed_end_to_end
+test_excluded_reopen_does_not_resurface_closed_event
 test_closing_latest_event_does_not_replay_older_event
 test_captain_regex_change_keeps_occurrence_monotonic
 test_beacon_stays_fresh_while_absorbing
