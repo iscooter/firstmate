@@ -114,30 +114,15 @@ last_status_line() {
 # resolved, while a genuinely captain-relevant reopening becomes live itself.
 # Key parsing and the legal transitions stay with `_fm_decision_key` and
 # `_fm_decision_key_transition_allowed`, so this never re-derives that grammar.
-# An unparsable key, a transition those owners refuse, and an unreadable status
-# path all keep the event, because surfacing a closed decision costs one wasted
-# turn while dropping a live one restores the stall.
+# An unparsable key and a transition those owners refuse keep the event, because
+# surfacing a closed decision costs one wasted turn while dropping a live one
+# restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
   local f=$1 line relevant="" count=0 occurrence=0 folded="" closes=""
   local key verb resolve held snapshot tab close_record close_key close_position
-  if [ ! -e "$f" ]; then
-    [ -L "$f" ] || return 0
-    printf 'read-error\tfailed: status file could not be read\n'
-    return 0
-  fi
-  if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
-    printf 'read-error\tfailed: status file could not be read\n'
-    return 0
-  fi
-  snapshot=$(cat "$f" 2>/dev/null) || {
-    printf 'read-error\tfailed: status file could not be read\n'
-    return 0
-  }
-  if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
-    printf 'read-error\tfailed: status file could not be read\n'
-    return 0
-  fi
-  folded=1
+  [ -e "$f" ] || return 0
+  snapshot=$(cat "$f" 2>/dev/null) || return 0
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] && folded=1
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   tab=$(printf '\t')
