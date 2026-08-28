@@ -107,50 +107,62 @@ last_status_line() {
 # A keyed decision that a LATER line closed is not something firstmate must be
 # shown: raising a supervisor turn for a `needs-decision:` or `blocked:` whose
 # matching `resolved:`/`captain-held:` already landed is exactly the
-# over-surfacing this reader must avoid. The question is whether THIS event was
-# closed after it, not whether its key is open at end of file - a later reopening
-# the caller's own captain-relevance rule excludes (an `FM_CAPTAIN_RE` home) must
-# not resurrect the stale line it already resolved. A genuinely captain-relevant
-# reopening simply becomes the candidate itself. Key parsing and the legal
-# transitions stay with `_fm_decision_key` and
+# over-surfacing this reader must avoid. The reader selects the latest event that
+# is still live, so closing a newer candidate cannot hide an earlier decision
+# that remains open. A later reopening the caller's own captain-relevance rule
+# excludes (an `FM_CAPTAIN_RE` home) must not resurrect the stale line it already
+# resolved, while a genuinely captain-relevant reopening becomes live itself.
+# Key parsing and the legal transitions stay with `_fm_decision_key` and
 # `_fm_decision_key_transition_allowed`, so this never re-derives that grammar.
 # An unparsable key, a transition those owners refuse, and an unreadable status
 # path all keep the event, because surfacing a closed decision costs one wasted
 # turn while dropping a live one restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
-  local f=$1 line relevant="" relevant_key="" count=0 occurrence=0 folded=""
-  local key verb resolve held snapshot
+  local f=$1 line relevant="" count=0 occurrence=0 folded="" closes=""
+  local key verb resolve held snapshot tab close_record close_key close_position
   [ -e "$f" ] || return 0
   snapshot=$(cat "$f" 2>/dev/null) || return 0
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] && folded=1
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  while IFS= read -r line || [ -n "$line" ]; do
-    count=$((count + 1))
-    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
-    verb=$(status_line_verb "$line")
-    # A closing record retires the candidate it closes. Closing verbs are never
-    # captain-relevant themselves, so this can never drop a live candidate.
-    if [ -n "$relevant_key" ]; then
+  tab=$(printf '\t')
+  if [ -n "$folded" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      count=$((count + 1))
+      case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+      verb=$(status_line_verb "$line")
       case "$verb" in
+        needs-decision|blocked) ;;
         "$resolve"|"$held")
           key=$(_fm_decision_key "$line") || key=""
-          if [ -n "$key" ] && [ "$key" = "$relevant_key" ] \
+          if [ -n "$key" ] \
             && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
-            relevant=""; relevant_key=""; occurrence=0
+            closes="${closes}${key}${tab}${count}"$'\n'
           fi
           ;;
       esac
-    fi
+    done <<< "$snapshot"
+  fi
+  count=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    count=$((count + 1))
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     status_is_captain_relevant "$line" || continue
-    relevant_key=""
+    verb=$(status_line_verb "$line")
     if [ -n "$folded" ]; then
       case "$verb" in
         needs-decision|blocked)
           key=$(_fm_decision_key "$line") || key=""
-          [ -n "$key" ] \
-            && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
-            && relevant_key=$key
+          if [ -n "$key" ] \
+            && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
+            close_position=""
+            while IFS= read -r close_record; do
+              close_key=${close_record%%"$tab"*}
+              [ "$close_key" = "$key" ] || continue
+              close_position=${close_record#*"$tab"}
+            done <<< "$closes"
+            [ -n "$close_position" ] && [ "$close_position" -gt "$count" ] && continue
+          fi
           ;;
       esac
     fi

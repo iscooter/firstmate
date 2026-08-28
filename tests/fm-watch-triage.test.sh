@@ -2869,10 +2869,11 @@ test_captain_relevant_batch_reader_is_not_last_line() {
 # the over-surfacing this reader exists to avoid. A decision that is still OPEN
 # behind a later routine append must keep surfacing - that is the original stall.
 test_closed_keyed_decision_does_not_surface() {
-  local dir state closed still_open mixed before after
+  local dir state closed still_open earlier_open mixed before after
   dir=$(make_case closed-decision); state="$dir/state"
   closed="$state/t-closed.status"
   still_open="$state/t-open.status"
+  earlier_open="$state/t-earlier-open.status"
   mixed="$state/t-mixed.status"
   { printf 'needs-decision: [key=k1] pick an auth approach\n'
     printf 'resolved: [key=k1] chose oauth\n'; } > "$closed"
@@ -2889,6 +2890,15 @@ test_closed_keyed_decision_does_not_surface() {
     || fail "an OPEN decision behind a routine append stopped surfacing"
   signal_reason_is_actionable "$still_open" \
     || fail "an OPEN decision behind a routine append classified as routine"
+  { printf 'needs-decision: [key=k1] choose the primary database\n'
+    printf 'needs-decision: [key=k2] choose the cache\n'
+    printf 'resolved: [key=k2] chose redis\n'
+    printf 'working: documenting the options\n'; } > "$earlier_open"
+  [ "$(last_captain_relevant_status_line "$earlier_open")" = \
+    "needs-decision: [key=k1] choose the primary database" ] \
+    || fail "closing the latest decision hid an earlier open decision"
+  signal_reason_is_actionable "$earlier_open" \
+    || fail "an earlier open decision classified as routine after the latest decision closed"
   { printf 'needs-decision: [key=k3] choose a release channel\n'
     printf 'done: release complete\n'; } > "$mixed"
   before=$(last_captain_relevant_status_record "$mixed")
