@@ -118,14 +118,13 @@ last_status_line() {
 # surfacing a closed decision costs one wasted turn while dropping a live one
 # restores the stall.
 last_captain_relevant_status_record() {  # <status-file>
-  local f=$1 line relevant="" count=0 occurrence=0 folded="" closes=""
-  local key verb resolve held snapshot tab close_record close_key close_position
+  local f=$1 line relevant="" count=0 occurrence=0 folded=""
+  local key verb resolve held snapshot close_var close_position
   [ -e "$f" ] || return 0
   snapshot=$(cat "$f" 2>/dev/null) || return 0
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] && folded=1
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  tab=$(printf '\t')
   if [ -n "$folded" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
       count=$((count + 1))
@@ -137,7 +136,12 @@ last_captain_relevant_status_record() {  # <status-file>
           key=$(_fm_decision_key "$line") || key=""
           if [ -n "$key" ] \
             && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
-            closes="${closes}${key}${tab}${count}"$'\n'
+            close_var=${key//_/__}
+            close_var=${close_var//-/_h}
+            close_var=${close_var//./_d}
+            close_var="_fm_lcr_close_$close_var"
+            local "$close_var"
+            printf -v "$close_var" '%s' "$count"
           fi
           ;;
       esac
@@ -155,12 +159,11 @@ last_captain_relevant_status_record() {  # <status-file>
           key=$(_fm_decision_key "$line") || key=""
           if [ -n "$key" ] \
             && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
-            close_position=""
-            while IFS= read -r close_record; do
-              close_key=${close_record%%"$tab"*}
-              [ "$close_key" = "$key" ] || continue
-              close_position=${close_record#*"$tab"}
-            done <<< "$closes"
+            close_var=${key//_/__}
+            close_var=${close_var//-/_h}
+            close_var=${close_var//./_d}
+            close_var="_fm_lcr_close_$close_var"
+            eval "close_position=\${$close_var-}"
             [ -n "$close_position" ] && [ "$close_position" -gt "$count" ] && continue
           fi
           ;;
