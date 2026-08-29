@@ -190,11 +190,12 @@
 # script performs the transition under the task's own meta lock before it reports
 # success. A ship or scout dispatch therefore REFUSES up front, before any
 # endpoint, worktree, or record exists, when the home's backlog has no item for
-# the id or already records it as finished, and a transition that fails after
-# publication removes the record it just wrote rather than leaving a worker the
-# backlog does not own. A relaunch re-reads the row instead of re-running the
-# transition, so an already In-flight item is left untouched. The transition is
-# skipped entirely for --secondmate spawns (persistent agents are not work
+# the id or already records it as finished. A transition that fails after
+# publication removes the record and busy generation it just wrote; if launch
+# delivery already began, the reported failure tells the operator to close the
+# endpoint and local copy before retrying. A relaunch re-reads the row instead of
+# re-running the transition, so an already In-flight item is left untouched. The
+# transition is skipped entirely for --secondmate spawns (persistent agents are not work
 # items), on a config/backlog-backend=manual home, without a compatible
 # tasks-axi, and in a home that keeps no data/backlog.md.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
