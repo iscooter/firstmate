@@ -1225,7 +1225,8 @@ backlog_record_reconcile() {
   done
 
   # A home that owns no records has nothing to pair, so it never pays for a
-  # backlog read.
+  # backlog read. A pending close remains authoritative even when replay failed:
+  # the record sweep below must not start that item while its marker survives.
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     has_record=1

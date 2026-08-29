@@ -36,9 +36,11 @@
 # with it the completion links, so a process killed between the two halves would
 # leave nothing to reconstruct the close from. It writes
 # `state/<id>.backlog-close` first, and removes it once the close lands.
-# fm_backlog_close_marker_replay re-runs exactly that close; `tasks-axi done` on
-# an already-closed task backfills links without moving the close date, so replay
-# is idempotent. Spawn needs no marker: it publishes the meta first, so a crash
+# fm_backlog_close_marker_replay validates the complete marker and pins its data
+# path to this home's configured root before any recovery mutation, then re-runs
+# exactly that close. `tasks-axi done` on an already-closed task backfills links
+# without moving the close date, so replay is idempotent. Spawn needs no marker:
+# it publishes the meta first, so a crash
 # leaves the meta itself as the evidence that the row is owed a start.
 
 # Set by fm_backlog_transition_applies for a return-1 exemption.
@@ -347,8 +349,9 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
   fm_backlog_close_marker_remove "$marker"
 }
 
-# Replay one recorded close. Returns 0 when the row is closed (or the record is
-# no longer actionable), 1 when the close itself failed.
+# Replay one recorded close. Returns 0 when the row is closed or the marker is
+# stale, and 1 when marker validation or recovery fails. Validation completes
+# before any meta or backlog mutation.
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 authorized_data data_resolved
   local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
