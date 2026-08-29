@@ -1310,6 +1310,26 @@ test_failed_close_replay_is_not_started_as_live_work() {
   pass "a retained pending close is never started by reconciliation"
 }
 
+test_recovery_rejects_bare_parent_report_path() {
+  local case_dir id marker out
+  id=atomic-marker-parent-report-b12
+  case_dir=$(make_home marker-parent-report)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  write_task_meta "$case_dir" "$id" scout no-mistakes "spawn_gen=spawn-parent-report"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-parent-report\narg=--report\narg=..\n' \
+    "$id" "$(home_of "$case_dir")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "bare-parent report close marker was consumed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "bare-parent report close removed its task record"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "bare-parent report close changed the backlog row: $out"
+  pass "recovery rejects a bare-parent report path"
+}
+
 test_recovery_rejects_invalid_close_arguments() {
   local case_dir id marker out
   id=atomic-marker-invalid-args-b12
@@ -1574,6 +1594,7 @@ test_recovery_rejects_lexical_data_traversal
 test_recovery_rejects_raw_control_bytes
 test_recovery_rejects_malformed_pr_urls
 test_failed_close_replay_is_not_started_as_live_work
+test_recovery_rejects_bare_parent_report_path
 test_recovery_rejects_invalid_close_arguments
 test_recovery_rejects_a_symlinked_close_marker
 test_recovery_drops_a_close_for_a_newer_meta_incarnation

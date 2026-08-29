@@ -457,7 +457,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
           arg_value=${args[1]}
           [ "${#arg_value}" -le 4096 ] \
             && [ -n "${arg_value// /}" ] \
-            && case "$arg_value" in -*|/*|../*|*/../*|*/..) false ;; *) true ;; esac
+            && case "$arg_value" in .|..|-*|/*|../*|*/../*|*/..) false ;; *) true ;; esac
           ;;
         *) false ;;
       esac || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }
