@@ -646,7 +646,8 @@ test_interrupted_kimi_delivery_does_not_commit() {
   add_item "$case_dir" "$id"
   interrupt_kimi_readiness "$case_dir"
 
-  out=$(FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+  out=$(HOME="$(home_of "$case_dir")" \
+    FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
     run_spawn "$case_dir" "$id" "$case_dir/project" \
       --harness kimi --mode no-mistakes --yolo off) || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted Kimi readiness check reported success"
