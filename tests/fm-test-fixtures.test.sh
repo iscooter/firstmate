@@ -79,6 +79,8 @@ test_spawn_tmux_and_fakebin() {
   [ "$out" = /tmp/wt ] || fail "spawn tmux pane path should be FM_FAKE_PANE_PATH, got '$out'"
   out=$(unset FM_FAKE_PANE_PATH; "$fakebin/tmux" display-message -p '#{pane_current_path}')
   [ -z "$out" ] || fail "spawn tmux pane path should default to empty, got '$out'"
+  out=$(FM_FAKE_DUPLICATE_WINDOW='@dup duplicate' "$fakebin/tmux" list-windows)
+  [ "$out" = '@dup duplicate' ] || fail "spawn tmux duplicate window should round-trip, got '$out'"
   out=$("$fakebin/tmux" display-message -p '#S')
   [ "$out" = firstmate ] || fail "spawn tmux session name should be firstmate, got '$out'"
   FM_FAKE_LAUNCH_LOG="$log" "$fakebin/tmux" send-keys -t @w -l 'codex --yolo'
