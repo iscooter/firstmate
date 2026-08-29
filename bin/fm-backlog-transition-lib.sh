@@ -308,63 +308,25 @@ fm_backlog_close_marker_path() {  # <state-dir> <id>
   printf '%s/%s.backlog-close\n' "$1" "$2"
 }
 
-# Record the exact close a teardown is about to perform. Refuses an argument
-# carrying a newline rather than writing a record that cannot be read back.
-fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
-  local state=$1 id=$2 data spawn_gen=$4 marker tmp arg previous_arg=''
-  if ! data=$(fm_backlog_data_absolute "$3"); then
-    FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $3"
-    return 1
-  fi
-  shift 4
-  marker=$(fm_backlog_close_marker_path "$state" "$id") || return 1
-  tmp="$state/.$id.backlog-close.${BASHPID:-$$}"
-  {
-    printf 'id=%s\n' "$id"
-    printf 'data=%s\n' "$data"
-    printf 'spawn_gen=%s\n' "$spawn_gen"
-    for arg in "$@"; do
-      case "$arg" in
-        *$'\n'*) return 1 ;;
-      esac
-      if [ "$previous_arg" = --note ] && [ "$arg" = "local main" ]; then
-        printf 'arg=local%%20main\n'
-      else
-        printf 'arg=%s\n' "$arg"
-      fi
-      previous_arg=$arg
-    done
-  } > "$tmp" || { rm -f "$tmp"; return 1; }
-  fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-close record" \
-    || { rm -f "$tmp"; return 1; }
-}
-
-fm_backlog_close_marker_remove() {  # <marker-path>
-  fm_backlog_atomic_transition remove "$1" "pending-close record"
-}
-
-fm_backlog_close_marker_clear() {  # <state-dir> <id>
-  local marker
-  marker=$(fm_backlog_close_marker_path "$1" "$2") || return 1
-  fm_backlog_close_marker_remove "$marker"
-}
-
-# Replay one recorded close. Returns 0 when the row is closed or the marker is
-# stale, and 1 when marker validation or recovery fails. Validation completes
-# before any meta or backlog mutation.
-fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
-  local state=$1 marker=$2 authorized_data data_resolved
-  local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
-  local arg_value url_tail url_authority url_path url_host url_port host_rest host_label host_valid
-  local percent_tail percent_valid raw_bytes
-  local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
+fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <expected-id>
+  local marker=$1 authorized_data data_resolved expected_id=$3
+  local id='' data='' marker_spawn_gen='' line raw_bytes arg_value
+  local url_tail url_authority url_path url_host url_port host_rest host_label host_valid
+  local percent_tail percent_valid
+  local id_count=0 data_count=0 spawn_gen_count=0
   local args=()
-  FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
+  FM_BACKLOG_CLOSE_VALIDATED_ID=
+  FM_BACKLOG_CLOSE_VALIDATED_DATA=
+  FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN=
+  FM_BACKLOG_CLOSE_VALIDATED_ARGS=()
   if [ -L "$marker" ]; then
     FM_BACKLOG_TRANSITION_ERROR="unsafe pending-close record $marker"
     return 1
   fi
-  [ -f "$marker" ] || return 0
+  [ -f "$marker" ] || {
+    FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
+    return 1
+  }
   raw_bytes=$(LC_ALL=C od -An -t u1 "$marker" 2>/dev/null) || {
     FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
     return 1
@@ -375,11 +337,6 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     FM_BACKLOG_TRANSITION_ERROR="invalid control byte in pending-close record $marker"
     return 1
   fi
-  marker_name=${marker##*/}
-  case "$marker_name" in
-    *.backlog-close) expected_id=${marker_name%.backlog-close} ;;
-    *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close record name $marker"; return 1 ;;
-  esac
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       id=*) id=${line#id=}; id_count=$((id_count + 1)) ;;
@@ -417,8 +374,8 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
       return 1
       ;;
   esac
-  authorized_data=$(fm_backlog_data_absolute "$3") || {
-    FM_BACKLOG_TRANSITION_ERROR="authorized data directory cannot be resolved: $3"
+  authorized_data=$(fm_backlog_data_absolute "$2") || {
+    FM_BACKLOG_TRANSITION_ERROR="authorized data directory cannot be resolved: $2"
     return 1
   }
   data_resolved=$(fm_backlog_data_absolute "$data") || {
@@ -429,21 +386,15 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     FM_BACKLOG_TRANSITION_ERROR="foreign data directory in pending-close record $marker"
     return 1
   fi
-  data=$data_resolved
   case "${#args[@]}" in
     0) ;;
     2)
       case "${args[0]}" in
-        --note)
-          [ "${args[1]}" = "local%20main" ] && args[1]="local main"
-          ;;
+        --note) [ "${args[1]}" = "local%20main" ] ;;
         --pr)
           arg_value=${args[1]}
           [ "${#arg_value}" -le 2048 ] \
-            && case "$arg_value" in
-              https://*) true ;;
-              *) false ;;
-            esac \
+            && case "$arg_value" in https://*) true ;; *) false ;; esac \
             && case "$arg_value" in
               *[[:space:]]*|*[!A-Za-z0-9:/?\&=._#%+~@-]*) false ;;
               *) true ;;
@@ -468,9 +419,7 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
                   host_valid=1
                   while :; do
                     host_label=${host_rest%%.*}
-                    case "$host_label" in
-                      ''|-*|*-) host_valid=0; break ;;
-                    esac
+                    case "$host_label" in ''|-*|*-) host_valid=0; break ;; esac
                     [ "$host_rest" = "$host_label" ] && break
                     host_rest=${host_rest#*.}
                   done
@@ -499,19 +448,93 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
           arg_value=${args[1]}
           [ "${#arg_value}" -le 4096 ] \
             && [ -n "${arg_value// /}" ] \
-            && case "$arg_value" in
-              -*|/*|../*|*/../*|*/..) false ;;
-              *) true ;;
-            esac
+            && case "$arg_value" in -*|/*|../*|*/../*|*/..) false ;; *) true ;; esac
           ;;
         *) false ;;
       esac || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }
       ;;
     *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1 ;;
   esac
+  FM_BACKLOG_CLOSE_VALIDATED_ID=$id
+  FM_BACKLOG_CLOSE_VALIDATED_DATA=$data_resolved
+  FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN=$marker_spawn_gen
+  FM_BACKLOG_CLOSE_VALIDATED_ARGS=("${args[@]+"${args[@]}"}")
+}
+
+fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen> [flag...]
+  local tmp=$1 id=$2 data spawn_gen=$4 arg previous_arg=''
+  local serialized_args=()
+  data=$(fm_backlog_data_absolute "$3") || {
+    FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $3"
+    return 1
+  }
+  shift 4
+  for arg in "$@"; do
+    if [ "$previous_arg" = --note ] && [ "$arg" = "local main" ]; then
+      serialized_args+=("local%20main")
+    else
+      serialized_args+=("$arg")
+    fi
+    previous_arg=$arg
+  done
+  {
+    printf 'id=%s\n' "$id"
+    printf 'data=%s\n' "$data"
+    printf 'spawn_gen=%s\n' "$spawn_gen"
+    for arg in "${serialized_args[@]+"${serialized_args[@]}"}"; do
+      printf 'arg=%s\n' "$arg"
+    done
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  fm_backlog_close_marker_validate "$tmp" "$data" "$id" \
+    || { rm -f "$tmp"; return 1; }
+}
+
+# Record the exact close a teardown is about to perform.
+fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
+  local state=$1 id=$2 data=$3 spawn_gen=$4 marker tmp
+  shift 4
+  marker=$(fm_backlog_close_marker_path "$state" "$id") || return 1
+  tmp="$state/.$id.backlog-close.${BASHPID:-$$}"
+  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$@" || return 1
+  fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-close record" \
+    || { rm -f "$tmp"; return 1; }
+}
+
+fm_backlog_close_marker_remove() {  # <marker-path>
+  fm_backlog_atomic_transition remove "$1" "pending-close record"
+}
+
+fm_backlog_close_marker_clear() {  # <state-dir> <id>
+  local marker
+  marker=$(fm_backlog_close_marker_path "$1" "$2") || return 1
+  fm_backlog_close_marker_remove "$marker"
+}
+
+# Replay one recorded close. Returns 0 when the row is closed or the marker is
+# stale, and 1 when marker validation or recovery fails. Validation completes
+# before any meta or backlog mutation.
+fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
+  local state=$1 marker=$2 marker_name expected_id
+  local id data marker_spawn_gen meta_spawn_gen row_state
+  local args=()
+  FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
+  [ -e "$marker" ] || [ -L "$marker" ] || return 0
+  marker_name=${marker##*/}
+  case "$marker_name" in
+    *.backlog-close) expected_id=${marker_name%.backlog-close} ;;
+    *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close record name $marker"; return 1 ;;
+  esac
+  fm_backlog_close_marker_validate "$marker" "$3" "$expected_id" || return 1
+  id=$FM_BACKLOG_CLOSE_VALIDATED_ID
+  data=$FM_BACKLOG_CLOSE_VALIDATED_DATA
+  marker_spawn_gen=$FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN
+  args=("${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]+"${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]}"}")
+  if [ "${args[0]-}" = --note ]; then
+    args[1]="local main"
+  fi
   if [ -e "$state/$id.meta" ]; then
     meta_spawn_gen=$(sed -n 's/^spawn_gen=//p' "$state/$id.meta" | head -1)
-    if [ -z "$marker_spawn_gen" ] || [ "$meta_spawn_gen" != "$marker_spawn_gen" ]; then
+    if [ "$meta_spawn_gen" != "$marker_spawn_gen" ]; then
       fm_backlog_close_marker_remove "$marker" || return 1
       FM_BACKLOG_CLOSE_REPLAY_RESULT=stale
       return 0
@@ -530,7 +553,6 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
   fi
   case "$row_state" in
     done\ *|'')
-      # Already closed, or the row is gone entirely: nothing is owed.
       fm_backlog_close_marker_remove "$marker" || return 1
       FM_BACKLOG_CLOSE_REPLAY_RESULT=stale
       return 0

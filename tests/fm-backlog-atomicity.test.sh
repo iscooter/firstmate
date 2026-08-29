@@ -843,6 +843,28 @@ test_space_containing_scout_report_marker_replays() {
   pass "space-containing scout report paths round-trip through recovery"
 }
 
+test_control_character_data_path_is_refused_before_cleanup() {
+  local case_dir id data backlog marker out rc=0
+  id=atomic-control-data-refusal-b7
+  case_dir=$(make_home control-data-refusal)
+  data="$case_dir/crew"$'\t'"data"
+  mv "$(home_of "$case_dir")/data" "$data"
+  backlog="$data/backlog.md"
+  tasks-axi add "$id" "item for $id" --kind ship --file "$backlog" >/dev/null
+  tasks-axi start "$id" --file "$backlog" >/dev/null
+  write_task_meta "$case_dir" "$id" ship local-only "spawn_gen=spawn-control-data"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+
+  out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "control-character data path passed close preflight"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "control-character close preflight removed the task record"
+  assert_absent "$marker" "control-character close preflight published a marker"
+  [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = in_flight ] \
+    || fail "control-character close preflight changed the backlog row: $out"
+  pass "unreplayable data paths are refused before destructive cleanup"
+}
+
 test_completion_preserves_records_when_meta_removal_fails() {
   local case_dir id meta marker out rc=0
   id=atomic-close-meta-remove-failure-b7
@@ -1490,6 +1512,7 @@ test_completion_closes_a_scout_with_its_report
 test_completion_refuses_a_legacy_record_without_an_incarnation
 test_completion_records_a_relative_report_for_relocated_data
 test_space_containing_scout_report_marker_replays
+test_control_character_data_path_is_refused_before_cleanup
 test_completion_preserves_records_when_meta_removal_fails
 test_completion_fails_loudly_and_records_the_close_it_still_owes
 test_completion_fails_when_its_close_marker_cannot_be_removed

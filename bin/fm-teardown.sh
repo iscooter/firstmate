@@ -2706,6 +2706,24 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
+if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
+  backlog_done_args || {
+    echo "error: the pending backlog close for $ID is not replayable; refusing destructive teardown" >&2
+    exit 1
+  }
+  BACKLOG_CLOSE_PREFLIGHT="$STATE/.$ID.backlog-close.preflight.${BASHPID:-$$}"
+  fm_backlog_close_marker_stage "$BACKLOG_CLOSE_PREFLIGHT" "$ID" "$DATA" \
+    "$TEARDOWN_META_SPAWN_GEN" "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
+    || {
+      echo "error: the pending backlog close for $ID is not replayable ($FM_BACKLOG_TRANSITION_ERROR); refusing destructive teardown" >&2
+      exit 1
+    }
+  rm -f "$BACKLOG_CLOSE_PREFLIGHT" || {
+    echo "error: the pending backlog close preflight for $ID could not be removed; refusing destructive teardown" >&2
+    exit 1
+  }
+fi
+
 # Every landed/discard-work refusal above has now passed (or --force skipped
 # them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
 # --force, and before ANY destructive step below - a still-parked run or a
@@ -2888,7 +2906,6 @@ BACKLOG_CLOSED=0
 BACKLOG_SKIP_REASON=
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   BACKLOG_CLOSED=1
-  backlog_done_args
   META_SPAWN_GEN=$TEARDOWN_META_SPAWN_GEN
   fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
     "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
