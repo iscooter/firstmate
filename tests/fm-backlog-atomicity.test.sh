@@ -1104,28 +1104,37 @@ test_recovery_rejects_raw_control_bytes() {
 }
 
 test_recovery_rejects_malformed_pr_urls() {
-  local case_dir first_id second_id first_marker second_marker out
+  local case_dir first_id second_id third_id first_marker second_marker third_marker out
   first_id=atomic-marker-pr-port-b12
   second_id=atomic-marker-pr-percent-b12
+  third_id=atomic-marker-pr-host-label-b12
   case_dir=$(make_home marker-malformed-pr)
   add_item "$case_dir" "$first_id"
   start_item "$case_dir" "$first_id"
   add_item "$case_dir" "$second_id"
   start_item "$case_dir" "$second_id"
+  add_item "$case_dir" "$third_id"
+  start_item "$case_dir" "$third_id"
   first_marker="$(home_of "$case_dir")/state/$first_id.backlog-close"
   second_marker="$(home_of "$case_dir")/state/$second_id.backlog-close"
+  third_marker="$(home_of "$case_dir")/state/$third_id.backlog-close"
   printf 'id=%s\ndata=%s\nspawn_gen=spawn-pr-port\narg=--pr\narg=https://github.com:abc/pull/1\n' \
     "$first_id" "$(home_of "$case_dir")/data" > "$first_marker"
   printf 'id=%s\ndata=%s\nspawn_gen=spawn-pr-percent\narg=--pr\narg=https://github.com/pull/%%ZZ\n' \
     "$second_id" "$(home_of "$case_dir")/data" > "$second_marker"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-pr-host-label\narg=--pr\narg=https://foo.-bar.com/pull/1\n' \
+    "$third_id" "$(home_of "$case_dir")/data" > "$third_marker"
 
   out=$(run_bootstrap "$case_dir")
   assert_present "$first_marker" "PR marker with a nonnumeric port was consumed"
   assert_present "$second_marker" "PR marker with an invalid percent escape was consumed"
+  assert_present "$third_marker" "PR marker with a malformed host label was consumed"
   [ "$(row_state "$case_dir" "$first_id")" = in_flight ] \
     || fail "nonnumeric PR port changed the backlog row: $out"
   [ "$(row_state "$case_dir" "$second_id")" = in_flight ] \
     || fail "invalid PR percent escape changed the backlog row: $out"
+  [ "$(row_state "$case_dir" "$third_id")" = in_flight ] \
+    || fail "malformed PR host label changed the backlog row: $out"
   pass "recovery rejects malformed PR URL values"
 }
 

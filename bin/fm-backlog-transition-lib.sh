@@ -352,7 +352,8 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 authorized_data data_resolved
   local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
-  local arg_value url_tail url_authority url_path url_host url_port percent_tail percent_valid raw_bytes
+  local arg_value url_tail url_authority url_path url_host url_port host_rest host_label host_valid
+  local percent_tail percent_valid raw_bytes
   local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
   local args=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
@@ -459,6 +460,19 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
                   *[A-Za-z0-9]*) true ;;
                   *) false ;;
                 esac \
+                && {
+                  host_rest=$url_host
+                  host_valid=1
+                  while :; do
+                    host_label=${host_rest%%.*}
+                    case "$host_label" in
+                      ''|-*|*-) host_valid=0; break ;;
+                    esac
+                    [ "$host_rest" = "$host_label" ] && break
+                    host_rest=${host_rest#*.}
+                  done
+                  [ "$host_valid" = 1 ]
+                } \
                 && case "$url_authority" in
                   *:*) case "$url_port" in ''|*[!0-9]*|??????*) false ;; *) true ;; esac ;;
                   *) true ;;
