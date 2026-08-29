@@ -360,7 +360,7 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     *.backlog-close) expected_id=${marker_name%.backlog-close} ;;
     *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close record name $marker"; return 1 ;;
   esac
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       id=*) id=${line#id=}; id_count=$((id_count + 1)) ;;
       data=*) data=${line#data=}; data_count=$((data_count + 1)) ;;
@@ -391,8 +391,11 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     /*) ;;
     *) FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"; return 1 ;;
   esac
-  case "/$data/" in
-    */../*) FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"; return 1 ;;
+  case "$data" in
+    */../*|*/..|*[![:print:]]*)
+      FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"
+      return 1
+      ;;
   esac
   authorized_data=$(fm_backlog_data_absolute "$3") || {
     FM_BACKLOG_TRANSITION_ERROR="authorized data directory cannot be resolved: $3"
@@ -412,9 +415,17 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     2)
       case "${args[0]}" in
         --note) [ "${args[1]}" = "local main" ] ;;
-        --pr) case "${args[1]}" in http://*|https://*) true ;; *) false ;; esac ;;
+        --pr)
+          case "${args[1]}" in
+            http://*|https://*) case "${args[1]}" in *[![:print:]]*) false ;; *) true ;; esac ;;
+            *) false ;;
+          esac
+          ;;
         --report)
-          case "/${args[1]}/" in /*/../*|//*|*/-*) false ;; *) [ -n "${args[1]}" ] ;; esac
+          case "${args[1]}" in
+            ''|-*|/*|../*|*/../*|*/..|*[![:print:]]*) false ;;
+            *) true ;;
+          esac
           ;;
         *) false ;;
       esac || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }

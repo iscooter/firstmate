@@ -1040,6 +1040,48 @@ test_recovery_rejects_a_foreign_data_directory() {
   pass "recovery rejects close markers targeting another home's data"
 }
 
+test_recovery_rejects_an_unterminated_unknown_field() {
+  local case_dir id marker out
+  id=atomic-marker-unterminated-field-b12
+  case_dir=$(make_home marker-unterminated-field)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-unterminated-field"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-unterminated-field\narg=--note\narg=local main\nunknown=value' \
+    "$id" "$(home_of "$case_dir")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "marker with an unterminated unknown field was consumed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "unterminated unknown marker field allowed task-record removal"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "unterminated unknown marker field changed the backlog row: $out"
+  pass "recovery validates an unterminated final marker field"
+}
+
+test_recovery_rejects_lexical_data_traversal() {
+  local case_dir id marker data out
+  id=atomic-marker-data-traversal-b12
+  case_dir=$(make_home marker-data-traversal)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-data-traversal"
+  data="$(home_of "$case_dir")/data"
+  mkdir -p "$data/sub"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s/sub/..\nspawn_gen=spawn-data-traversal\narg=--note\narg=local main\n' \
+    "$id" "$data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "marker with lexical data traversal was consumed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "lexical data traversal allowed task-record removal"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "lexical data traversal changed the backlog row: $out"
+  pass "recovery rejects lexical traversal before resolving marker data"
+}
+
 test_recovery_rejects_invalid_close_arguments() {
   local case_dir id marker out
   id=atomic-marker-invalid-args-b12
@@ -1292,6 +1334,8 @@ test_recovery_finishes_a_close_for_the_same_meta_incarnation
 test_recovery_preserves_both_records_when_meta_removal_fails
 test_recovery_rejects_a_marker_for_another_task_identity
 test_recovery_rejects_a_foreign_data_directory
+test_recovery_rejects_an_unterminated_unknown_field
+test_recovery_rejects_lexical_data_traversal
 test_recovery_rejects_invalid_close_arguments
 test_recovery_rejects_a_symlinked_close_marker
 test_recovery_drops_a_close_for_a_newer_meta_incarnation
