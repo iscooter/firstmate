@@ -106,7 +106,7 @@ test_send_stubs_and_ssh() {
   esac
   printf 'ignored\n' | FM_SSH_LOG="$ssh_log" "$fakebin/fake-ssh" host -- cmd
   assert_grep 'host -- cmd' "$ssh_log" "fake ssh did not record argv"
-  FM_FAKE_SSH_RC=7 "$fakebin/fake-ssh" x
+  FM_FAKE_SSH_RC=7 "$fakebin/fake-ssh" x < /dev/null
   expect_code 7 $? "fake ssh should honor FM_FAKE_SSH_RC"
   pass "send stubs log typed text and fake ssh records argv with a controllable exit"
 }
