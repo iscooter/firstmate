@@ -346,21 +346,48 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 # no longer actionable), 1 when the close itself failed.
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path>
   local state=$1 marker=$2 id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
+  local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
   local args=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
+  if [ -L "$marker" ]; then
+    FM_BACKLOG_TRANSITION_ERROR="unsafe pending-close record $marker"
+    return 1
+  fi
   [ -f "$marker" ] || return 0
+  marker_name=${marker##*/}
+  case "$marker_name" in
+    *.backlog-close) expected_id=${marker_name%.backlog-close} ;;
+    *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close record name $marker"; return 1 ;;
+  esac
   while IFS= read -r line; do
     case "$line" in
-      id=*) id=${line#id=} ;;
-      data=*) data=${line#data=} ;;
-      spawn_gen=*) marker_spawn_gen=${line#spawn_gen=} ;;
+      id=*) id=${line#id=}; id_count=$((id_count + 1)) ;;
+      data=*) data=${line#data=}; data_count=$((data_count + 1)) ;;
+      spawn_gen=*) marker_spawn_gen=${line#spawn_gen=}; spawn_gen_count=$((spawn_gen_count + 1)) ;;
       arg=*) args+=("${line#arg=}") ;;
+      *) FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"; return 1 ;;
     esac
   done < "$marker"
-  if [ -z "$id" ] || [ -z "$data" ]; then
+  case "$id" in
+    ''|.*|*[!A-Za-z0-9._-]*)
+      FM_BACKLOG_TRANSITION_ERROR="invalid task identity in pending-close record $marker"
+      return 1
+      ;;
+  esac
+  if [ "$id_count" -ne 1 ] || [ "$id" != "$expected_id" ] \
+     || [ "$data_count" -ne 1 ] || [ -z "$data" ] \
+     || [ "$spawn_gen_count" -gt 1 ]; then
     FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
     return 1
   fi
+  case "${#args[@]}" in
+    0) ;;
+    2)
+      case "${args[0]}" in --pr|--report|--note) ;; *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1 ;; esac
+      [ -n "${args[1]}" ] || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }
+      ;;
+    *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1 ;;
+  esac
   if [ -e "$state/$id.meta" ]; then
     meta_spawn_gen=$(sed -n 's/^spawn_gen=//p' "$state/$id.meta" | head -1)
     if [ -z "$marker_spawn_gen" ] || [ "$meta_spawn_gen" != "$marker_spawn_gen" ]; then

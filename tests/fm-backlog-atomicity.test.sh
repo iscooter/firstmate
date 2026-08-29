@@ -390,6 +390,8 @@ test_immediate_child_absolute_data_dispatches_and_completes() {
     || fail "immediate-child-data teardown failed: $out"
   [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = "done" ] \
     || fail "immediate-child absolute completion mutated a different backlog"
+  assert_contains "$out" "fm-records/backlog.md" \
+    "relocated completion confirmed the wrong backlog path"
   pass "an immediate-child absolute data path keeps one paired backlog"
 }
 
@@ -992,6 +994,63 @@ test_recovery_preserves_both_records_when_meta_removal_fails() {
   pass "recovery preserves both records when meta removal fails"
 }
 
+test_recovery_rejects_a_marker_for_another_task_identity() {
+  local case_dir locked_id target_id marker out
+  locked_id=atomic-marker-lock-owner-b12
+  target_id=atomic-marker-target-b12
+  case_dir=$(make_home marker-identity-mismatch)
+  add_item "$case_dir" "$target_id"
+  start_item "$case_dir" "$target_id"
+  write_task_meta "$case_dir" "$target_id" ship no-mistakes "spawn_gen=spawn-marker-target"
+  marker="$(home_of "$case_dir")/state/$locked_id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-target\narg=--note\narg=local main\n' \
+    "$target_id" "$(home_of "$case_dir")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "identity-mismatched close marker was consumed"
+  assert_present "$(home_of "$case_dir")/state/$target_id.meta" \
+    "identity-mismatched close marker removed another task record"
+  [ "$(row_state "$case_dir" "$target_id")" = in_flight ] \
+    || fail "identity-mismatched close marker changed another task's row: $out"
+  pass "recovery binds close-marker identity to its locked filename"
+}
+
+test_recovery_rejects_invalid_close_arguments() {
+  local case_dir id marker out
+  id=atomic-marker-invalid-args-b12
+  case_dir=$(make_home marker-invalid-args)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-invalid-args\narg=--unknown\narg=value\n' \
+    "$id" "$(home_of "$case_dir")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "invalid-argument close marker was consumed"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "invalid close arguments changed the backlog row: $out"
+  pass "recovery rejects close-marker arguments outside its protocol"
+}
+
+test_recovery_rejects_a_symlinked_close_marker() {
+  local case_dir id marker payload out
+  id=atomic-marker-symlink-b12
+  case_dir=$(make_home marker-symlink)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  payload="$(home_of "$case_dir")/state/marker-payload"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-symlink\narg=--note\narg=local main\n' \
+    "$id" "$(home_of "$case_dir")/data" > "$payload"
+  ln -s "$payload" "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  [ -L "$marker" ] || fail "symlinked close marker was consumed: $out"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "symlinked close marker changed the backlog row: $out"
+  pass "recovery rejects symlinked close markers"
+}
+
 test_recovery_drops_a_close_for_a_newer_meta_incarnation() {
   local case_dir id out
   id=atomic-heal-new-incarnation-b12
@@ -1124,8 +1183,8 @@ test_manual_backend_home_dispatches_and_completes_without_touching_the_backlog()
   mv "$(home_of "$case_dir")/data" "$case_dir/manual-data"
 
   out=$(run_teardown "$case_dir" "$id") || fail "manual-backend teardown failed: $out"
-  assert_contains "$out" "Update data/backlog.md" \
-    "manual-backend teardown did not leave the backlog edit to the operator"
+  assert_contains "$out" "Update $(home_of "$case_dir")/data/backlog.md" \
+    "manual-backend teardown did not name its configured backlog path"
   assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \
     "manual-backend teardown recorded a close it never owed"
   pass "a manual-backlog home dispatches and completes without a hard failure"
@@ -1206,6 +1265,9 @@ test_recovery_replays_a_close_an_interrupted_cleanup_left_open
 test_recovery_preserves_a_close_when_the_backlog_cannot_be_read
 test_recovery_finishes_a_close_for_the_same_meta_incarnation
 test_recovery_preserves_both_records_when_meta_removal_fails
+test_recovery_rejects_a_marker_for_another_task_identity
+test_recovery_rejects_invalid_close_arguments
+test_recovery_rejects_a_symlinked_close_marker
 test_recovery_drops_a_close_for_a_newer_meta_incarnation
 test_recovery_drops_a_legacy_close_when_meta_exists
 test_bootstrap_stops_when_data_disappears_before_reconciliation
