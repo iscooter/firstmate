@@ -658,27 +658,35 @@ test_dispatch_rolls_back_before_a_failed_launch_delivery() {
   pass "dispatch commits neither record nor backlog state before launch delivery succeeds"
 }
 
-test_interrupted_kimi_delivery_does_not_commit() {
-  local case_dir id out rc=0
-  id=atomic-dispatch-kimi-interrupted-b5
-  case_dir=$(make_home dispatch-kimi-interrupted "$id")
-  add_item "$case_dir" "$id"
-  interrupt_kimi_readiness "$case_dir"
+test_interrupted_kimi_delivery_preserves_live_worker_ownership() {
+  local scope case_dir id out rc
+  for scope in automatic manual no-backlog; do
+    id="atomic-dispatch-kimi-interrupted-$scope-b5"
+    case_dir=$(make_home "dispatch-kimi-interrupted-$scope" "$id")
+    case "$scope" in
+      automatic) add_item "$case_dir" "$id" ;;
+      manual) printf '%s\n' manual > "$(home_of "$case_dir")/config/backlog-backend" ;;
+      no-backlog) rm -f "$(backlog_of "$case_dir")" ;;
+    esac
+    interrupt_kimi_readiness "$case_dir"
 
-  out=$(HOME="$(home_of "$case_dir")" \
-    FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
-    run_spawn "$case_dir" "$id" "$case_dir/project" \
-      --harness kimi --mode no-mistakes --yolo off) || rc=$?
-  [ "$rc" -ne 0 ] || fail "an interrupted Kimi readiness check reported success"
-  assert_contains "$out" "kimi did not show a verified ready signal" \
-    "interrupted Kimi readiness lacked its delivery-failure diagnostic"
-  [ "$(row_state "$case_dir" "$id")" = queued ] \
-    || fail "interrupted Kimi delivery committed the backlog row"
-  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
-    "interrupted Kimi delivery retained its provisional task record"
-  assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
-    "interrupted Kimi delivery retained its provisional busy generation"
-  pass "interrupted Kimi delivery commits neither record nor backlog state"
+    rc=0
+    out=$(HOME="$(home_of "$case_dir")" \
+      FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+      run_spawn "$case_dir" "$id" "$case_dir/project" \
+        --harness kimi --mode no-mistakes --yolo off) || rc=$?
+    [ "$rc" -eq 143 ] \
+      || fail "an interrupted $scope Kimi readiness check exited $rc instead of 143: $out"
+    assert_contains "$out" "kimi did not show a verified ready signal" \
+      "interrupted $scope Kimi readiness lacked its delivery-failure diagnostic"
+    assert_present "$(home_of "$case_dir")/state/$id.meta" \
+      "interrupted $scope Kimi delivery removed the live worker's task record"
+    if [ "$scope" = automatic ]; then
+      [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+        || fail "interrupted automatic Kimi delivery did not commit the paired backlog row"
+    fi
+  done
+  pass "interrupted Kimi delivery preserves durable ownership for every backlog backend"
 }
 
 test_dispatch_defers_interruption_across_backlog_commit() {
@@ -1609,7 +1617,7 @@ test_dispatch_leaves_no_record_when_the_transition_fails
 test_dispatch_reports_an_incomplete_record_rollback
 test_dispatch_reports_an_incomplete_busy_rollback
 test_dispatch_rolls_back_before_a_failed_launch_delivery
-test_interrupted_kimi_delivery_does_not_commit
+test_interrupted_kimi_delivery_preserves_live_worker_ownership
 test_dispatch_defers_interruption_across_backlog_commit
 test_dispatch_does_not_resurrect_a_row_closed_after_preflight
 test_dispatch_fails_when_its_row_vanishes_after_preflight

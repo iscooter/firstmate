@@ -3043,15 +3043,11 @@ if [ "$HARNESS" = kimi ]; then
     KIMI_DELIVERY_FAILED=1
   fi
   # A deferred signal may make a readiness or delivery probe return failure.
-  # Never turn that failed delivery into a committed In-flight transition.
-  if [ "$KIMI_DELIVERY_FAILED" != 0 ]; then
+  # Enter has already started a live worker, so keep going to the common commit
+  # point and preserve its durable ownership before honoring that signal.
+  if [ "$KIMI_DELIVERY_FAILED" != 0 ] && [ -z "$SPAWN_DEFERRED_SIGNAL" ]; then
     trap - HUP INT TERM
-    case "$SPAWN_DEFERRED_SIGNAL" in
-      HUP) exit 129 ;;
-      INT) exit 130 ;;
-      TERM) exit 143 ;;
-      *) exit 1 ;;
-    esac
+    exit 1
   fi
 fi
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
