@@ -3075,8 +3075,8 @@ SPAWN_DEFERRED_SIGNAL=
 trap 'SPAWN_DEFERRED_SIGNAL=HUP' HUP
 trap 'SPAWN_DEFERRED_SIGNAL=INT' INT
 trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
-spawn_send_key "$T" Enter
 SPAWN_WORKER_LIVE=1
+spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   KIMI_DELIVERY_FAILED=0
   if ! kimi_wait_for_ready; then

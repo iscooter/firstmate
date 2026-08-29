@@ -246,7 +246,7 @@ case "\${1:-}" in
     ;;
   send-keys)
     case "\$*" in
-      *FM_ROOT_OVERRIDE=*) : > "$case_dir/launch-staged" ;;
+      *FM_ROOT_OVERRIDE=*|*launch-brief*) : > "$case_dir/launch-staged" ;;
       *" Enter") [ ! -f "$case_dir/launch-staged" ] || : > "$case_dir/backend-unqueryable" ;;
     esac
     exit 0
@@ -306,8 +306,46 @@ case "\${1:-}" in
     ;;
   send-keys)
     case "\$*" in
-      *FM_ROOT_OVERRIDE=*) : > "$case_dir/launch-staged" ;;
+      *FM_ROOT_OVERRIDE=*|*launch-brief*) : > "$case_dir/launch-staged" ;;
       *" Enter") [ ! -f "$case_dir/launch-staged" ] || : > "$case_dir/backend-unqueryable" ;;
+    esac
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
+interrupt_launch_submission() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  kill-window) : > "$case_dir/backend-unqueryable"; exit 0 ;;
+  list-windows)
+    [ ! -f "$case_dir/backend-unqueryable" ] && exit 0
+    exit 1
+    ;;
+  display-message)
+    [ ! -f "$case_dir/backend-unqueryable" ] || exit 1
+    case "\$*" in *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+    printf 'firstmate\\n'
+    exit 0
+    ;;
+  send-keys)
+    case "\$*" in
+      *FM_ROOT_OVERRIDE=*|*launch-brief*) : > "$case_dir/launch-staged" ;;
+      *" Enter")
+        if [ -f "$case_dir/launch-staged" ]; then
+          : > "$case_dir/endpoint-running"
+          : > "$case_dir/backend-unqueryable"
+          spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+          case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
+          kill -TERM "\$spawn_pid"
+          exit 1
+        fi
+        ;;
     esac
     exit 0
     ;;
@@ -830,6 +868,28 @@ test_unqueryable_failed_dispatch_retains_ownership() {
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "unqueryable failed dispatch changed the backlog row"
   pass "unqueryable failed dispatch retains durable ownership"
+}
+
+test_interrupted_launch_submission_retains_unconfirmed_worker() {
+  local case_dir id out rc=0
+  id=atomic-dispatch-submit-interrupted-b5
+  case_dir=$(make_home dispatch-submit-interrupted "$id")
+  add_item "$case_dir" "$id"
+  interrupt_launch_submission "$case_dir"
+
+  out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "interrupted launch submission reported success"
+  assert_present "$case_dir/endpoint-running" \
+    "interrupted launch submission did not reach the backend"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "interrupted launch submission removed its task record"
+  assert_present "$(home_of "$case_dir")/state/$id.busy-state" \
+    "interrupted launch submission removed its busy record"
+  assert_contains "$out" "could not be confirmed gone" \
+    "interrupted launch submission did not report its unresolved endpoint"
+  [ "$(row_state "$case_dir" "$id")" = queued ] \
+    || fail "interrupted launch submission changed the backlog row"
+  pass "interrupted launch submission retains unconfirmed ownership"
 }
 
 test_dispatch_defers_interruption_across_backlog_commit() {
@@ -1809,6 +1869,7 @@ test_dispatch_rolls_back_before_a_failed_launch_delivery
 test_interrupted_kimi_delivery_preserves_live_worker_ownership
 test_failed_kimi_delivery_preserves_or_stops_worker_ownership
 test_unqueryable_failed_dispatch_retains_ownership
+test_interrupted_launch_submission_retains_unconfirmed_worker
 test_dispatch_defers_interruption_across_backlog_commit
 test_dispatch_does_not_resurrect_a_row_closed_after_preflight
 test_dispatch_fails_when_its_row_vanishes_after_preflight
