@@ -1214,7 +1214,7 @@ backlog_record_reconcile() {
     label=$(basename "$marker" .backlog-close)
     meta_lock=$(fm_meta_lock_path "$STATE/$label.meta") || continue
     fm_lock_try_acquire "$meta_lock" || continue
-    if fm_backlog_close_marker_replay "$STATE" "$marker"; then
+    if fm_backlog_close_marker_replay "$STATE" "$marker" "$DATA"; then
       if [ "$FM_BACKLOG_CLOSE_REPLAY_RESULT" = closed ]; then
         echo "BOOTSTRAP_INFO: closed the backlog item for $label that an interrupted cleanup left open"
       fi

@@ -344,8 +344,9 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 
 # Replay one recorded close. Returns 0 when the row is closed (or the record is
 # no longer actionable), 1 when the close itself failed.
-fm_backlog_close_marker_replay() {  # <state-dir> <marker-path>
-  local state=$1 marker=$2 id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
+fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
+  local state=$1 marker=$2 authorized_data data_resolved
+  local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
   local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
   local args=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
@@ -376,15 +377,47 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path>
   esac
   if [ "$id_count" -ne 1 ] || [ "$id" != "$expected_id" ] \
      || [ "$data_count" -ne 1 ] || [ -z "$data" ] \
-     || [ "$spawn_gen_count" -gt 1 ]; then
+     || [ "$spawn_gen_count" -ne 1 ]; then
     FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
     return 1
   fi
+  case "$marker_spawn_gen" in
+    ''|.*|*[!A-Za-z0-9._-]*)
+      FM_BACKLOG_TRANSITION_ERROR="invalid spawn generation in pending-close record $marker"
+      return 1
+      ;;
+  esac
+  case "$data" in
+    /*) ;;
+    *) FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"; return 1 ;;
+  esac
+  case "/$data/" in
+    */../*) FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"; return 1 ;;
+  esac
+  authorized_data=$(fm_backlog_data_absolute "$3") || {
+    FM_BACKLOG_TRANSITION_ERROR="authorized data directory cannot be resolved: $3"
+    return 1
+  }
+  data_resolved=$(fm_backlog_data_absolute "$data") || {
+    FM_BACKLOG_TRANSITION_ERROR="data directory in pending-close record cannot be resolved: $data"
+    return 1
+  }
+  if [ "$data_resolved" != "$authorized_data" ]; then
+    FM_BACKLOG_TRANSITION_ERROR="foreign data directory in pending-close record $marker"
+    return 1
+  fi
+  data=$data_resolved
   case "${#args[@]}" in
     0) ;;
     2)
-      case "${args[0]}" in --pr|--report|--note) ;; *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1 ;; esac
-      [ -n "${args[1]}" ] || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }
+      case "${args[0]}" in
+        --note) [ "${args[1]}" = "local main" ] ;;
+        --pr) case "${args[1]}" in http://*|https://*) true ;; *) false ;; esac ;;
+        --report)
+          case "/${args[1]}/" in /*/../*|//*|*/-*) false ;; *) [ -n "${args[1]}" ] ;; esac
+          ;;
+        *) false ;;
+      esac || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }
       ;;
     *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1 ;;
   esac

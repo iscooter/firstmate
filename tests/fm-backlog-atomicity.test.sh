@@ -334,10 +334,10 @@ test_recovery_uses_the_parent_of_a_trailing_slash_data_record() {
   tasks-axi add "$id" "item for $id" --kind ship --file "$backlog" >/dev/null
   tasks-axi start "$id" --file "$backlog" >/dev/null
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s/\narg=--note\narg=local main\n' "$id" "$relocated" > "$marker"
+  printf 'id=%s\ndata=%s/\nspawn_gen=spawn-relocated-recovery\narg=--note\narg=local main\n' "$id" "$relocated" > "$marker"
   require_show_cwd "$case_dir" "$(cd "$case_dir" && pwd -P)"
 
-  out=$(run_bootstrap "$case_dir")
+  out=$(FM_DATA_OVERRIDE="$relocated/" run_bootstrap "$case_dir")
   [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = "done" ] \
     || fail "relocated-data recovery used the wrong addressing root: $out"
   assert_absent "$marker" "relocated-data recovery retained its close marker"
@@ -823,7 +823,7 @@ test_recovery_retries_when_a_close_marker_cannot_be_removed() {
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-retry\narg=--note\narg=local main\n' \
     "$id" "$(home_of "$case_dir")/data" > "$marker"
   break_meta_removal "$case_dir" "$marker"
 
@@ -901,7 +901,7 @@ test_recovery_replays_a_close_an_interrupted_cleanup_left_open() {
   case_dir=$(make_home heal-pending-close)
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
-  printf 'id=%s\ndata=%s\narg=--pr\narg=https://github.com/example/repo/pull/11\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-heal-pr\narg=--pr\narg=https://github.com/example/repo/pull/11\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
 
@@ -921,7 +921,7 @@ test_recovery_preserves_a_close_when_the_backlog_cannot_be_read() {
   case_dir=$(make_home heal-read-error)
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
-  printf 'id=%s\ndata=%s\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-heal-read\narg=--note\narg=local main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
   break_verb "$case_dir" show
@@ -1015,6 +1015,31 @@ test_recovery_rejects_a_marker_for_another_task_identity() {
   pass "recovery binds close-marker identity to its locked filename"
 }
 
+test_recovery_rejects_a_foreign_data_directory() {
+  local case_dir foreign_case id marker out
+  id=atomic-marker-foreign-data-b12
+  case_dir=$(make_home marker-foreign-data-local)
+  foreign_case=$(make_home marker-foreign-data-remote)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  add_item "$foreign_case" "$id"
+  start_item "$foreign_case" "$id"
+  write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-foreign-data"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-foreign-data\narg=--note\narg=local main\n' \
+    "$id" "$(home_of "$foreign_case")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "foreign-data close marker was consumed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "foreign-data close marker removed the local task record"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "foreign-data close marker changed the local backlog row: $out"
+  [ "$(row_state "$foreign_case" "$id")" = in_flight ] \
+    || fail "foreign-data close marker reached into another home's backlog: $out"
+  pass "recovery rejects close markers targeting another home's data"
+}
+
 test_recovery_rejects_invalid_close_arguments() {
   local case_dir id marker out
   id=atomic-marker-invalid-args-b12
@@ -1072,7 +1097,7 @@ test_recovery_drops_a_close_for_a_newer_meta_incarnation() {
   pass "session start drops a close recorded for an older meta incarnation"
 }
 
-test_recovery_drops_a_legacy_close_when_meta_exists() {
+test_recovery_rejects_a_legacy_close_without_an_incarnation() {
   local case_dir id out
   id=atomic-heal-legacy-close-b13
   case_dir=$(make_home heal-legacy-close)
@@ -1088,9 +1113,9 @@ test_recovery_drops_a_legacy_close_when_meta_exists() {
     || fail "session start guessed that a legacy close belonged to the current meta: $out"
   assert_present "$(home_of "$case_dir")/state/$id.meta" \
     "session start removed meta for an unversioned legacy close"
-  assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \
-    "session start retained a legacy close that could not be matched safely"
-  pass "session start treats an unversioned close as stale when meta exists"
+  assert_present "$(home_of "$case_dir")/state/$id.backlog-close" \
+    "session start consumed an unversioned close marker"
+  pass "session start rejects an unversioned close marker"
 }
 
 test_bootstrap_stops_when_data_disappears_before_reconciliation() {
@@ -1266,10 +1291,11 @@ test_recovery_preserves_a_close_when_the_backlog_cannot_be_read
 test_recovery_finishes_a_close_for_the_same_meta_incarnation
 test_recovery_preserves_both_records_when_meta_removal_fails
 test_recovery_rejects_a_marker_for_another_task_identity
+test_recovery_rejects_a_foreign_data_directory
 test_recovery_rejects_invalid_close_arguments
 test_recovery_rejects_a_symlinked_close_marker
 test_recovery_drops_a_close_for_a_newer_meta_incarnation
-test_recovery_drops_a_legacy_close_when_meta_exists
+test_recovery_rejects_a_legacy_close_without_an_incarnation
 test_bootstrap_stops_when_data_disappears_before_reconciliation
 test_bootstrap_addressing_exemptions_remain_nonfatal
 test_recovery_leaves_a_captain_held_item_alone
