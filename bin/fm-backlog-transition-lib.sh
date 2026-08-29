@@ -352,7 +352,7 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 authorized_data data_resolved
   local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
-  local arg_value url_tail url_authority url_path
+  local arg_value url_tail url_authority url_path url_host url_port percent_tail percent_valid raw_bytes
   local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
   local args=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
@@ -361,6 +361,16 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     return 1
   fi
   [ -f "$marker" ] || return 0
+  raw_bytes=$(LC_ALL=C od -An -t u1 "$marker" 2>/dev/null) || {
+    FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
+    return 1
+  }
+  if ! printf '%s\n' "$raw_bytes" | awk '
+    { for (i = 1; i <= NF; i++) if (($i < 32 && $i != 10) || $i == 127) exit 1 }
+  '; then
+    FM_BACKLOG_TRANSITION_ERROR="invalid control byte in pending-close record $marker"
+    return 1
+  fi
   marker_name=${marker##*/}
   case "$marker_name" in
     *.backlog-close) expected_id=${marker_name%.backlog-close} ;;
@@ -425,32 +435,56 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
           ;;
         --pr)
           arg_value=${args[1]}
-          case "$arg_value" in
-            http://*|https://*) ;;
-            *) false ;;
-          esac \
+          [ "${#arg_value}" -le 2048 ] \
+            && case "$arg_value" in
+              https://*) true ;;
+              *) false ;;
+            esac \
             && case "$arg_value" in
               *[[:space:]]*|*[!A-Za-z0-9:/?\&=._#%+~@-]*) false ;;
               *) true ;;
             esac \
             && {
-              url_tail=${arg_value#*://}
+              url_tail=${arg_value#https://}
               url_authority=${url_tail%%/*}
               url_path=${url_tail#*/}
+              url_host=$url_authority
+              url_port=
+              case "$url_authority" in
+                *:*) url_host=${url_authority%%:*}; url_port=${url_authority#*:} ;;
+              esac
               [ "$url_path" != "$url_tail" ] \
-                && case "$url_authority" in
-                  ''|[-.]*|*[-.]|*..*|*[!A-Za-z0-9._:-]*) false ;;
+                && case "$url_host" in
+                  ''|[-.]*|*[-.]|*..*|*[!A-Za-z0-9.-]*) false ;;
                   *[A-Za-z0-9]*) true ;;
                   *) false ;;
                 esac \
-                && case "$url_path" in *[A-Za-z0-9]*) true ;; *) false ;; esac
+                && case "$url_authority" in
+                  *:*) case "$url_port" in ''|*[!0-9]*|??????*) false ;; *) true ;; esac ;;
+                  *) true ;;
+                esac \
+                && case "$url_path" in *[A-Za-z0-9]*) true ;; *) false ;; esac \
+                && {
+                  percent_tail=$url_path
+                  percent_valid=1
+                  while case "$percent_tail" in *%*) true ;; *) false ;; esac; do
+                    percent_tail=${percent_tail#*%}
+                    case "$percent_tail" in
+                      [0-9A-Fa-f][0-9A-Fa-f]*) percent_tail=${percent_tail#??} ;;
+                      *) percent_valid=0; break ;;
+                    esac
+                  done
+                  [ "$percent_valid" = 1 ]
+                }
             }
           ;;
         --report)
-          case "${args[1]}" in
-            ''|-*|/*|../*|*/../*|*/..|*[[:space:]]*|*[![:print:]]*) false ;;
-            *) true ;;
-          esac
+          arg_value=${args[1]}
+          [ "${#arg_value}" -le 4096 ] \
+            && case "$arg_value" in
+              ''|-*|/*|../*|*/../*|*/..|*[!A-Za-z0-9._/-]*) false ;;
+              *) true ;;
+            esac
           ;;
         *) false ;;
       esac || { FM_BACKLOG_TRANSITION_ERROR="invalid pending-close arguments in $marker"; return 1; }

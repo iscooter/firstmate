@@ -1082,6 +1082,53 @@ test_recovery_rejects_lexical_data_traversal() {
   pass "recovery rejects lexical traversal before resolving marker data"
 }
 
+test_recovery_rejects_raw_control_bytes() {
+  local case_dir id marker data out
+  id=atomic-marker-nul-byte-b12
+  case_dir=$(make_home marker-nul-byte)
+  add_item "$case_dir" "$id"
+  start_item "$case_dir" "$id"
+  write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-nul-byte"
+  data="$(home_of "$case_dir")/data"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\0\nspawn_gen=spawn-nul-byte\narg=--note\narg=local%%20main\n' \
+    "$id" "$data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "NUL-bearing close marker was consumed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "NUL-bearing close marker removed the task record"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
+    || fail "NUL-bearing close marker changed the backlog row: $out"
+  pass "recovery rejects marker control bytes before parsing"
+}
+
+test_recovery_rejects_malformed_pr_urls() {
+  local case_dir first_id second_id first_marker second_marker out
+  first_id=atomic-marker-pr-port-b12
+  second_id=atomic-marker-pr-percent-b12
+  case_dir=$(make_home marker-malformed-pr)
+  add_item "$case_dir" "$first_id"
+  start_item "$case_dir" "$first_id"
+  add_item "$case_dir" "$second_id"
+  start_item "$case_dir" "$second_id"
+  first_marker="$(home_of "$case_dir")/state/$first_id.backlog-close"
+  second_marker="$(home_of "$case_dir")/state/$second_id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-pr-port\narg=--pr\narg=https://github.com:abc/pull/1\n' \
+    "$first_id" "$(home_of "$case_dir")/data" > "$first_marker"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-pr-percent\narg=--pr\narg=https://github.com/pull/%%ZZ\n' \
+    "$second_id" "$(home_of "$case_dir")/data" > "$second_marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$first_marker" "PR marker with a nonnumeric port was consumed"
+  assert_present "$second_marker" "PR marker with an invalid percent escape was consumed"
+  [ "$(row_state "$case_dir" "$first_id")" = in_flight ] \
+    || fail "nonnumeric PR port changed the backlog row: $out"
+  [ "$(row_state "$case_dir" "$second_id")" = in_flight ] \
+    || fail "invalid PR percent escape changed the backlog row: $out"
+  pass "recovery rejects malformed PR URL values"
+}
+
 test_failed_close_replay_is_not_started_as_live_work() {
   local case_dir id marker out
   id=atomic-pending-close-not-started-b12
@@ -1355,6 +1402,8 @@ test_recovery_rejects_a_marker_for_another_task_identity
 test_recovery_rejects_a_foreign_data_directory
 test_recovery_rejects_an_unterminated_unknown_field
 test_recovery_rejects_lexical_data_traversal
+test_recovery_rejects_raw_control_bytes
+test_recovery_rejects_malformed_pr_urls
 test_failed_close_replay_is_not_started_as_live_work
 test_recovery_rejects_invalid_close_arguments
 test_recovery_rejects_a_symlinked_close_marker
