@@ -36,9 +36,11 @@
 # with it the completion links, so a process killed between the two halves would
 # leave nothing to reconstruct the close from. It writes
 # `state/<id>.backlog-close` first, and removes it once the close lands.
-# fm_backlog_close_marker_replay validates the complete marker and pins its data
-# path to this home's configured root before any recovery mutation, then re-runs
-# exactly that close. `tasks-axi done` on an already-closed task backfills links
+# The writer and replay share one complete-record validator, and teardown stages
+# that record before destructive cleanup, so it never publishes or acts on a close
+# replay would reject. The validator pins the data path to this home's configured
+# root before any recovery mutation, then re-runs exactly that close.
+# `tasks-axi done` on an already-closed task backfills links
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
 # it publishes the meta first, so a crash
 # leaves the meta itself as the evidence that the row is owed a start.
