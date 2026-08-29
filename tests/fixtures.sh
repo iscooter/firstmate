@@ -6,14 +6,14 @@
 #   . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 #
 # Generic reporters, temp roots, git fixtures, and fail/pass/fm_test_cleanup
-# come from tests/lib.sh, pulled in below. This file owns the fake no-mistakes,
-# gh, gh-axi, tmux, ssh, and spawn-world helpers that used to be copied into
-# each suite. Wake-queue mocks stay in wake-helpers.sh; secondmate-lifecycle
-# mocks stay in secondmate-helpers.sh.
+# come from tests/lib.sh, pulled in below. This file owns the shared fake
+# no-mistakes, gh, gh-axi, tmux, ssh, and spawn-world helpers. Wake-queue mocks
+# stay in wake-helpers.sh; secondmate-lifecycle mocks stay in
+# secondmate-helpers.sh.
 #
-# A version-floor bump for the fake no-mistakes banner is a one-line change of
-# FM_TEST_NO_MISTAKES_VERSION below. Override a single case with
-# FM_FAKE_NO_MISTAKES_VERSION rather than editing a stub body.
+# FM_TEST_NO_MISTAKES_VERSION is the single default version for the shared fake
+# no-mistakes banner. Override a single case with FM_FAKE_NO_MISTAKES_VERSION
+# rather than editing a stub body.
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -69,8 +69,7 @@ SH
 # --- fake gh / gh-axi -------------------------------------------------------
 
 # fm_test_fake_gh <fakebin>
-# Authenticates (`gh auth status` exits 0) and otherwise exits 0. A superset of
-# the exit-0-only copies.
+# Authenticates (`gh auth status` exits 0) and otherwise exits 0.
 fm_test_fake_gh() {
   local fakebin=$1
   cat > "$fakebin/gh" <<'SH'
@@ -98,14 +97,9 @@ fm_test_fake_gh_axi() {
 # set, each send-keys -l payload is appended one per line. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
 #
-# Converged from the spawn-suite copies. Divergences reconciled here:
-# - pane path uses ${FM_FAKE_PANE_PATH:-} (8 of 9 copies); the pool-freshen
-#   copy used :? and failed closed when unset. Callers always set the var.
-# - kill-window and set-window-option are no-ops (gate-refuse and grok
-#   included them; the others ignored unknown verbs by exiting 0 at the
-#   bottom anyway).
-# - send-keys launch logging is env-gated, so suites that never set the log
-#   keep a silent send-keys.
+# The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
+# cleanup and option operations are no-ops. Launch logging is env-gated, so
+# suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
