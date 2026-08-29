@@ -87,10 +87,11 @@
 #          the backlog row inside the script that moves the task's record
 #          (bin/fm-backlog-transition-lib.sh), so this sweep exists for the
 #          crash window inside those scripts and for drift a home was already
-#          carrying: it finishes a close an interrupted cleanup recorded, and
-#          marks In flight any item this home already owns a worker for. It
-#          never touches a captain-held or closed item, and never reads or
-#          writes another home; the fleet snapshot's classifier and
+#          carrying: it finishes the authoritative close an interrupted cleanup
+#          recorded, and marks In flight any item this home already owns a worker
+#          for. The worker-record sweep never starts a captain-held or closed
+#          item, and reconciliation never reads or writes another home; the fleet
+#          snapshot's classifier and
 #          bin/fm-secondmate-reconcile.sh's nudge stay as backstops. Replayed
 #          closes and restored In-flight rows print BOOTSTRAP_INFO facts.
 #          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
@@ -1185,9 +1186,9 @@ crew_dispatch_validate() {
 
 # Same-home record reconciliation. Every ordinary dispatch and completion now
 # moves the backlog row inside the script that moves the task's record
-# (bin/fm-backlog-transition-lib.sh), so the only ways the two can still
-# disagree are a process killed mid-transition and drift a home was already
-# carrying before that pairing existed. Heal this home's OWN books on its own
+# (bin/fm-backlog-transition-lib.sh), so remaining recovery cases include a
+# process killed mid-transition and drift this home was already carrying. Heal
+# this home's OWN books on its own
 # restart rather than waiting for a parent's cross-home nudge; the fleet
 # snapshot's classifier and bin/fm-secondmate-reconcile.sh's nudge stay as
 # backstops for what this cannot see. Never reads or writes another home.
