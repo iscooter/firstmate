@@ -58,8 +58,20 @@ make_home() {  # <name> [task-id...]
 
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
-case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
+case "${1:-}" in
+  kill-window)
+    [ -z "${FM_FAKE_ENDPOINT_LIVE:-}" ] || rm -f "$FM_FAKE_ENDPOINT_LIVE"
+    exit 0
+    ;;
+  display-message)
+    if [ -n "${FM_FAKE_ENDPOINT_LIVE:-}" ] && [ ! -f "$FM_FAKE_ENDPOINT_LIVE" ]; then
+      exit 1
+    fi
+    case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+    printf 'firstmate\n'
+    exit 0
+    ;;
+esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
@@ -200,6 +212,37 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
+fail_kimi_readiness() {  # <case-dir> <stopped|stuck>
+  local case_dir=$1 kill_mode=$2 home
+  home=$(home_of "$case_dir")
+  mkdir -p "$home/.kimi-code"
+  printf '# test config\n' > "$home/.kimi-code/config.toml"
+  fm_fake_exit0 "$case_dir/fakebin" kimi
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  kill-window)
+    [ "$kill_mode" = stuck ] || rm -f "\${FM_FAKE_ENDPOINT_LIVE:-}"
+    exit 0
+    ;;
+  display-message)
+    if [ -n "\${FM_FAKE_ENDPOINT_LIVE:-}" ] && [ ! -f "\$FM_FAKE_ENDPOINT_LIVE" ]; then
+      exit 1
+    fi
+    case "\$*" in
+      *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+      *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
+    esac
+    printf 'firstmate\\n'
+    exit 0
+    ;;
+  capture-pane) printf 'shell starting\\n$ \\n'; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
 interrupt_kimi_readiness() {  # <case-dir>
   local case_dir=$1 home
   home=$(home_of "$case_dir")
@@ -310,8 +353,10 @@ write_task_meta() {  # <case-dir> <id> <kind> <mode> [extra-line...]
 run_spawn() {  # <case-dir> <args...>
   local case_dir=$1
   shift
+  : > "$case_dir/endpoint-live"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" \
+    FM_FAKE_ENDPOINT_LIVE="$case_dir/endpoint-live" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \
     PATH="$case_dir/fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
@@ -689,6 +734,39 @@ test_interrupted_kimi_delivery_preserves_live_worker_ownership() {
   pass "interrupted Kimi delivery preserves durable ownership for every backlog backend"
 }
 
+test_failed_kimi_delivery_preserves_or_stops_worker_ownership() {
+  local outcome case_dir id out rc
+  for outcome in stopped stuck; do
+    id="atomic-dispatch-kimi-failed-$outcome-b5"
+    case_dir=$(make_home "dispatch-kimi-failed-$outcome" "$id")
+    add_item "$case_dir" "$id"
+    fail_kimi_readiness "$case_dir" "$outcome"
+
+    rc=0
+    out=$(HOME="$(home_of "$case_dir")" \
+      FM_KIMI_READY_POLLS=1 FM_KIMI_POLL_INTERVAL=0 \
+      run_spawn "$case_dir" "$id" "$case_dir/project" \
+        --harness kimi --mode no-mistakes --yolo off) || rc=$?
+    [ "$rc" -ne 0 ] || fail "failed Kimi delivery reported success: $out"
+    if [ "$outcome" = stopped ]; then
+      assert_absent "$case_dir/endpoint-live" \
+        "failed Kimi delivery left its endpoint running"
+      assert_absent "$(home_of "$case_dir")/state/$id.meta" \
+        "stopped Kimi worker retained its provisional task record"
+      [ "$(row_state "$case_dir" "$id")" = queued ] \
+        || fail "stopped Kimi delivery changed the backlog row"
+    else
+      assert_present "$case_dir/endpoint-live" \
+        "stuck Kimi endpoint did not remain observable"
+      assert_present "$(home_of "$case_dir")/state/$id.meta" \
+        "stuck Kimi worker lost its ownership record"
+      assert_contains "$out" "retaining task and busy records" \
+        "stuck Kimi worker did not report retained ownership"
+    fi
+  done
+  pass "failed Kimi delivery stops workers or retains their ownership"
+}
+
 test_dispatch_defers_interruption_across_backlog_commit() {
   local timing case_dir id out rc
   for timing in before after; do
@@ -868,6 +946,52 @@ test_space_containing_scout_report_marker_replays() {
     "report path from a space-containing data directory was lost during replay"
   assert_absent "$marker" "space-containing report marker remained after replay"
   pass "space-containing scout report paths round-trip through recovery"
+}
+
+test_non_ascii_close_marker_replays_across_locales() {
+  local direction writer_locale replay_locale utf8_locale case_dir id data backlog marker out rc
+  utf8_locale=$(locale -a 2>/dev/null | awk 'tolower($0) ~ /utf-?8/ { print; exit }')
+  [ -n "$utf8_locale" ] || {
+    pass "non-ASCII locale replay skipped without an installed UTF-8 locale"
+    return 0
+  }
+  for direction in utf8-to-c c-to-utf8; do
+    case "$direction" in
+      utf8-to-c) writer_locale=$utf8_locale; replay_locale=C ;;
+      c-to-utf8) writer_locale=C; replay_locale=$utf8_locale ;;
+    esac
+    id="atomic-nonascii-replay-$direction-b7"
+    case_dir=$(make_home "nonascii-replay-$direction")
+    data="$case_dir/café/data"
+    mkdir -p "$case_dir/café"
+    mv "$(home_of "$case_dir")/data" "$data"
+    backlog="$data/backlog.md"
+    tasks-axi add "$id" "item for $id" --kind scout --file "$backlog" >/dev/null
+    tasks-axi start "$id" --file "$backlog" >/dev/null
+    write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-nonascii-$direction"
+    mkdir -p "$data/$id"
+    printf 'findings\n' > "$data/$id/report.md"
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
+      FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
+      "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
+      || fail "could not record the non-ASCII scout's captain-call inventory"
+    break_verb "$case_dir" "done"
+    marker="$(home_of "$case_dir")/state/$id.backlog-close"
+
+    rc=0
+    out=$(LC_ALL="$writer_locale" FM_DATA_OVERRIDE="$data" \
+      run_teardown "$case_dir" "$id") || rc=$?
+    [ "$rc" -ne 0 ] || fail "$direction teardown unexpectedly completed"
+    assert_present "$marker" "$direction teardown recorded no pending close"
+    rm -f "$case_dir/fakebin/tasks-axi"
+
+    out=$(LC_ALL="$replay_locale" FM_DATA_OVERRIDE="$data" \
+      run_bootstrap "$case_dir")
+    [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = "done" ] \
+      || fail "$direction non-ASCII marker did not replay: $out"
+    assert_absent "$marker" "$direction non-ASCII marker remained after replay"
+  done
+  pass "non-ASCII close markers replay across process locales"
 }
 
 test_trailing_newline_data_path_fails_closed() {
@@ -1618,6 +1742,7 @@ test_dispatch_reports_an_incomplete_record_rollback
 test_dispatch_reports_an_incomplete_busy_rollback
 test_dispatch_rolls_back_before_a_failed_launch_delivery
 test_interrupted_kimi_delivery_preserves_live_worker_ownership
+test_failed_kimi_delivery_preserves_or_stops_worker_ownership
 test_dispatch_defers_interruption_across_backlog_commit
 test_dispatch_does_not_resurrect_a_row_closed_after_preflight
 test_dispatch_fails_when_its_row_vanishes_after_preflight
@@ -1626,6 +1751,7 @@ test_completion_closes_a_scout_with_its_report
 test_completion_refuses_a_legacy_record_without_an_incarnation
 test_completion_records_a_relative_report_for_relocated_data
 test_space_containing_scout_report_marker_replays
+test_non_ascii_close_marker_replays_across_locales
 test_trailing_newline_data_path_fails_closed
 test_control_character_data_path_is_refused_before_cleanup
 test_completion_preserves_records_when_meta_removal_fails

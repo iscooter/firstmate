@@ -380,7 +380,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
     *) FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"; return 1 ;;
   esac
   case "$data" in
-    */../*|*/..|*[![:print:]]*)
+    */../*|*/..)
       FM_BACKLOG_TRANSITION_ERROR="invalid data directory in pending-close record $marker"
       return 1
       ;;

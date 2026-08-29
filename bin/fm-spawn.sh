@@ -697,6 +697,7 @@ SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
+SPAWN_WORKER_LIVE=0
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 RELAUNCH_REPLACEMENT_PENDING=0
@@ -708,6 +709,15 @@ CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
 spawn_fresh_commit_rollback() {
+  if [ "$SPAWN_WORKER_LIVE" = 1 ]; then
+    fm_backend_kill "$BACKEND" "$T" '' "fm-$ID" >/dev/null 2>&1 || true
+    if fm_backend_target_exists "$BACKEND" "$T" "fm-$ID"; then
+      FM_BACKLOG_TRANSITION_ERROR="failed-dispatch endpoint $T remains live; retaining task and busy records for $ID"
+      echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+      return 1
+    fi
+    SPAWN_WORKER_LIVE=0
+  fi
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
       "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
@@ -3012,6 +3022,7 @@ trap 'SPAWN_DEFERRED_SIGNAL=HUP' HUP
 trap 'SPAWN_DEFERRED_SIGNAL=INT' INT
 trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
 spawn_send_key "$T" Enter
+SPAWN_WORKER_LIVE=1
 if [ "$HARNESS" = kimi ]; then
   KIMI_DELIVERY_FAILED=0
   if ! kimi_wait_for_ready; then
@@ -3081,9 +3092,9 @@ fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then
     if spawn_fresh_commit_rollback; then
-      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
+      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its endpoint was stopped and its provisional records were removed - return local copy $WT by hand, then re-run the spawn" >&2
     else
-      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta - close out endpoint $T and local copy $WT by hand, then remove the record and busy state before retrying" >&2
+      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; inspect endpoint $T and the retained ownership records before returning local copy $WT or retrying" >&2
     fi
   else
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
@@ -3093,6 +3104,7 @@ trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
 fi
+SPAWN_WORKER_LIVE=0
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
