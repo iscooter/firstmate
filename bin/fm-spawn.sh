@@ -3031,6 +3031,18 @@ if [ "$HARNESS" = kimi ]; then
   if [ "$KIMI_DELIVERY_FAILED" = 0 ] && ! kimi_wait_for_delivery; then
     kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
     [ -n "$SPAWN_DEFERRED_SIGNAL" ] || exit 1
+    KIMI_DELIVERY_FAILED=1
+  fi
+  # A deferred signal may make a readiness or delivery probe return failure.
+  # Never turn that failed delivery into a committed In-flight transition.
+  if [ "$KIMI_DELIVERY_FAILED" != 0 ]; then
+    trap - HUP INT TERM
+    case "$SPAWN_DEFERRED_SIGNAL" in
+      HUP) exit 129 ;;
+      INT) exit 130 ;;
+      TERM) exit 143 ;;
+      *) exit 1 ;;
+    esac
   fi
 fi
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then

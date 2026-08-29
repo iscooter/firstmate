@@ -181,6 +181,36 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
+interrupt_kimi_readiness() {  # <case-dir>
+  local case_dir=$1 home
+  home=$(home_of "$case_dir")
+  mkdir -p "$home/.kimi-code"
+  printf '# test config\n' > "$home/.kimi-code/config.toml"
+  fm_fake_exit0 "$case_dir/fakebin" kimi
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
+esac
+case "\${1:-}" in
+  display-message) printf 'firstmate\\n'; exit 0 ;;
+  capture-pane)
+    if [ ! -f "$case_dir/kimi-interrupted" ]; then
+      : > "$case_dir/kimi-interrupted"
+      spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+      case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
+      kill -TERM "\$spawn_pid"
+    fi
+    printf 'shell starting\\n$ \\n'
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
 break_meta_removal() {  # <case-dir> <meta-path>
   local case_dir=$1 meta=$2 real
   real=$(command -v rm)
@@ -607,6 +637,28 @@ test_dispatch_rolls_back_before_a_failed_launch_delivery() {
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "launch delivery failed after committing backlog state $(row_state "$case_dir" "$id")"
   pass "dispatch commits neither record nor backlog state before launch delivery succeeds"
+}
+
+test_interrupted_kimi_delivery_does_not_commit() {
+  local case_dir id out rc=0
+  id=atomic-dispatch-kimi-interrupted-b5
+  case_dir=$(make_home dispatch-kimi-interrupted "$id")
+  add_item "$case_dir" "$id"
+  interrupt_kimi_readiness "$case_dir"
+
+  out=$(FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+    run_spawn "$case_dir" "$id" "$case_dir/project" \
+      --harness kimi --mode no-mistakes --yolo off) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an interrupted Kimi readiness check reported success"
+  assert_contains "$out" "kimi did not show a verified ready signal" \
+    "interrupted Kimi readiness lacked its delivery-failure diagnostic"
+  [ "$(row_state "$case_dir" "$id")" = queued ] \
+    || fail "interrupted Kimi delivery committed the backlog row"
+  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
+    "interrupted Kimi delivery retained its provisional task record"
+  assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
+    "interrupted Kimi delivery retained its provisional busy generation"
+  pass "interrupted Kimi delivery commits neither record nor backlog state"
 }
 
 test_dispatch_defers_interruption_across_backlog_commit() {
@@ -1389,6 +1441,7 @@ test_dispatch_leaves_no_record_when_the_transition_fails
 test_dispatch_reports_an_incomplete_record_rollback
 test_dispatch_reports_an_incomplete_busy_rollback
 test_dispatch_rolls_back_before_a_failed_launch_delivery
+test_interrupted_kimi_delivery_does_not_commit
 test_dispatch_defers_interruption_across_backlog_commit
 test_dispatch_does_not_resurrect_a_row_closed_after_preflight
 test_dispatch_fails_when_its_row_vanishes_after_preflight
