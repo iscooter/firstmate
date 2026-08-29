@@ -191,11 +191,12 @@
 # success. A ship or scout dispatch therefore REFUSES up front, before any
 # endpoint, worktree, or record exists, when the home's backlog has no item for
 # the id or already records it as finished. A transition that fails after
-# publication removes the record and busy generation it just wrote; if launch
-# delivery already began, the reported failure tells the operator to close the
-# endpoint and local copy before retrying. A relaunch re-reads the row instead of
-# re-running the transition, so an already In-flight item is left untouched. The
-# transition is skipped entirely for --secondmate spawns (persistent agents are not work
+# publication stops and confirms the launched endpoint gone before removing the
+# record and busy generation it just wrote; if absence cannot be confirmed, it
+# retains both records and reports the unresolved endpoint. A relaunch re-reads
+# the row instead of re-running the transition, so an already In-flight item is
+# left untouched. The transition is skipped entirely for --secondmate spawns
+# (persistent agents are not work
 # items), on a config/backlog-backend=manual home, without a compatible
 # tasks-axi, and in a home that keeps no data/backlog.md.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
@@ -3068,10 +3069,12 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 SPAWN_DEFERRED_SIGNAL=
-# Once Enter submits the launch, every spawn owns a live worker, including homes
-# exempt from automatic backlog transitions. Defer termination until the common
-# commit point disarms EXIT rollback, or cleanup would erase an exempt worker's
-# published ownership records after its launch had already started.
+# Enter may start the worker before its submission command returns, so mark the
+# endpoint live first and fail toward a harmless confirmed-stop attempt rather
+# than orphaning a worker after an ambiguous interruption. This applies even to
+# homes exempt from automatic backlog transitions. Defer termination until the
+# common commit point disarms EXIT rollback, or cleanup could erase the
+# published ownership records of a worker whose launch had already started.
 trap 'SPAWN_DEFERRED_SIGNAL=HUP' HUP
 trap 'SPAWN_DEFERRED_SIGNAL=INT' INT
 trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
