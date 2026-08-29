@@ -708,11 +708,65 @@ RELAUNCH_REPLACEMENT_WT=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
+spawn_endpoint_confirmed_gone() {
+  local session window panes workspaces expected_title presence
+  case "$BACKEND" in
+    tmux)
+      case "$T" in
+        *:*) session=${T%%:*}; window=${T#*:} ;;
+        *) return 1 ;;
+      esac
+      [ -n "$session" ] && [ -n "$window" ] && [ "$window" != "$T" ] || return 1
+      panes=$(tmux list-windows -t "=$session" -F '#{window_name}' 2>/dev/null) || return 1
+      ! printf '%s\n' "$panes" | grep -Fxq -- "$window"
+      ;;
+    herdr)
+      fm_backend_source herdr || return 1
+      fm_backend_herdr_endpoint_confirmed_gone "$T"
+      ;;
+    zellij)
+      fm_backend_source zellij || return 1
+      fm_backend_zellij_parse_target "$T" || return 1
+      panes=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-panes --json 2>/dev/null) \
+        || return 1
+      presence=$(printf '%s' "$panes" | jq -er --argjson pane "$FM_BACKEND_ZELLIJ_PANE" '
+        if type != "array" then error("invalid pane inventory")
+        elif any(.[]; .id == $pane and .is_plugin == false) then "present"
+        else "gone"
+        end
+      ' 2>/dev/null) || return 1
+      [ "$presence" = gone ]
+      ;;
+    cmux)
+      fm_backend_source cmux || return 1
+      fm_backend_cmux_parse_target "$T" || return 1
+      workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) \
+        || return 1
+      expected_title=$(fm_backend_cmux_scoped_title "fm-$ID")
+      presence=$(printf '%s' "$workspaces" | jq -er \
+        --arg workspace "$FM_BACKEND_CMUX_WORKSPACE" --arg title "$expected_title" '
+        if (.workspaces | type) != "array" then error("invalid workspace inventory")
+        elif any(.workspaces[]; .id == $workspace or .title == $title) then "present"
+        else "gone"
+        end
+      ' 2>/dev/null) || return 1
+      [ "$presence" = gone ]
+      ;;
+    orca) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
 spawn_fresh_commit_rollback() {
   if [ "$SPAWN_WORKER_LIVE" = 1 ]; then
     fm_backend_kill "$BACKEND" "$T" '' "fm-$ID" >/dev/null 2>&1 || true
     if fm_backend_target_exists "$BACKEND" "$T" "fm-$ID"; then
       FM_BACKLOG_TRANSITION_ERROR="failed-dispatch endpoint $T remains live; retaining task and busy records for $ID"
+      echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+      return 1
+    fi
+    if ! spawn_endpoint_confirmed_gone; then
+      FM_BACKLOG_TRANSITION_ERROR="failed-dispatch endpoint $T could not be confirmed gone; retaining task and busy records for $ID"
       echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
       return 1
     fi

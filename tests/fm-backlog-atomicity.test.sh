@@ -212,7 +212,7 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
-fail_kimi_readiness() {  # <case-dir> <stopped|stuck>
+fail_kimi_readiness() {  # <case-dir> <stopped|stuck|unknown>
   local case_dir=$1 kill_mode=$2 home
   home=$(home_of "$case_dir")
   mkdir -p "$home/.kimi-code"
@@ -222,10 +222,18 @@ fail_kimi_readiness() {  # <case-dir> <stopped|stuck>
 #!/usr/bin/env bash
 case "\${1:-}" in
   kill-window)
-    [ "$kill_mode" = stuck ] || rm -f "\${FM_FAKE_ENDPOINT_LIVE:-}"
+    [ "$kill_mode" = stopped ] && rm -f "\${FM_FAKE_ENDPOINT_LIVE:-}"
+    [ "$kill_mode" != unknown ] || : > "$case_dir/backend-unqueryable"
     exit 0
     ;;
+  list-windows)
+    if [ "$kill_mode" != unknown ] || [ ! -f "$case_dir/backend-unqueryable" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
   display-message)
+    [ "$kill_mode" != unknown ] || [ ! -f "$case_dir/backend-unqueryable" ] || exit 1
     if [ -n "\${FM_FAKE_ENDPOINT_LIVE:-}" ] && [ ! -f "\$FM_FAKE_ENDPOINT_LIVE" ]; then
       exit 1
     fi
@@ -234,6 +242,13 @@ case "\${1:-}" in
       *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
     esac
     printf 'firstmate\\n'
+    exit 0
+    ;;
+  send-keys)
+    case "\$*" in
+      *FM_ROOT_OVERRIDE=*) : > "$case_dir/launch-staged" ;;
+      *" Enter") [ ! -f "$case_dir/launch-staged" ] || : > "$case_dir/backend-unqueryable" ;;
+    esac
     exit 0
     ;;
   capture-pane) printf 'shell starting\\n$ \\n'; exit 0 ;;
@@ -265,6 +280,35 @@ case "\${1:-}" in
       kill -TERM "\$spawn_pid"
     fi
     printf 'shell starting\\n$ \\n'
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
+make_endpoint_unqueryable_after_launch() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  kill-window) : > "$case_dir/backend-unqueryable"; exit 0 ;;
+  list-windows)
+    [ ! -f "$case_dir/backend-unqueryable" ] && exit 0
+    exit 1
+    ;;
+  display-message)
+    [ ! -f "$case_dir/backend-unqueryable" ] || exit 1
+    case "\$*" in *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+    printf 'firstmate\\n'
+    exit 0
+    ;;
+  send-keys)
+    case "\$*" in
+      *FM_ROOT_OVERRIDE=*) : > "$case_dir/launch-staged" ;;
+      *" Enter") [ ! -f "$case_dir/launch-staged" ] || : > "$case_dir/backend-unqueryable" ;;
+    esac
     exit 0
     ;;
 esac
@@ -757,14 +801,35 @@ test_failed_kimi_delivery_preserves_or_stops_worker_ownership() {
         || fail "stopped Kimi delivery changed the backlog row"
     else
       assert_present "$case_dir/endpoint-live" \
-        "stuck Kimi endpoint did not remain observable"
+        "$outcome Kimi endpoint did not remain observable"
       assert_present "$(home_of "$case_dir")/state/$id.meta" \
-        "stuck Kimi worker lost its ownership record"
+        "$outcome Kimi worker lost its ownership record"
       assert_contains "$out" "retaining task and busy records" \
-        "stuck Kimi worker did not report retained ownership"
+        "$outcome Kimi worker did not report retained ownership"
     fi
   done
   pass "failed Kimi delivery stops workers or retains their ownership"
+}
+
+test_unqueryable_failed_dispatch_retains_ownership() {
+  local case_dir id out rc=0
+  id=atomic-dispatch-unqueryable-b5
+  case_dir=$(make_home dispatch-unqueryable "$id")
+  add_item "$case_dir" "$id"
+  break_verb "$case_dir" start
+  make_endpoint_unqueryable_after_launch "$case_dir"
+
+  out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "unqueryable failed dispatch reported success"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "unqueryable failed dispatch removed its task record: $out"
+  assert_present "$(home_of "$case_dir")/state/$id.busy-state" \
+    "unqueryable failed dispatch removed its busy record"
+  assert_contains "$out" "could not be confirmed gone" \
+    "unqueryable failed dispatch did not report its unresolved endpoint"
+  [ "$(row_state "$case_dir" "$id")" = queued ] \
+    || fail "unqueryable failed dispatch changed the backlog row"
+  pass "unqueryable failed dispatch retains durable ownership"
 }
 
 test_dispatch_defers_interruption_across_backlog_commit() {
@@ -1743,6 +1808,7 @@ test_dispatch_reports_an_incomplete_busy_rollback
 test_dispatch_rolls_back_before_a_failed_launch_delivery
 test_interrupted_kimi_delivery_preserves_live_worker_ownership
 test_failed_kimi_delivery_preserves_or_stops_worker_ownership
+test_unqueryable_failed_dispatch_retains_ownership
 test_dispatch_defers_interruption_across_backlog_commit
 test_dispatch_does_not_resurrect_a_row_closed_after_preflight
 test_dispatch_fails_when_its_row_vanishes_after_preflight
