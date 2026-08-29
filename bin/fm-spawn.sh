@@ -3003,11 +3003,13 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 SPAWN_DEFERRED_SIGNAL=
-if [ "$BACKLOG_TRANSITION" = 1 ]; then
-  trap 'SPAWN_DEFERRED_SIGNAL=HUP' HUP
-  trap 'SPAWN_DEFERRED_SIGNAL=INT' INT
-  trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
-fi
+# Once Enter submits the launch, every spawn owns a live worker, including homes
+# exempt from automatic backlog transitions. Defer termination until the common
+# commit point disarms EXIT rollback, or cleanup would erase an exempt worker's
+# published ownership records after its launch had already started.
+trap 'SPAWN_DEFERRED_SIGNAL=HUP' HUP
+trap 'SPAWN_DEFERRED_SIGNAL=INT' INT
+trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
 spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   KIMI_DELIVERY_FAILED=0
@@ -3102,7 +3104,11 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
     INT) SPAWN_DEFERRED_SIGNAL_STATUS=130 ;;
     TERM) SPAWN_DEFERRED_SIGNAL_STATUS=143 ;;
   esac
-  echo "error: spawn of $ID was interrupted after launch delivery began; its paired task record and In-flight backlog state were preserved" >&2
+  if [ "$BACKLOG_TRANSITION" = 1 ]; then
+    echo "error: spawn of $ID was interrupted after launch delivery began; its paired task record and In-flight backlog state were preserved" >&2
+  else
+    echo "error: spawn of $ID was interrupted after launch delivery began; its published task and busy records were preserved" >&2
+  fi
   exit "$SPAWN_DEFERRED_SIGNAL_STATUS"
 fi
 

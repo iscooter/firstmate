@@ -148,6 +148,25 @@ SH
   chmod +x "$case_dir/fakebin/tasks-axi"
 }
 
+interrupt_spawn_during_launch_submit() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+case "\${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys)
+    if [ "\$#" -eq 4 ] && [ "\${4:-}" = Enter ] && [ ! -e "$case_dir/launch-interrupted" ]; then
+      : > "$case_dir/launch-interrupted"
+      kill -TERM "\$PPID"
+    fi
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
 change_row_on_second_show() {  # <case-dir> <done|rm>
   local case_dir=$1 action=$2 real
   real=$(command -v tasks-axi)
@@ -1489,6 +1508,31 @@ test_home_without_a_backlog_dispatches_and_completes() {
   pass "a home with no backlog remains exempt from lifecycle transitions"
 }
 
+test_interrupted_exempt_spawn_preserves_published_ownership() {
+  local exemption case_dir id out rc
+  for exemption in no-backlog manual; do
+    id="atomic-$exemption-interrupted-b12"
+    case_dir=$(make_home "$exemption-interrupted" "$id")
+    if [ "$exemption" = no-backlog ]; then
+      rm -f "$(backlog_of "$case_dir")"
+    else
+      printf '%s\n' manual > "$(home_of "$case_dir")/config/backlog-backend"
+    fi
+    interrupt_spawn_during_launch_submit "$case_dir"
+
+    rc=0
+    out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+    [ "$rc" -eq 143 ] || fail "an interrupted $exemption spawn exited $rc instead of 143: $out"
+    assert_contains "$out" "published task and busy records were preserved" \
+      "an interrupted $exemption spawn did not report its durable ownership"
+    assert_present "$(home_of "$case_dir")/state/$id.meta" \
+      "an interrupted $exemption spawn removed its published task record"
+    assert_present "$(home_of "$case_dir")/state/$id.busy-state" \
+      "an interrupted $exemption spawn removed its published busy record"
+  done
+  pass "interrupted backlog-exempt spawns retain durable ownership after launch submission"
+}
+
 test_manual_backend_home_dispatches_and_completes_without_touching_the_backlog() {
   local case_dir id out
   id=atomic-manual-b12
@@ -1603,6 +1647,7 @@ test_bootstrap_stops_when_data_disappears_before_reconciliation
 test_bootstrap_addressing_exemptions_remain_nonfatal
 test_recovery_leaves_a_captain_held_item_alone
 test_home_without_a_backlog_dispatches_and_completes
+test_interrupted_exempt_spawn_preserves_published_ownership
 test_manual_backend_home_dispatches_and_completes_without_touching_the_backlog
 test_a_secondmate_home_keeps_its_own_books
 test_a_persistent_secondmate_is_never_a_backlog_item
