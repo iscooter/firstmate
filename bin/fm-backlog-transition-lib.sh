@@ -55,8 +55,19 @@ FM_BACKLOG_ROW_ERROR=
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_BACKLOG_CLOSE_REPLAY_RESULT=
 
+fm_backlog_control_bytes_valid() {  # <allow-newline: 0|1> <od-bytes>
+  printf '%s\n' "$2" | awk -v allow_newline="$1" '
+    { for (i = 1; i <= NF; i++) if (($i < 32 && !(allow_newline && $i == 10)) || $i == 127) exit 1 }
+  '
+}
+
 fm_backlog_data_absolute() {
-  local data=$1
+  local data=$1 raw_bytes
+  raw_bytes=$(printf '%s' "$data" | LC_ALL=C od -An -t u1) || return 1
+  if ! fm_backlog_control_bytes_valid 0 "$raw_bytes"; then
+    printf 'error: data directory contains an invalid control byte\n' >&2
+    return 2
+  fi
   if ! data=$(CDPATH='' cd -- "$data" 2>/dev/null && pwd -P); then
     return 1
   fi
@@ -331,9 +342,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
     FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
     return 1
   }
-  if ! printf '%s\n' "$raw_bytes" | awk '
-    { for (i = 1; i <= NF; i++) if (($i < 32 && $i != 10) || $i == 127) exit 1 }
-  '; then
+  if ! fm_backlog_control_bytes_valid 1 "$raw_bytes"; then
     FM_BACKLOG_TRANSITION_ERROR="invalid control byte in pending-close record $marker"
     return 1
   fi

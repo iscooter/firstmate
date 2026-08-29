@@ -233,8 +233,18 @@ esac
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
+# shellcheck source=bin/fm-tasks-axi-lib.sh
+. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-backlog-transition-lib.sh
+. "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+
 resolve_directory_input() {
-  local name=$1 path=$2 resolved
+  local name=$1 path=$2 resolved raw_bytes
+  raw_bytes=$(printf '%s' "$path" | LC_ALL=C od -An -t u1) || return 1
+  if ! fm_backlog_control_bytes_valid 0 "$raw_bytes"; then
+    echo "error: $name directory contains an invalid control byte" >&2
+    return 1
+  fi
   case "$path" in
     /*) printf '%s\n' "$path"; return 0 ;;
   esac
@@ -281,10 +291,6 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
-# shellcheck source=bin/fm-tasks-axi-lib.sh
-. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
-# shellcheck source=bin/fm-backlog-transition-lib.sh
-. "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent

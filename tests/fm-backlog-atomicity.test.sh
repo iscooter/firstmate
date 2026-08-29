@@ -843,18 +843,60 @@ test_space_containing_scout_report_marker_replays() {
   pass "space-containing scout report paths round-trip through recovery"
 }
 
+test_trailing_newline_data_path_fails_closed() {
+  local case_dir home id data backlog_alias out rc=0
+  id=atomic-newline-data-refusal-c8
+  case_dir=$(make_home newline-data-refusal "$id")
+  home=$(home_of "$case_dir")
+  data="$home/data"$'\n'
+  mv "$home/data" "$data"
+  mkdir -p "$home/data/$id"
+  cp "$data/$id/brief.md" "$home/data/$id/brief.md"
+  ln -s "$data" "$case_dir/data-alias"
+  backlog_alias="$case_dir/data-alias/backlog.md"
+  tasks-axi add "$id" "item for $id" --kind ship --file "$backlog_alias" >/dev/null
+
+  out=$(FM_DATA_OVERRIDE="$data" run_ship_spawn "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "trailing-newline data path bypassed dispatch transition"
+  assert_absent "$home/state/$id.meta" \
+    "trailing-newline dispatch published a task record"
+  [ "$(tasks-axi show "$id" --file "$backlog_alias" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = queued ] \
+    || fail "trailing-newline dispatch changed the real backlog row: $out"
+
+  tasks-axi start "$id" --file "$backlog_alias" >/dev/null
+  write_task_meta "$case_dir" "$id" ship local-only "spawn_gen=spawn-newline-data"
+  rc=0
+  out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "trailing-newline data path bypassed completion transition"
+  assert_present "$home/state/$id.meta" \
+    "trailing-newline teardown removed the task record"
+  assert_absent "$home/state/$id.backlog-close" \
+    "trailing-newline teardown published a close marker"
+  [ "$(tasks-axi show "$id" --file "$backlog_alias" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = in_flight ] \
+    || fail "trailing-newline teardown changed the real backlog row: $out"
+  pass "control-byte data paths fail closed before paired transitions"
+}
+
 test_control_character_data_path_is_refused_before_cleanup() {
   local case_dir id data backlog marker out rc=0
   id=atomic-control-data-refusal-b7
-  case_dir=$(make_home control-data-refusal)
+  case_dir=$(make_home control-data-refusal "$id")
   data="$case_dir/crew"$'\t'"data"
   mv "$(home_of "$case_dir")/data" "$data"
   backlog="$data/backlog.md"
   tasks-axi add "$id" "item for $id" --kind ship --file "$backlog" >/dev/null
+
+  out=$(FM_DATA_OVERRIDE="$data" run_ship_spawn "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "control-character data path passed dispatch preflight"
+  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
+    "control-character dispatch published a task record"
+  [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = queued ] \
+    || fail "control-character dispatch changed the backlog row: $out"
+
   tasks-axi start "$id" --file "$backlog" >/dev/null
   write_task_meta "$case_dir" "$id" ship local-only "spawn_gen=spawn-control-data"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-
+  rc=0
   out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "control-character data path passed close preflight"
   assert_present "$(home_of "$case_dir")/state/$id.meta" \
@@ -1512,6 +1554,7 @@ test_completion_closes_a_scout_with_its_report
 test_completion_refuses_a_legacy_record_without_an_incarnation
 test_completion_records_a_relative_report_for_relocated_data
 test_space_containing_scout_report_marker_replays
+test_trailing_newline_data_path_fails_closed
 test_control_character_data_path_is_refused_before_cleanup
 test_completion_preserves_records_when_meta_removal_fails
 test_completion_fails_loudly_and_records_the_close_it_still_owes
