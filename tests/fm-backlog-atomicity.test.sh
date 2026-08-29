@@ -807,6 +807,42 @@ test_completion_records_a_relative_report_for_relocated_data() {
   pass "completion records relocated scout reports relative to the backlog root"
 }
 
+test_space_containing_scout_report_marker_replays() {
+  local case_dir id data backlog marker out rc=0
+  id=atomic-space-report-replay-b7
+  case_dir=$(make_home space-report-replay)
+  data="$case_dir/crew space/data"
+  mkdir -p "$case_dir/crew space"
+  mv "$(home_of "$case_dir")/data" "$data"
+  backlog="$data/backlog.md"
+  tasks-axi add "$id" "item for $id" --kind scout --file "$backlog" >/dev/null
+  tasks-axi start "$id" --file "$backlog" >/dev/null
+  write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-space-report"
+  mkdir -p "$data/$id"
+  printf 'findings\n' > "$data/$id/report.md"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
+    FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
+    "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
+    || fail "could not record the space-path scout's captain-call inventory"
+  break_verb "$case_dir" done
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+
+  out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "space-path scout teardown unexpectedly completed"
+  assert_present "$marker" "space-path scout teardown recorded no pending close"
+  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
+    "space-path scout teardown retained meta after recording its close"
+  rm -f "$case_dir/fakebin/tasks-axi"
+
+  out=$(FM_DATA_OVERRIDE="$data" run_bootstrap "$case_dir")
+  [ "$(tasks-axi show "$id" --file "$backlog" 2>/dev/null | sed -n 's/^  state: *//p' | head -1)" = "done" ] \
+    || fail "space-containing report marker did not replay: $out"
+  assert_grep "data/$id/report.md" "$backlog" \
+    "report path from a space-containing data directory was lost during replay"
+  assert_absent "$marker" "space-containing report marker remained after replay"
+  pass "space-containing scout report paths round-trip through recovery"
+}
+
 test_completion_preserves_records_when_meta_removal_fails() {
   local case_dir id meta marker out rc=0
   id=atomic-close-meta-remove-failure-b7
@@ -1238,12 +1274,15 @@ test_recovery_rejects_a_symlinked_close_marker() {
   printf 'id=%s\ndata=%s\nspawn_gen=spawn-symlink\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" > "$payload"
   ln -s "$payload" "$marker"
+  rm -f "$payload"
 
   out=$(run_bootstrap "$case_dir")
-  [ -L "$marker" ] || fail "symlinked close marker was consumed: $out"
+  [ -L "$marker" ] || fail "dangling symlink close marker was consumed: $out"
+  assert_contains "$out" "recorded backlog close could not be replayed" \
+    "dangling symlink close marker was silently skipped"
   [ "$(row_state "$case_dir" "$id")" = in_flight ] \
     || fail "symlinked close marker changed the backlog row: $out"
-  pass "recovery rejects symlinked close markers"
+  pass "recovery reports and rejects dangling symlink close markers"
 }
 
 test_recovery_drops_a_close_for_a_newer_meta_incarnation() {
@@ -1450,6 +1489,7 @@ test_completion_closes_a_local_only_ship_before_reporting_success
 test_completion_closes_a_scout_with_its_report
 test_completion_refuses_a_legacy_record_without_an_incarnation
 test_completion_records_a_relative_report_for_relocated_data
+test_space_containing_scout_report_marker_replays
 test_completion_preserves_records_when_meta_removal_fails
 test_completion_fails_loudly_and_records_the_close_it_still_owes
 test_completion_fails_when_its_close_marker_cannot_be_removed

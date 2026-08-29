@@ -1211,7 +1211,7 @@ backlog_record_reconcile() {
 
   # Finish any close an interrupted cleanup recorded but never landed.
   for marker in "$STATE"/*.backlog-close; do
-    [ -e "$marker" ] || continue
+    [ -e "$marker" ] || [ -L "$marker" ] || continue
     label=$(basename "$marker" .backlog-close)
     meta_lock=$(fm_meta_lock_path "$STATE/$label.meta") || continue
     fm_lock_try_acquire "$meta_lock" || continue
@@ -1303,7 +1303,7 @@ fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
   BOOTSTRAP_BACKLOG_GATE_KIND=secondmate
   for BOOTSTRAP_BACKLOG_MARKER in "$STATE"/*.backlog-close; do
-    [ -e "$BOOTSTRAP_BACKLOG_MARKER" ] || continue
+    [ -e "$BOOTSTRAP_BACKLOG_MARKER" ] || [ -L "$BOOTSTRAP_BACKLOG_MARKER" ] || continue
     BOOTSTRAP_BACKLOG_GATE_KIND=ship
     break
   done

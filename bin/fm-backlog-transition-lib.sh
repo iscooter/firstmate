@@ -498,8 +498,9 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
         --report)
           arg_value=${args[1]}
           [ "${#arg_value}" -le 4096 ] \
+            && [ -n "${arg_value// /}" ] \
             && case "$arg_value" in
-              ''|-*|/*|../*|*/../*|*/..|*[!A-Za-z0-9._/-]*) false ;;
+              -*|/*|../*|*/../*|*/..) false ;;
               *) true ;;
             esac
           ;;
