@@ -309,7 +309,7 @@ fm_backlog_close_marker_path() {  # <state-dir> <id>
 # Record the exact close a teardown is about to perform. Refuses an argument
 # carrying a newline rather than writing a record that cannot be read back.
 fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
-  local state=$1 id=$2 data spawn_gen=$4 marker tmp arg
+  local state=$1 id=$2 data spawn_gen=$4 marker tmp arg previous_arg=''
   if ! data=$(fm_backlog_data_absolute "$3"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $3"
     return 1
@@ -325,7 +325,12 @@ fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [fl
       case "$arg" in
         *$'\n'*) return 1 ;;
       esac
-      printf 'arg=%s\n' "$arg"
+      if [ "$previous_arg" = --note ] && [ "$arg" = "local main" ]; then
+        printf 'arg=local%%20main\n'
+      else
+        printf 'arg=%s\n' "$arg"
+      fi
+      previous_arg=$arg
     done
   } > "$tmp" || { rm -f "$tmp"; return 1; }
   fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-close record" \
@@ -347,6 +352,7 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 authorized_data data_resolved
   local id='' data='' marker_spawn_gen='' meta_spawn_gen line row_state
+  local arg_value url_tail url_authority url_path
   local marker_name expected_id id_count=0 data_count=0 spawn_gen_count=0
   local args=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
@@ -414,16 +420,35 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     0) ;;
     2)
       case "${args[0]}" in
-        --note) [ "${args[1]}" = "local main" ] ;;
+        --note)
+          [ "${args[1]}" = "local%20main" ] && args[1]="local main"
+          ;;
         --pr)
-          case "${args[1]}" in
-            http://*|https://*) case "${args[1]}" in *[![:print:]]*) false ;; *) true ;; esac ;;
+          arg_value=${args[1]}
+          case "$arg_value" in
+            http://*|https://*) ;;
             *) false ;;
-          esac
+          esac \
+            && case "$arg_value" in
+              *[[:space:]]*|*[!A-Za-z0-9:/?\&=._#%+~@-]*) false ;;
+              *) true ;;
+            esac \
+            && {
+              url_tail=${arg_value#*://}
+              url_authority=${url_tail%%/*}
+              url_path=${url_tail#*/}
+              [ "$url_path" != "$url_tail" ] \
+                && case "$url_authority" in
+                  ''|[-.]*|*[-.]|*..*|*[!A-Za-z0-9._:-]*) false ;;
+                  *[A-Za-z0-9]*) true ;;
+                  *) false ;;
+                esac \
+                && case "$url_path" in *[A-Za-z0-9]*) true ;; *) false ;; esac
+            }
           ;;
         --report)
           case "${args[1]}" in
-            ''|-*|/*|../*|*/../*|*/..|*[![:print:]]*) false ;;
+            ''|-*|/*|../*|*/../*|*/..|*[[:space:]]*|*[![:print:]]*) false ;;
             *) true ;;
           esac
           ;;

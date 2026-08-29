@@ -1237,6 +1237,10 @@ backlog_record_reconcile() {
     id=$(basename "$meta" .meta)
     meta_lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$meta_lock" || continue
+    if [ -e "$STATE/$id.backlog-close" ] || [ -L "$STATE/$id.backlog-close" ]; then
+      fm_lock_release "$meta_lock"
+      continue
+    fi
     if [ -e "$meta" ] \
        && [ "$(fm_meta_get "$meta" kind)" != secondmate ] \
        && [ "$(fm_meta_get "$meta" cleanup_recovery)" != orca ]; then

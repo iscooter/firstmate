@@ -334,7 +334,7 @@ test_recovery_uses_the_parent_of_a_trailing_slash_data_record() {
   tasks-axi add "$id" "item for $id" --kind ship --file "$backlog" >/dev/null
   tasks-axi start "$id" --file "$backlog" >/dev/null
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s/\nspawn_gen=spawn-relocated-recovery\narg=--note\narg=local main\n' "$id" "$relocated" > "$marker"
+  printf 'id=%s\ndata=%s/\nspawn_gen=spawn-relocated-recovery\narg=--note\narg=local%%20main\n' "$id" "$relocated" > "$marker"
   require_show_cwd "$case_dir" "$(cd "$case_dir" && pwd -P)"
 
   out=$(FM_DATA_OVERRIDE="$relocated/" run_bootstrap "$case_dir")
@@ -823,7 +823,7 @@ test_recovery_retries_when_a_close_marker_cannot_be_removed() {
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-retry\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-retry\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" > "$marker"
   break_meta_removal "$case_dir" "$marker"
 
@@ -921,7 +921,7 @@ test_recovery_preserves_a_close_when_the_backlog_cannot_be_read() {
   case_dir=$(make_home heal-read-error)
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-heal-read\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-heal-read\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
   break_verb "$case_dir" show
@@ -948,7 +948,7 @@ test_recovery_finishes_a_close_for_the_same_meta_incarnation() {
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-one"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
 
@@ -970,7 +970,7 @@ test_recovery_preserves_both_records_when_meta_removal_fails() {
   start_item "$case_dir" "$id"
   meta="$(home_of "$case_dir")/state/$id.meta"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-one"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
   break_meta_removal "$case_dir" "$meta"
@@ -1003,7 +1003,7 @@ test_recovery_rejects_a_marker_for_another_task_identity() {
   start_item "$case_dir" "$target_id"
   write_task_meta "$case_dir" "$target_id" ship no-mistakes "spawn_gen=spawn-marker-target"
   marker="$(home_of "$case_dir")/state/$locked_id.backlog-close"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-target\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-marker-target\narg=--note\narg=local%%20main\n' \
     "$target_id" "$(home_of "$case_dir")/data" > "$marker"
 
   out=$(run_bootstrap "$case_dir")
@@ -1026,7 +1026,7 @@ test_recovery_rejects_a_foreign_data_directory() {
   start_item "$foreign_case" "$id"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-foreign-data"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-foreign-data\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-foreign-data\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$foreign_case")/data" > "$marker"
 
   out=$(run_bootstrap "$case_dir")
@@ -1048,7 +1048,7 @@ test_recovery_rejects_an_unterminated_unknown_field() {
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-unterminated-field"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-unterminated-field\narg=--note\narg=local main\nunknown=value' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-unterminated-field\narg=--note\narg=local%%20main\nunknown=value' \
     "$id" "$(home_of "$case_dir")/data" > "$marker"
 
   out=$(run_bootstrap "$case_dir")
@@ -1070,7 +1070,7 @@ test_recovery_rejects_lexical_data_traversal() {
   data="$(home_of "$case_dir")/data"
   mkdir -p "$data/sub"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s/sub/..\nspawn_gen=spawn-data-traversal\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s/sub/..\nspawn_gen=spawn-data-traversal\narg=--note\narg=local%%20main\n' \
     "$id" "$data" > "$marker"
 
   out=$(run_bootstrap "$case_dir")
@@ -1080,6 +1080,25 @@ test_recovery_rejects_lexical_data_traversal() {
   [ "$(row_state "$case_dir" "$id")" = in_flight ] \
     || fail "lexical data traversal changed the backlog row: $out"
   pass "recovery rejects lexical traversal before resolving marker data"
+}
+
+test_failed_close_replay_is_not_started_as_live_work() {
+  local case_dir id marker out
+  id=atomic-pending-close-not-started-b12
+  case_dir=$(make_home pending-close-not-started)
+  add_item "$case_dir" "$id"
+  write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-pending-close"
+  marker="$(home_of "$case_dir")/state/$id.backlog-close"
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-pending-close\narg=--pr\narg=https://\n' \
+    "$id" "$(home_of "$case_dir")/data" > "$marker"
+
+  out=$(run_bootstrap "$case_dir")
+  assert_present "$marker" "failed close replay discarded its pending marker"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "failed close replay removed its task record"
+  [ "$(row_state "$case_dir" "$id")" = queued ] \
+    || fail "retained pending close was started as live work: $out"
+  pass "a retained pending close is never started by reconciliation"
 }
 
 test_recovery_rejects_invalid_close_arguments() {
@@ -1107,7 +1126,7 @@ test_recovery_rejects_a_symlinked_close_marker() {
   start_item "$case_dir" "$id"
   payload="$(home_of "$case_dir")/state/marker-payload"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-symlink\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-symlink\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" > "$payload"
   ln -s "$payload" "$marker"
 
@@ -1125,7 +1144,7 @@ test_recovery_drops_a_close_for_a_newer_meta_incarnation() {
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-two"
-  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\nspawn_gen=spawn-one\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
 
@@ -1146,7 +1165,7 @@ test_recovery_rejects_a_legacy_close_without_an_incarnation() {
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship no-mistakes "spawn_gen=spawn-two"
-  printf 'id=%s\ndata=%s\narg=--note\narg=local main\n' \
+  printf 'id=%s\ndata=%s\narg=--note\narg=local%%20main\n' \
     "$id" "$(home_of "$case_dir")/data" \
     > "$(home_of "$case_dir")/state/$id.backlog-close"
 
@@ -1336,6 +1355,7 @@ test_recovery_rejects_a_marker_for_another_task_identity
 test_recovery_rejects_a_foreign_data_directory
 test_recovery_rejects_an_unterminated_unknown_field
 test_recovery_rejects_lexical_data_traversal
+test_failed_close_replay_is_not_started_as_live_work
 test_recovery_rejects_invalid_close_arguments
 test_recovery_rejects_a_symlinked_close_marker
 test_recovery_drops_a_close_for_a_newer_meta_incarnation
