@@ -824,7 +824,7 @@ test_space_containing_scout_report_marker_replays() {
     FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
     "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
     || fail "could not record the space-path scout's captain-call inventory"
-  break_verb "$case_dir" done
+  break_verb "$case_dir" "done"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
 
   out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
