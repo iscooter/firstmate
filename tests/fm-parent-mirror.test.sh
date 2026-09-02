@@ -219,6 +219,25 @@ test_open_decision_thresholded_then_closed() {
   pass "an open decision is raised past the threshold and closed with the child's own close"
 }
 
+test_failed_decision_close_retries_without_child_change() {
+  local rc=0
+  make_world close-retry; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'needs-decision [key=api]: choose A or B'
+  sweep "$MATE" 1000 >/dev/null || fail "first sweep failed"
+  sweep "$MATE" 1060 >/dev/null || fail "opening sweep failed"
+  ledger "$MATE" child 'resolved [key=api]: chose A'
+  chmod 0400 "$(parent_channel)"
+  sweep "$MATE" 1100 >/dev/null 2>&1 || rc=$?
+  chmod 0600 "$(parent_channel)"
+  [ "$rc" -ne 0 ] || fail "an unwritable parent close reported success"
+  [ "$(channel_count 'resolved [key=mirror-child-api]')" = 0 ] || fail "the failed close was unexpectedly delivered"
+  sweep "$MATE" 1101 >/dev/null || fail "unchanged retry sweep failed"
+  [ "$(channel_count 'resolved [key=mirror-child-api]')" = 1 ] || fail "the failed close was not retried"
+  [ -z "$(parent_open_decisions)" ] || fail "the retried close left the parent decision open"
+  pass "a failed decision close retries without another child append"
+}
+
 # The same key re-opened after a close, even with the same note, is a new
 # opening: it is raised and closed again rather than lost to deduplication.
 test_reopened_decision_is_raised_again() {
@@ -539,6 +558,7 @@ test_scout_report_pointer
 test_partial_line_waits_for_newline
 test_partial_thresholded_outcomes_do_not_age
 test_open_decision_thresholded_then_closed
+test_failed_decision_close_retries_without_child_change
 test_reopened_decision_is_raised_again
 test_decision_handled_inside_threshold_is_silent
 test_failed_line_thresholded_and_superseded

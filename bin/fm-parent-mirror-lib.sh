@@ -266,7 +266,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   local child=$1 meta=$2 orphan=$3 deliver_now=${4:-0} status record now open_secs
   local size ident offset rec_ident incarnation rec_incarnation complete_size=0
   local terminal_line terminal_first_seen terminal_reported captured prefix
-  local open_lines='' next_open='' close_failed='' fold='' changed=0 rc=0
+  local open_lines='' next_open='' close_failed='' fold='' changed=0 refold=0 rc=0
   local chunk line verb note key line_offset line_start committed context last last_verb
   local entry entry_key entry_seen entry_mirrored entry_origin origins origin fold_verb fold_note fold_entry age timing
   local LC_ALL=C
@@ -417,7 +417,14 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   #    open, deliver what stood past the threshold, close what folded closed.
   #    An opening is (key, origin line): a key re-opened at a later line is a
   #    new opening, closed and re-raised separately.
-  if [ "$changed" -eq 1 ] || [ ! -f "$record" ]; then
+  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
+    [ "$entry_mirrored" = 1 ] || continue
+    refold=1
+    break
+  done <<EOF
+$open_lines
+EOF
+  if [ "$changed" -eq 1 ] || [ ! -f "$record" ] || [ "$refold" -eq 1 ]; then
     fold=$(status_open_decisions "$prefix")
     origins=$(_fm_status_open_decision_origins "$prefix")
   else
@@ -434,7 +441,7 @@ EOF
   # Close what is no longer open at the same origin.
   next_open=''
   close_failed=''
-    while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
+  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
       [ -n "$entry_key" ] || continue
       origin=$(_fm_parent_mirror_origin_of "$origins" "$entry_key") || origin=''
       if _fm_parent_mirror_fold_has "$fold" "$entry_key" && [ "$origin" = "$entry_origin" ]; then
@@ -456,7 +463,7 @@ EOF
   open_lines=$next_open
   # Age and deliver what is open.
   next_open=$close_failed
-    while IFS=$'\t' read -r key fold_verb fold_note; do
+  while IFS=$'\t' read -r key fold_verb fold_note; do
       [ -n "$key" ] || continue
       origin=$(_fm_parent_mirror_origin_of "$origins" "$key") || origin=0
       entry=$(_fm_parent_mirror_open_entry "$open_lines" "$key") || entry="$key|$now|0|$origin"
