@@ -496,7 +496,7 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints the resolved id or fails
 }
 
 command_hold() {
-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind occurrence current_generation
+  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind occurrence current_generation resolution_generation
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -558,7 +558,10 @@ command_hold() {
     occurrence=$current_generation
     body_has_hold_state_block "$body" || write_hold_generation "$id" "$occurrence" "$body"
   else
-    if [ -n "$current_generation" ]; then
+    resolution_generation=$(recorded_resolution_generation "$body" || true)
+    if [ -n "$current_generation" ] && [ "$resolution_generation" != "$current_generation" ]; then
+      occurrence=$current_generation
+    elif [ -n "$current_generation" ]; then
       occurrence=$((current_generation + 1))
     else
       occurrence=$(( $(resolution_record_count "$body") + 1 ))

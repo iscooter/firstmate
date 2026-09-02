@@ -278,6 +278,39 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
   [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call-1\]' "$channel")" = 1 ] \
     || fail "an idempotent answer retry duplicated the parent close"
 
+  cat > "$home/fakebin/tasks-axi" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = hold ] && [ ! -e "$FM_HOME/hold-failed-once" ]; then
+  : > "$FM_HOME/hold-failed-once"
+  exit 1
+fi
+exec "$REAL_TASKS_AXI" "$@"
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  if run_captain "$home" hold mate-interrupted-hold \
+    --title "Recover interrupted hold" --reason "captain interrupted hold pending" --repo sample >/dev/null 2>&1; then
+    fail "captain hold did not reproduce the transient hold failure"
+  fi
+  run_captain "$home" hold mate-interrupted-hold \
+    --title "Recover interrupted hold" --reason "captain interrupted hold pending" --repo sample >/dev/null \
+    || fail "captain hold did not recover after the transient failure"
+  [ "$(grep -c 'needs-decision \[key=captain-hold-mate-interrupted-hold-1\]' "$channel")" = 1 ] \
+    || fail "recovered first hold did not publish occurrence 1 exactly once"
+  if grep -F 'captain-hold-mate-interrupted-hold-2' "$channel" >/dev/null; then
+    fail "failed first hold consumed an occurrence"
+  fi
+  printf 'release interrupted hold\n' > "$home/interrupted-hold.txt"
+  run_captain "$home" answer mate-interrupted-hold --decision-file "$home/interrupted-hold.txt" --release >/dev/null \
+    || fail "could not release the recovered first hold"
+  run_captain "$home" hold mate-interrupted-hold \
+    --title "Recover interrupted hold" --reason "captain interrupted hold pending" --repo sample >/dev/null \
+    || fail "could not re-hold after the recovered occurrence"
+  grep -Fx 'needs-decision [key=captain-hold-mate-interrupted-hold-2]: captain hold mate-interrupted-hold occurrence 2: captain interrupted hold pending' "$channel" >/dev/null \
+    || fail "completed recovered hold did not advance to occurrence 2"
+  run_captain "$home" answer mate-interrupted-hold --decision-file "$home/interrupted-hold.txt" --release >/dev/null \
+    || fail "could not release the second interrupted-hold occurrence"
+  rm -f "$home/fakebin/tasks-axi"
+
   run_captain "$home" hold mate-release-call \
     --title "Release held work" --reason "captain release pending" --repo sample >/dev/null \
     || fail "could not hold releasable work in the mate home"
