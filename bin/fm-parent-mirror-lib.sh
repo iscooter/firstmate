@@ -232,13 +232,22 @@ _fm_parent_mirror_diagnostic() {  # <rc>
   esac
 }
 
+_fm_parent_mirror_dir_ready() {  # <dir>
+  local dir=$1
+  if [ -e "$dir" ] || [ -L "$dir" ]; then
+    [ -d "$dir" ] && [ ! -L "$dir" ]
+    return
+  fi
+  mkdir -p "$dir" || return 1
+  [ -d "$dir" ] && [ ! -L "$dir" ]
+}
+
 # Rewrite <record> atomically from the fields the caller assembled.
 _fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <terminal_line> <terminal-offset> <terminal-first-seen> <terminal-reported> <tail> <orphan> <open-lines>
   local record=$1 offset=$2 ident=$3 incarnation=$4 terminal_line=$5 terminal_offset=$6
   local terminal_first_seen=$7 terminal_reported=$8 tail=$9 orphan=${10} open_lines=${11} dir tmp entry
   dir=$(dirname "$record")
-  mkdir -p "$dir" || return 1
-  [ ! -L "$dir" ] || return 1
+  _fm_parent_mirror_dir_ready "$dir" || return 1
   tmp=$(mktemp "$dir/.record.XXXXXX") || return 1
   {
     printf 'schema=%s\n' "$FM_PARENT_MIRROR_SCHEMA"
@@ -290,13 +299,15 @@ _fm_parent_mirror_publish() {  # <line>
 _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-now 0|1>]
   local child=$1 meta=$2 orphan=$3 deliver_now=${4:-0} status record now open_secs
   local size ident offset rec_ident incarnation rec_incarnation complete_size=0
-  local terminal_line terminal_offset terminal_first_seen terminal_reported tail=0 captured prefix
+  local terminal_line terminal_offset terminal_first_seen terminal_reported tail=0 captured='' prefix='' dir
   local open_lines='' next_open='' close_failed='' fold='' changed=0 refold=0 rc=0
   local chunk line verb note key mirror_key line_offset line_start committed context last last_verb last_offset
   local entry entry_key entry_seen entry_mirrored entry_origin origins origin fold_verb fold_note fold_entry age timing
   local LC_ALL=C
   status="$STATE/$child.status"
   record=$(fm_parent_mirror_record_path "$STATE" "$child")
+  dir=$(dirname "$record")
+  _fm_parent_mirror_dir_ready "$dir" || return 4
   now=$(_fm_parent_mirror_now)
   open_secs=$(fm_parent_mirror_open_secs) || {
     printf 'FM_PARENT_MIRROR_OPEN_SECS must be a whole number from 60 to 86400\n' >&2
@@ -330,9 +341,8 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
 
   # Capture one stable endpoint, then materialize only its newline-terminated
   # prefix. Every classifier below reads this prefix rather than the live file.
-  mkdir -p "$(dirname "$record")" || return 4
-  captured="$record.capture.$$"
-  prefix="$record.prefix.$$"
+  captured=$(mktemp "$dir/.capture.XXXXXX") || return 4
+  prefix=$(mktemp "$dir/.prefix.XXXXXX") || { rm -f "$captured"; return 4; }
   if ! _fm_status_read_span "$status" 0 "$size" > "$captured" 2>/dev/null; then
     rm -f "$captured" "$prefix"
     return 4
@@ -359,7 +369,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
 
   # 1. New whole lines since the cursor: done-class lines deliver now.
   if [ "$offset" -lt "$complete_size" ]; then
-    chunk="$record.span.$$"
+    chunk=$(mktemp "$dir/.span.XXXXXX") || { rm -f "$prefix"; return 4; }
     if ! _fm_status_read_span "$prefix" "$offset" "$((complete_size - offset))" > "$chunk" 2>/dev/null; then
       rm -f "$chunk" "$prefix"
       return 4

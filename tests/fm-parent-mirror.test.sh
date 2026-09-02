@@ -145,6 +145,39 @@ test_scout_report_pointer() {
   pass "a scout's done line carries its report pointer"
 }
 
+test_scratch_paths_refuse_symlink_redirection() {
+  local target rc
+  make_world scratch-symlink; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'done: safe scratch test'
+  mkdir -p "$MATE/state/parent-mirror"
+  target="$WORLD/external-target"
+  printf 'sentinel\n' > "$target"
+  rc=0
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" bash -c '
+    . "$1"
+    ln -s "$2" "$STATE/parent-mirror/child.record.capture.$$"
+    fm_parent_mirror_sweep_child_locked child
+  ' _ "$ROOT/bin/fm-parent-mirror-lib.sh" "$target" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "safe scratch allocation refused a harmless stale predictable symlink"
+  [ "$(cat "$target")" = sentinel ] || fail "predictable scratch symlink changed its target"
+
+  make_world scratch-dir-symlink; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'done: unsafe directory test'
+  mkdir -p "$WORLD/external-dir"
+  printf 'sentinel\n' > "$WORLD/external-dir/target"
+  ln -s "$WORLD/external-dir" "$MATE/state/parent-mirror"
+  rc=0
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" bash -c '
+    . "$1"; fm_parent_mirror_sweep_child_locked child
+  ' _ "$ROOT/bin/fm-parent-mirror-lib.sh" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "mirror accepted a symlinked scratch directory"
+  [ "$(cat "$WORLD/external-dir/target")" = sentinel ] || fail "symlinked mirror directory changed external data"
+  [ ! -e "$WORLD/external-dir/child.record" ] || fail "symlinked mirror directory received a record"
+  pass "mirror scratch allocation refuses symlink redirection"
+}
+
 # Only whole lines are delivered: a line still being appended waits for its
 # newline, then is delivered on the next sweep.
 test_partial_line_waits_for_newline() {
@@ -723,6 +756,7 @@ test_watcher_poll_delivers_terminal_child() {
 
 test_done_line_delivered_once
 test_scout_report_pointer
+test_scratch_paths_refuse_symlink_redirection
 test_partial_line_waits_for_newline
 test_orphan_retains_unterminated_tail
 test_partial_thresholded_outcomes_do_not_age

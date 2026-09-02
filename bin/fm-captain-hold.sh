@@ -403,10 +403,25 @@ recorded_resolution_generation() {  # <task-body>
 }
 
 resolution_record_count() {  # <task-body>
-  printf '%s\n' "$1" | awk '
-    { count += gsub(/Resolution recorded by fm-captain-hold\./, "") }
-    { count += gsub(/Resolution recorded by fm-decision-hold\./, "") }
-    END { print count + 0 }
+  local body
+  body=$(decode_shown_value "$1") || return 1
+  printf '%s\n' "$body" | awk '
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (line[i] != "Resolution recorded by fm-captain-hold." && line[i] != "Resolution recorded by fm-decision-hold.") continue
+        j = i + 1
+        if (line[j] !~ /^Decision digest: /) continue
+        j++
+        if (line[j] ~ /^Routed identities: /) j++
+        if (line[j] !~ /^Resolution mode: /) continue
+        j++
+        if (line[j] ~ /^Hold generation: [0-9]+$/) j++
+        if (line[j] != "" || line[j + 1] != "Captain decision:") continue
+        count++
+      }
+      print count + 0
+    }
   '
 }
 
@@ -538,7 +553,11 @@ command_hold() {
     occurrence=$current_generation
     body_has_hold_state_block "$body" || write_hold_generation "$id" "$occurrence" "$body"
   else
-    occurrence=$(( $(resolution_record_count "$body") + 1 ))
+    if [ -n "$current_generation" ]; then
+      occurrence=$((current_generation + 1))
+    else
+      occurrence=$(( $(resolution_record_count "$body") + 1 ))
+    fi
     write_hold_generation "$id" "$occurrence" "$body"
   fi
   if [ -n "$until" ]; then
