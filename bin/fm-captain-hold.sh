@@ -29,7 +29,6 @@
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id>
-#   fm-captain-hold.sh retain <task-id> [--report <path>] [--pr <url>] [--note <text>]
 #   fm-captain-hold.sh recover-retain <state/task-id.backlog-retain>
 #   fm-captain-hold.sh diverged
 #
@@ -128,23 +127,26 @@
 # is how that cleanup finds out. It is not a second closing rule: `answer`
 # remains the only act that closes a captain call.
 #
-# `retain` is what that cleanup does instead of closing. The work record that
-# discovered the call is going away, so `retain` records the finished work's
+# `recover-retain` is what cleanup uses instead of closing. The work record that
+# discovered the call is going away, so recovery records the finished work's
 # deliverable in the task body and returns the row to Queued - nothing is
 # working on it any more, and a captain call reads as the captain's own only
 # while it is queued and held. The hold, and the requirement that only `answer`
-# closes it, are untouched. It refuses any task that is not an open captain
-# call, so no closer can use it to keep an ordinary finished task alive, and
-# re-recording the same deliverable is a no-op. Every refusal here is loud and
-# leaves the call intact, because a caller reaches this command only on the path
-# where its alternative would have been to close the captain's own question.
-# All `hold`, `answer`, `retain`, and `recover-retain` mutations serialize on
-# the task metadata lock. Teardown records replayable retention before cleanup,
-# marks cleanup complete afterward, releases its lock, and lets `recover-retain`
-# acquire that lock as the sole owner while it retains the current row and removes
-# the record. If `answer --release` won first, recovery preserves the recorded
-# answer and lifted hold but still returns the ownerless row to Queued before
-# removing the worker record.
+# closes it, are untouched. Recovery refuses an unanswered task that is not an
+# open captain call, and re-recording the same deliverable is a no-op. Every
+# refusal here is loud and leaves the call intact, because teardown reaches
+# recovery only on the path where its alternative would have been to close the
+# captain's own question. There is no standalone retention command: it had no
+# in-repo caller and could queue live work while leaving its worker metadata in
+# place, presenting it as an ownerless Captain's Call and violating the
+# meta/backlog invariant in bin/fm-backlog-transition-lib.sh.
+# All `hold`, `answer`, and `recover-retain` mutations serialize on the task
+# metadata lock. Teardown records replayable retention before cleanup, marks
+# cleanup complete afterward, releases its lock, and lets `recover-retain`
+# acquire that lock as the sole owner while it retains the current row and
+# removes the record. If `answer --release` won first, recovery preserves the
+# recorded answer and lifted hold but still returns the ownerless row to Queued
+# before removing the worker record.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
@@ -1011,29 +1013,6 @@ retain_task_locked() {  # <task-id> <report> <pr> <note> <allow-answered-0-or-1>
     || fail "could not return captain-held $id to Queued through tasks-axi reopen; the call itself is intact, so fix that and retry rather than closing it"
 }
 
-command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
-  local id=${1:-} report='' pr='' note=''
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
-  shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --report) shift; report=${1:-} ;;
-      --pr) shift; pr=${1:-} ;;
-      --note) shift; note=${1:-} ;;
-      *) fail "unknown retain argument: $1" ;;
-    esac
-    shift
-  done
-  validate_slug "task id" "$id"
-  [ -z "$report" ] || validate_one_line "--report" "$report"
-  [ -z "$pr" ] || validate_one_line "--pr" "$pr"
-  [ -z "$note" ] || validate_one_line "--note" "$note"
-  require_tasks_axi
-  captain_task_lock_acquire "$id"
-  retain_task_locked "$id" "$report" "$pr" "$note" 0
-  printf 'retained: %s\n' "$id"
-}
-
 command_recover_retain() {  # <pending-retention-record>
   local marker=${1:-} marker_name id ready marker_spawn meta meta_spawn report='' pr='' note='' arg
   local args=()
@@ -1210,7 +1189,6 @@ case "${1:-}" in
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
-  retain) shift; command_retain "$@" ;;
   recover-retain) shift; command_recover_retain "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   -h|--help) usage ;;
