@@ -1462,22 +1462,22 @@ fm_wake_clean_field() {
   LC_ALL=C tr '\t\r\n' '   '
 }
 
-fm_wake_append() {
+_fm_wake_kind_valid() {
+  case "$1" in
+    signal|stale|check|heartbeat) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_fm_wake_append_locked() {
   local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
   local recovery_marker
-  case "$kind" in
-    signal|stale|check|heartbeat) ;;
-    *) printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
-  esac
-
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)
   epoch=$(date +%s)
   seq_file="$STATE/.wake-queue.seq"
   recovery_marker="$STATE/.watcher-down"
   status=0
-
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
   _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
@@ -1490,6 +1490,27 @@ fm_wake_append() {
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
   fi
+  return "$status"
+}
+
+fm_wake_append() {
+  local kind=$1 status
+  _fm_wake_kind_valid "$kind" \
+    || { printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2; return 2; }
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
+  _fm_wake_append_locked "$kind" "$2" "$3"
+  status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  return "$status"
+}
+
+fm_wake_append_bounded() {
+  local kind=$1 seconds=$4 status
+  _fm_wake_kind_valid "$kind" \
+    || { printf 'fm_wake_append_bounded: invalid wake kind: %s\n' "$kind" >&2; return 2; }
+  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" "$seconds" || return $?
+  _fm_wake_append_locked "$kind" "$2" "$3"
+  status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"
 }
@@ -1501,14 +1522,25 @@ fm_wake_append() {
 # for it is queued and unacknowledged, and disappears only after post-handling
 # acknowledgement consumes it.
 fm_wake_queued_keys() {
-  local kind=$1
-  case "$kind" in
-    signal|stale|check|heartbeat) ;;
-    *) printf 'fm_wake_queued_keys: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
-  esac
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  local kind=$1 status
+  _fm_wake_kind_valid "$kind" \
+    || { printf 'fm_wake_queued_keys: invalid wake kind: %s\n' "$kind" >&2; return 2; }
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   fm_wake_queued_keys_locked "$kind"
+  status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  return "$status"
+}
+
+fm_wake_queued_keys_bounded() {
+  local kind=$1 seconds=$2 status
+  _fm_wake_kind_valid "$kind" \
+    || { printf 'fm_wake_queued_keys_bounded: invalid wake kind: %s\n' "$kind" >&2; return 2; }
+  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" "$seconds" || return $?
+  fm_wake_queued_keys_locked "$kind"
+  status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  return "$status"
 }
 
 fm_wake_queued_keys_locked() {

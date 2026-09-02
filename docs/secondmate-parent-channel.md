@@ -72,13 +72,14 @@ Adopted, layered under C.
 
 The delivery rule has one sentence: the machinery reports facts, the mate reports judgement.
 
-1. `bin/fm-parent-channel-lib.sh` is the single owner of channel resolution and idempotent append; the merge outcome path, the inactive-outcome scan, the mirror, and every at-source publisher use it.
+1. `bin/fm-parent-channel-lib.sh` is the single owner of channel resolution and idempotent append; it serializes exact-line checks under a bounded destination-specific lock in the writing home's state directory, and the merge outcome path, the inactive-outcome scan, the mirror, and every at-source publisher use it.
 2. `bin/fm-parent-mirror.sh sweep` runs on every mate watcher poll and is a silent no-op in a main home.
-   For each direct ordinary child it reads the ledger from a durable per-child cursor under `state/parent-mirror/`, mirrors a terminal done line immediately, and mirrors a failed line or a still-open decision or blocker once it has stayed unanswered for `FM_PARENT_MIRROR_OPEN_SECS`.
+   For each direct ordinary child it reads only the captured newline-terminated ledger prefix from a durable per-child cursor under `state/parent-mirror/`, mirrors a terminal done line immediately, and mirrors a failed line or a still-open decision or blocker once it has stayed unanswered for `FM_PARENT_MIRROR_OPEN_SECS`.
+   Retired and orphaned records remain while an unterminated tail exists, so completion of an in-progress append remains discoverable.
    A mirrored open decision is closed on the channel with a keyed `resolved` line when the child's own decision folds closed, so the parent's open-decision view tracks the mate's.
    The mirrored line names the child, carries the child's own note, and adds the recorded PR URL, the scout report pointer, the delivery mode, and the merge posture when those are recorded, so the parent has what the captain needs without reading the mate home.
-3. `bin/fm-pr-check.sh` sweeps the registered child after arming its merge poll, so a PR-ready registration reaches the parent at registration time with the canonical URL.
-4. `bin/fm-captain-hold.sh` publishes `needs-decision [key=captain-hold-<task>]` when it holds a task for the captain in a secondmate home and the matching `resolved` line when the answer is recorded.
+3. `bin/fm-pr-check.sh` sweeps the registered child after arming its merge poll, so a PR-ready registration reaches the parent at registration time with the canonical URL, and lock contention is reported as an actionable deferral.
+4. `bin/fm-captain-hold.sh` publishes `needs-decision [key=captain-hold-<task>]` when it holds a task for the captain in a secondmate home and the matching `resolved` line when the answer is recorded, including batch answers and idempotent retries.
 5. `bin/fm-teardown.sh` performs the child's final sweep before it removes the child's record, then retires the child's mirror state; an undelivered final sweep keeps an orphan record that later sweeps retry.
 6. `bin/fm-inactive-reconcile.sh` keeps its current-state role and yields to the mirror: in a secondmate home it no longer reports a child whose ledger already ends in a terminal verb, because that evidence is the mirror's, and it still reports a child whose ledger is silent while `bin/fm-crew-state.sh` says done or failed.
 7. The charter scaffold in `bin/fm-brief.sh` opens with the channel rule, states that the mirror carries child facts, and confines the mate's own appends to judgement, marked-request answers, and its own blockers; `AGENTS.md` carries a one-line carve-out at the persona address rule and at the escalation list.
@@ -100,8 +101,9 @@ The delivery rule has one sentence: the machinery reports facts, the mate report
 ## Noise and failure direction
 
 A mate that also appends its own line about a mirrored child produces a second line, never a missed one; the parent reads the mirror line as the fact and the mate's line as commentary.
-Every mirrored line is keyed by the child and either the ledger offset or the decision key, and appended at most once, so a restart, a replayed sweep, or a relaunched child cannot duplicate a delivered event.
-An unreadable parent binding is reported once as a durable wake in the mate home naming the binding, the same way the inactive-outcome scan already reports it.
+Every mirrored line uses the injective key `mirror-<child-length>-<child>-<offset-or-key>` and is appended at most once, so distinct child and decision pairs cannot collide and a restart, a replayed sweep, or a relaunched child cannot duplicate a delivered event.
+Standing failures retain their ledger offset as event identity, so an identical failure recurring after recovery is delivered as a new event.
+An unreadable parent binding is reported once as a durable wake in the mate home naming the binding, and bounded wake-queue contention degrades to stderr rather than wedging the watcher.
 The mirror needs a live mate watcher, which is already required whenever the mate has work in flight; a mate with no work has no ledger to mirror.
 
 ## Regression coverage

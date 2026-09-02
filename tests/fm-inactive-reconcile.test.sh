@@ -163,6 +163,15 @@ test_local_secondmate_yields_terminal_ledger_to_mirror() {
     || fail "inactive scan reported a terminal-verb ledger the mirror owns"
   [ "$(outcome_count "$MATE" pending)" = 0 ] && [ "$(outcome_count "$MATE" reported)" = 0 ] \
     || fail "inactive scan created a receipt for a ledger the mirror owns"
+
+  make_world yield-partial; bind_secondmate local
+  write_child "$MATE" child 'working: finishing'
+  printf 'done: incomplete outcome' >> "$MATE/state/child.status"
+  age "$MATE/state/child.status"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
+  grep -Fq 'done [key=inactive-outcome-mate-child-done]:' "$MAIN/state/mate.status" \
+    || fail "inactive scan yielded to an unterminated mirror line"
+
   # A main home keeps its own presentation for the same ledger shape.
   make_world yield-main; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup

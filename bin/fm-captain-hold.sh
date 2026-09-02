@@ -770,6 +770,11 @@ command_answers() {
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] && [ "$recorded_mode" != released ]; } \
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
+        case "$recorded_mode" in
+          released) publish_parent_hold "$id" resolved released ;;
+          repaired) publish_parent_hold "$id" resolved "answered (repaired)" ;;
+          *) publish_parent_hold "$id" resolved answered ;;
+        esac
         printf 'closed: %s\n' "$id"
         closed=$((closed + 1))
         continue
@@ -787,6 +792,7 @@ command_answers() {
     fi
     # shellcheck disable=SC2086  # release_flag is empty or a single literal flag.
     if "$0" answer "$id" --decision-file "$tmp" $release_flag </dev/null >/dev/null 2>"$err"; then
+      [ ! -s "$err" ] || cat "$err" >&2
       printf 'closed: %s\n' "$id"
       closed=$((closed + 1))
     else

@@ -38,6 +38,16 @@ _FM_PARENT_CHANNEL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$_FM_PARENT_CHANNEL_LIB_DIR/fm-secondmate-parent-lib.sh"
 
+FM_PARENT_CHANNEL_LOCK_WAIT_SECS=${FM_PARENT_CHANNEL_LOCK_WAIT_SECS:-3}
+
+_fm_parent_channel_require_lock() {
+  if ! command -v fm_lock_acquire_wait_bounded >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$_FM_PARENT_CHANNEL_LIB_DIR/fm-wake-lib.sh"
+  fi
+  _fm_wake_require_timeout
+}
+
 # shellcheck disable=SC2034 # Output globals read by sourcing callers.
 FM_PARENT_CHANNEL_ID=
 # shellcheck disable=SC2034 # Output globals read by sourcing callers.
@@ -105,15 +115,33 @@ fm_parent_channel_clean_note() {  # <text>
   printf '%s' "$1" | LC_ALL=C tr '\t\r\n' '   ' | cut -c1-1200
 }
 
-# Append <line> to <path> unless that exact line is already there.
-fm_parent_channel_append_once() {  # <path> <line>
-  local path=$1 line=$2
-  [ ! -L "$path" ] || return 1
-  mkdir -p "$(dirname "$path")" || return 1
-  if grep -Fqx -- "$line" "$path" 2>/dev/null; then
-    return 0
+_fm_parent_channel_destination_hash() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  else
+    printf '%s' "$1" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)'
   fi
-  printf '%s\n' "$line" >> "$path"
+}
+
+# Append <line> to <path> unless that exact line is already there.
+fm_parent_channel_append_once() {  # <writing-state> <path> <line>
+  local STATE=$1 path=$2 line=$3 hash lock status=0
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
+  _fm_parent_channel_require_lock || return 1
+  hash=$(_fm_parent_channel_destination_hash "$path") || return 1
+  case "$hash" in ''|*[!0-9a-f]*) return 1 ;; esac
+  lock="$STATE/.parent-channel-$hash.lock"
+  fm_lock_acquire_wait_bounded "$lock" "$FM_PARENT_CHANNEL_LOCK_WAIT_SECS" || return 1
+  if [ -L "$path" ] || ! mkdir -p "$(dirname "$path")"; then
+    status=1
+  elif ! grep -Fqx -- "$line" "$path" 2>/dev/null \
+    && ! printf '%s\n' "$line" >> "$path"; then
+    status=1
+  fi
+  fm_lock_release "$lock"
+  return "$status"
 }
 
 # Publish one parent-facing line from <home>. See the return codes above.
@@ -121,5 +149,5 @@ fm_parent_channel_report() {  # <home> <state> <line>
   local home=$1 state=$2 line=$3 destination rc=0
   destination=$(fm_parent_channel_destination "$home" "$state") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
-  fm_parent_channel_append_once "$destination" "$line" || return 4
+  fm_parent_channel_append_once "$state" "$destination" "$line" || return 4
 }

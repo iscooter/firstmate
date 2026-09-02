@@ -18,6 +18,41 @@ GRANT="$ROOT/bin/fm-wake-grant.sh"
 TMP_ROOT=$(fm_test_tmproot fm-wake-tests)
 
 
+test_bounded_wake_queue_operations() {
+  local dir state holder i started elapsed rc keys
+  dir=$(make_case bounded-queue)
+  state="$dir/state"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+    : > "$2"
+    sleep 30
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$dir/held" &
+  holder=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$dir/held" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -e "$dir/held" ] || fail "wake queue holder did not start"
+  started=$(date +%s)
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_queued_keys_bounded check 1' \
+    _ "$ROOT/bin/fm-wake-lib.sh" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "bounded queued-keys entered a held queue"
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_append_bounded check key payload 1' \
+    _ "$ROOT/bin/fm-wake-lib.sh" >/dev/null 2>&1 || rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 0 ] || fail "bounded append entered a held queue"
+  [ "$elapsed" -le 6 ] || fail "bounded queue operations exceeded their deadlines"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_append_bounded check key payload 2' \
+    _ "$ROOT/bin/fm-wake-lib.sh" || fail "bounded append failed after release"
+  keys=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_queued_keys_bounded check 2' \
+    _ "$ROOT/bin/fm-wake-lib.sh") || fail "bounded queued-keys failed after release"
+  [ "$keys" = key ] || fail "bounded queue read lost the appended key"
+  pass "bounded wake queue operations refuse live contention"
+}
+
 test_concurrent_append_and_drain() {
   local dir state out1 out2 pids i pid count unique malformed sequence generation
   dir=$(make_case concurrent)
@@ -1438,6 +1473,7 @@ test_historical_annotation_skips_announced_status() {
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
+test_bounded_wake_queue_operations
 test_bounded_lock_handoff_after_contention
 test_live_presentation_holder_is_deadlined_without_weakening_ack
 test_malformed_presentation_lock_reports_acquire_failure

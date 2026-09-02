@@ -292,6 +292,22 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
   [ "$(grep -c 'resolved \[key=captain-hold-mate-release-call\].*: released' "$channel")" = 1 ] \
     || fail "the release retry did not close its parent hold exactly once"
 
+  run_captain "$home" hold mate-batch-call \
+    --title "Choose batch route" --reason "captain batch choice pending" --repo sample >/dev/null \
+    || fail "could not hold the batch-answer task"
+  mv "$home/.fm-secondmate-parent" "$home/.fm-secondmate-parent.saved"
+  printf 'mate-batch-call\tnorth\n' | run_captain "$home" answers --source "batch fixture" \
+    > "$home/batch.out" 2> "$home/batch.err" \
+    || fail "batch answer did not durably close while parent delivery was unavailable"
+  grep -F 'actionable:' "$home/batch.err" >/dev/null \
+    || fail "batch answer discarded its parent delivery warning"
+  mv "$home/.fm-secondmate-parent.saved" "$home/.fm-secondmate-parent"
+  printf 'mate-batch-call\tnorth\n' | run_captain "$home" answers --source "batch fixture" \
+    > "$home/batch-retry.out" 2> "$home/batch-retry.err" \
+    || fail "idempotent batch answer retry failed"
+  grep -Fx 'resolved [key=captain-hold-mate-batch-call]: captain hold mate-batch-call: answered' "$channel" >/dev/null \
+    || fail "idempotent batch retry did not publish the parent close"
+
   id='mate-scout'
   tasks_in "$home" add "$id" "Investigate mate systems" --kind scout --repo sample --start >/dev/null \
     || fail "could not create the mate scout fixture"
@@ -303,7 +319,7 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "mate scout completion gate failed"
   run_teardown "$home" "$id" >/dev/null 2> "$home/teardown.err" \
     || fail "mate scout teardown failed: $(cat "$home/teardown.err")"
-  grep -F "done [key=mirror-$id-l" "$channel" | grep -F "mirror: child=$id report complete report=data/$id/report.md" >/dev/null \
+  grep -F "done [key=mirror-10-$id-l" "$channel" | grep -F "mirror: child=$id report complete report=data/$id/report.md" >/dev/null \
     || fail "teardown did not deliver the scout's final line to the parent: $(cat "$channel")"
   [ ! -e "$home/state/parent-mirror/$id.record" ] || fail "teardown did not retire the scout's mirror record"
   [ ! -e "$home/state/$id.meta" ] || fail "teardown left the scout's record behind"
