@@ -438,6 +438,7 @@ test_injective_keys_and_concurrent_append() {
 }
 
 test_parent_channel_repairs_unterminated_tail() {
+  local pid rc i
   make_world channel-tail; bind_secondmate local
   printf 'done [key=tail]: intended outcome' > "$(parent_channel)"
   FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" bash -c '
@@ -458,7 +459,25 @@ test_parent_channel_repairs_unterminated_tail() {
     || fail "the unterminated fragment was not delimited"
   grep -Fx 'done [key=next]: next outcome' "$(parent_channel)" >/dev/null \
     || fail "the next outcome was malformed after tail repair"
-  pass "parent appends repair and delimit unterminated tails"
+
+  make_world channel-fifo; bind_secondmate local
+  mkfifo "$(parent_channel)" || fail "could not create the channel FIFO fixture"
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" bash -c '
+    . "$1"; fm_parent_channel_report "$2" "$3" "done [key=fifo]: blocked outcome"
+  ' _ "$ROOT/bin/fm-parent-channel-lib.sh" "$MATE" "$MATE/state" >/dev/null 2>&1 &
+  pid=$!
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "parent append blocked on a FIFO destination"
+  fi
+  rc=0
+  wait "$pid" || rc=$?
+  [ "$rc" -ne 0 ] || fail "parent append accepted a FIFO destination"
+  [ -p "$(parent_channel)" ] || fail "parent append replaced or removed the FIFO"
+  pass "parent appends repair tails and reject non-regular destinations"
 }
 
 test_remote_route_writes_parent_replies() {
@@ -532,6 +551,9 @@ test_retire_delivers_then_orphan_retries() {
 
   make_world orphan; bind_secondmate local
   write_child "$MATE" scout scout
+  printf 'pr=%s\n' "$PR_URL" >> "$MATE/state/scout.meta"
+  mkdir -p "$MATE/data/scout"
+  printf '# retained report\n' > "$MATE/data/scout/report.md"
   ledger "$MATE" scout 'done: report ready'
   mkdir -p "$MAIN/state"
   chmod 0500 "$MAIN/state"
@@ -544,7 +566,8 @@ test_retire_delivers_then_orphan_retries() {
   [ "$(record_field scout orphan)" = 1 ] || fail "a failed retire did not keep an orphan record"
   rm -f "$MATE/state/scout.meta"
   sweep "$MATE" 1000 >/dev/null || fail "orphan sweep failed"
-  grep -F 'mirror: child=scout report ready' "$(parent_channel)" >/dev/null || fail "the orphan was not delivered later"
+  grep -F "mirror: child=scout report ready pr=$PR_URL report=data/scout/report.md mode=no-mistakes yolo=off" "$(parent_channel)" >/dev/null \
+    || fail "the orphan retry lost its recorded metadata context"
   [ ! -e "$MATE/state/parent-mirror/scout.record" ] || fail "a delivered orphan record was not removed"
   make_world retire-tail; bind_secondmate local
   write_child "$MATE" child

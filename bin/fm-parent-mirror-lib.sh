@@ -22,6 +22,10 @@
 #   terminal_reported=0|1
 #   tail=0|1          (1: captured bytes remain past the last complete line)
 #   orphan=0|1        (1: the child's record is gone but delivery is still owed)
+#   context_pr=<recorded canonical PR URL>
+#   context_mode=<recorded delivery mode>
+#   context_yolo=<recorded merge posture>
+#   context_report=0|1
 #   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>   (one per open decision)
 # The record is rewritten atomically; a changed ledger identity or a shrunk
 # ledger resets the offset to 0, an incarnation change marks the prior
@@ -245,9 +249,10 @@ _fm_parent_mirror_dir_ready() {  # <dir>
 }
 
 # Rewrite <record> atomically from the fields the caller assembled.
-_fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <terminal_line> <terminal-offset> <terminal-first-seen> <terminal-reported> <tail> <orphan> <open-lines>
+_fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <terminal-line> <terminal-offset> <terminal-first-seen> <terminal-reported> <tail> <orphan> <open-lines> [<context-pr> <context-mode> <context-yolo> <context-report>]
   local record=$1 offset=$2 ident=$3 incarnation=$4 terminal_line=$5 terminal_offset=$6
-  local terminal_first_seen=$7 terminal_reported=$8 tail=$9 orphan=${10} open_lines=${11} dir tmp entry
+  local terminal_first_seen=$7 terminal_reported=$8 tail=$9 orphan=${10} open_lines=${11}
+  local context_pr=${12:-} context_mode=${13:-} context_yolo=${14:-} context_report=${15:-0} dir tmp entry
   dir=$(dirname "$record")
   _fm_parent_mirror_dir_ready "$dir" || return 1
   tmp=$(mktemp "$dir/.record.XXXXXX") || return 1
@@ -262,6 +267,10 @@ _fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <t
     printf 'terminal_reported=%s\n' "$terminal_reported"
     printf 'tail=%s\n' "$tail"
     printf 'orphan=%s\n' "$orphan"
+    printf 'context_pr=%s\n' "$context_pr"
+    printf 'context_mode=%s\n' "$context_mode"
+    printf 'context_yolo=%s\n' "$context_yolo"
+    printf 'context_report=%s\n' "$context_report"
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
       printf 'open=%s\n' "$entry"
@@ -275,17 +284,10 @@ EOF
 
 # The context suffix every mirrored line carries: the child's recorded PR,
 # its scout report when one exists, and its delivery mode and merge posture.
-_fm_parent_mirror_context() {  # <child> <meta-or-empty>
-  local child=$1 meta=$2 pr mode yolo report data out=''
-  data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-  pr=$(_fm_parent_mirror_meta_field "$meta" pr)
-  mode=$(_fm_parent_mirror_meta_field "$meta" mode)
-  yolo=$(_fm_parent_mirror_meta_field "$meta" yolo)
-  report="$data/$child/report.md"
+_fm_parent_mirror_context() {  # <child> <pr> <mode> <yolo> <report-0-or-1>
+  local child=$1 pr=$2 mode=$3 yolo=$4 report=$5 out=''
   [ -z "$pr" ] || out="$out pr=$(fm_parent_channel_clean_note "$pr")"
-  if [ -f "$report" ] && [ ! -L "$report" ]; then
-    out="$out report=data/$child/report.md"
-  fi
+  [ "$report" != 1 ] || out="$out report=data/$child/report.md"
   [ -z "$mode" ] || out="$out mode=$(fm_parent_channel_clean_note "$mode")"
   [ -z "$yolo" ] || out="$out yolo=$(fm_parent_channel_clean_note "$yolo")"
   printf '%s' "$out"
@@ -305,6 +307,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   local open_lines='' next_open='' close_failed='' fold='' changed=0 refold=0 rc=0
   local chunk line verb note key mirror_key line_offset line_start committed context last last_verb last_offset
   local entry entry_key entry_seen entry_mirrored entry_origin origins origin fold_verb fold_note fold_entry age timing
+  local context_pr context_mode context_yolo context_report report data
   local LC_ALL=C
   status="$STATE/$child.status"
   record=$(fm_parent_mirror_record_path "$STATE" "$child")
@@ -369,7 +372,20 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   fi
   if [ "$offset" -lt "$complete_size" ]; then changed=1; fi
 
-  context=$(_fm_parent_mirror_context "$child" "$meta")
+  context_pr=$(_fm_parent_mirror_record_field "$record" context_pr)
+  context_mode=$(_fm_parent_mirror_record_field "$record" context_mode)
+  context_yolo=$(_fm_parent_mirror_record_field "$record" context_yolo)
+  context_report=$(_fm_parent_mirror_record_field "$record" context_report)
+  case "$context_report" in 1) ;; *) context_report=0 ;; esac
+  if [ -n "$meta" ] && [ -f "$meta" ] && [ ! -L "$meta" ]; then
+    context_pr=$(_fm_parent_mirror_meta_field "$meta" pr)
+    context_mode=$(_fm_parent_mirror_meta_field "$meta" mode)
+    context_yolo=$(_fm_parent_mirror_meta_field "$meta" yolo)
+    data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+    report="$data/$child/report.md"
+    if [ -f "$report" ] && [ ! -L "$report" ]; then context_report=1; else context_report=0; fi
+  fi
+  context=$(_fm_parent_mirror_context "$child" "$context_pr" "$context_mode" "$context_yolo" "$context_report")
   committed=$offset
 
   # 1. New whole lines since the cursor: done-class lines deliver now.
@@ -560,7 +576,7 @@ EOF
   rm -f "$prefix"
   _fm_parent_mirror_record_write "$record" "$committed" "$ident" "$incarnation" \
     "$terminal_line" "$terminal_offset" "$terminal_first_seen" "$terminal_reported" \
-    "$tail" "$orphan" "$open_lines" || return 4
+    "$tail" "$orphan" "$open_lines" "$context_pr" "$context_mode" "$context_yolo" "$context_report" || return 4
   return "$rc"
 }
 
@@ -677,8 +693,9 @@ fm_parent_mirror_orphan_durable() {  # <child>
 # (or created) as an orphan so later sweeps keep trying, because the ledger
 # outlives the child's record.
 fm_parent_mirror_retire_locked() {  # <child>
-  local child=$1 record rc=0
+  local child=$1 record meta rc=0 context_pr context_mode context_yolo context_report report data
   record=$(fm_parent_mirror_record_path "$STATE" "$child")
+  meta="$STATE/$child.meta"
   _fm_parent_mirror_channel_ready || { rc=$?; [ "$rc" -eq 1 ] && return 0; }
   if [ "$rc" -eq 0 ]; then
     fm_parent_mirror_sweep_child_locked "$child" 1 || rc=$?
@@ -688,6 +705,18 @@ fm_parent_mirror_retire_locked() {  # <child>
     return 0
   fi
   if [ -e "$STATE/$child.status" ]; then
+    context_pr=$(_fm_parent_mirror_record_field "$record" context_pr)
+    context_mode=$(_fm_parent_mirror_record_field "$record" context_mode)
+    context_yolo=$(_fm_parent_mirror_record_field "$record" context_yolo)
+    context_report=$(_fm_parent_mirror_record_field "$record" context_report)
+    if [ -f "$meta" ] && [ ! -L "$meta" ]; then
+      context_pr=$(_fm_parent_mirror_meta_field "$meta" pr)
+      context_mode=$(_fm_parent_mirror_meta_field "$meta" mode)
+      context_yolo=$(_fm_parent_mirror_meta_field "$meta" yolo)
+      data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+      report="$data/$child/report.md"
+      if [ -f "$report" ] && [ ! -L "$report" ]; then context_report=1; else context_report=0; fi
+    fi
     if ! _fm_parent_mirror_record_write "$record" \
       "$(_fm_parent_mirror_record_field "$record" offset)" \
       "$(_fm_parent_mirror_record_field "$record" ident)" \
@@ -698,7 +727,8 @@ fm_parent_mirror_retire_locked() {  # <child>
       "$(_fm_parent_mirror_record_field "$record" terminal_reported)" \
       "$(_fm_parent_mirror_record_field "$record" tail)" \
       1 \
-      "$(_fm_parent_mirror_record_open_lines "$record")"; then
+      "$(_fm_parent_mirror_record_open_lines "$record")" \
+      "$context_pr" "$context_mode" "$context_yolo" "$context_report"; then
       [ "$rc" -ne 0 ] || rc=4
     fi
   fi

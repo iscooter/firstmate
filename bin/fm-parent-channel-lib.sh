@@ -135,9 +135,12 @@ fm_parent_channel_append_once() {  # <writing-state> <path> <line>
   case "$hash" in ''|*[!0-9a-f]*) return 1 ;; esac
   lock="$STATE/.parent-channel-$hash.lock"
   fm_lock_acquire_wait_bounded "$lock" "$FM_PARENT_CHANNEL_LOCK_WAIT_SECS" || return 1
-  if [ -L "$path" ] || ! mkdir -p "$(dirname "$path")"; then
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    if [ ! -f "$path" ] || [ -L "$path" ]; then status=1; fi
+  elif ! mkdir -p "$(dirname "$path")"; then
     status=1
-  elif [ -s "$path" ]; then
+  fi
+  if [ "$status" -eq 0 ] && [ -s "$path" ]; then
     last_byte=$(tail -c 1 "$path" 2>/dev/null | od -An -tu1 | tr -d '[:space:]') || status=1
     if [ "$status" -eq 0 ] && [ "$last_byte" != 10 ] \
       && ! printf '\n' >> "$path"; then
