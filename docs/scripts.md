@@ -71,6 +71,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-task-inbox-lib.sh`   | Single owner of durable steering-inbox records, acknowledgement, doorbells, and the delivery-attempt ladder |
 | `fm-pending-reply-lib.sh` | Parent-owned secondmate pending-reply expectations, recovery, and keyed escalation lifecycle |
 | `fm-secondmate-report.sh` | Optional helper to append a correlated parent status or document-pointer report       |
+| `fm-parent-channel-lib.sh` | Single owner of a secondmate home's parent channel: route resolution and idempotent append |
+| `fm-parent-mirror-lib.sh` | Deterministic mirror of a secondmate's child ledgers onto its parent channel, with per-child cursors and thresholds |
+| `fm-parent-mirror.sh`    | Sweep child ledgers onto the parent channel on every watcher poll, or on demand for one child |
 | `fm-extension.mjs`       | Bind, inspect, verify, and strictly invoke trusted external process-event adapter packages |
 | `fm-extension-launch-barrier.mjs` | Publish one exact static core-owned invocation group before package code runs |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
