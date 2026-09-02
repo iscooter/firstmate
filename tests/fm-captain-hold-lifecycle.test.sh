@@ -1312,6 +1312,66 @@ EOF
   pass "cleanup retains captain calls in the configured backlog"
 }
 
+test_hold_cannot_race_past_teardown_open_check() {
+  local home id teardown_pid hold_pid i show
+  home=$(make_home hold-teardown-race)
+  id=sample-hold-teardown-race
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate hold teardown race" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the hold-teardown fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Hold teardown race\n\nNo captain call exists yet.\n' > "$home/data/$id/report.md"
+  run_captain "$home" complete "$id" --none >/dev/null \
+    || fail "completion gate failed for the hold-teardown fixture"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_TEST_PAUSE_OPEN:-0}" = 1 ] && [ "${1:-}" = show ] \
+    && [ "${2:-}" = "${FM_TEST_OPEN_ID:-}" ]; then
+  set +e
+  output=$("${REAL_TASKS_AXI:?}" "$@" 2>&1)
+  rc=$?
+  set -e
+  : > "$FM_TEST_OPEN_READY"
+  while [ ! -f "$FM_TEST_OPEN_RELEASE" ]; do sleep 0.02; done
+  printf '%s\n' "$output"
+  exit "$rc"
+fi
+exec "${REAL_TASKS_AXI:?}" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_TEST_PAUSE_OPEN=1 FM_TEST_OPEN_ID="$id" \
+    FM_TEST_OPEN_READY="$home/open.ready" FM_TEST_OPEN_RELEASE="$home/open.release" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    "$TEARDOWN" "$id" > "$home/teardown.out" 2> "$home/teardown.err" &
+  teardown_pid=$!
+  for i in $(seq 1 250); do
+    [ ! -f "$home/open.ready" ] || break
+    sleep 0.02
+  done
+  [ -f "$home/open.ready" ] || fail "teardown never reached the captain-hold open check"
+  run_captain "$home" hold "$id" --reason "captain call attempted during teardown" \
+    > "$home/hold.out" 2> "$home/hold.err" &
+  hold_pid=$!
+  sleep 0.1
+  kill -0 "$hold_pid" 2>/dev/null \
+    || fail "captain hold did not serialize behind teardown"
+  : > "$home/open.release"
+  wait "$teardown_pid" || fail "ordinary teardown failed: $(cat "$home/teardown.err")"
+  if wait "$hold_pid"; then
+    fail "captain hold succeeded after teardown had selected the close path"
+  fi
+
+  show=$(tasks_in "$home" show "$id" --full) || fail "the raced task row disappeared"
+  assert_contains "$show" "state: done" "ordinary teardown no longer closed the task"
+  assert_not_contains "$show" "hold_kind: captain" \
+    "teardown closed a captain call created after its open check"
+  pass "captain hold creation serializes with teardown"
+}
+
 test_concurrent_answer_survives_retention() {
   local home id teardown_pid answer_pid i show
   home=$(make_home retain-answer-race)
@@ -1469,6 +1529,7 @@ test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task
 test_teardown_uses_relocated_captain_hold_backlog
+test_hold_cannot_race_past_teardown_open_check
 test_concurrent_answer_survives_retention
 test_late_cleanup_failure_keeps_hold_in_flight
 test_teardown_refuses_when_captain_hold_cannot_be_read

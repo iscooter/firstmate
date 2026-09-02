@@ -458,6 +458,7 @@ command_hold() {
     esac
   fi
   require_tasks_axi
+  captain_task_lock_acquire "$id" 0
   if show=$(task_show "$id"); then
     state=$(show_field "$show" state)
     [ "$state" != "done" ] \
