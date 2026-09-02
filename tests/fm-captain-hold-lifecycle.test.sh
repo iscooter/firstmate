@@ -1207,6 +1207,8 @@ EOF
   assert_contains "$show" "state: queued" "the finished work's row is still shown as worked on"
   assert_contains "$show" "Deliverable of the finished work: report data/$id/report.md" \
     "the deliverable was not recorded on the still-open row"
+  assert_not_contains "$show" 'body: "-' \
+    "the empty body marker was retained as task content"
   assert_absent "$home/state/$id.meta" "cleanup did not release the finished worker record"
   assert_absent "$home/state/$id.backlog-close" \
     "a pending close would let the next session start close the captain call anyway"
@@ -1260,6 +1262,54 @@ EOF
   assert_contains "$show" "state: done" "the recorded answer did not close the captain call"
   assert_contains "$show" "Ship attachments by reference." "the captain's words were not recorded"
   pass "cleanup leaves a captain-held work item open with its deliverable, and only an answer closes it"
+}
+
+test_teardown_uses_relocated_captain_hold_backlog() {
+  local home data id show
+  home=$(make_home teardown-relocated-hold)
+  data="$home/records"
+  mv "$home/data" "$data"
+  mkdir -p "$home/data" "$data/sample-relocated-hold"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  id=sample-relocated-hold
+  (cd "$home" && tasks-axi add "$id" "Investigate relocated sample hold" --kind scout \
+    --repo sample --start --file "$data/backlog.md" >/dev/null) \
+    || fail "could not create the relocated captain-hold fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Relocated hold\n\nThe captain call remains open.\n' > "$data/$id/report.md"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
+    "$ROOT/bin/fm-captain-hold.sh" hold "$id" \
+    --reason "captain must choose the relocated sample outcome" >/dev/null \
+    || fail "could not hold the relocated work item"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
+    "$ROOT/bin/fm-captain-hold.sh" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the relocated captain hold"
+
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" \
+    > "$home/teardown.out" 2> "$home/teardown.err" \
+    || fail "cleanup of the relocated captain hold failed: $(cat "$home/teardown.err")"
+
+  show=$(cd "$home" && tasks-axi show "$id" --full --file "$data/backlog.md") \
+    || fail "the relocated captain-held row disappeared"
+  assert_contains "$show" "state: queued" "cleanup closed the relocated captain call"
+  assert_contains "$show" "hold_kind: captain" "cleanup dropped the relocated captain hold"
+  assert_contains "$show" "Deliverable of the finished work: report records/$id/report.md" \
+    "cleanup did not retain the deliverable in the relocated backlog"
+  assert_absent "$home/state/$id.meta" "cleanup left metadata for the relocated retained row"
+  assert_absent "$home/state/$id.backlog-close" \
+    "cleanup staged a close marker for the relocated captain call"
+  pass "cleanup retains captain calls in the configured backlog"
 }
 
 test_teardown_refuses_when_captain_hold_cannot_be_read() {
@@ -1323,4 +1373,5 @@ test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task
+test_teardown_uses_relocated_captain_hold_backlog
 test_teardown_refuses_when_captain_hold_cannot_be_read

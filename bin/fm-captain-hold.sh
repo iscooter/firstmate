@@ -160,6 +160,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-backlog-transition-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -242,7 +245,16 @@ load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
 }
 
 tasks_axi() {
-  (cd "$FM_HOME" && tasks-axi "$@")
+  local data file root
+  data=$(fm_backlog_data_absolute "$DATA") \
+    || fail "data directory cannot be resolved: $DATA"
+  file=$(fm_backlog_file "$data") \
+    || fail "backlog file cannot be resolved under $DATA"
+  fm_backlog_record_present "$file" "backlog file" "$DATA" \
+    || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  root=$(fm_backlog_root "$data") \
+    || fail "backlog root cannot be resolved for $DATA"
+  (cd "$root" && tasks-axi "$@" --file "$file")
 }
 
 require_tasks_axi() {
@@ -939,7 +951,7 @@ command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
   done
   validate_slug "task id" "$id"
   require_tasks_axi
-  show=$(task_show "$id") || fail "task $id is absent from $FM_HOME/data/backlog.md"
+  show=$(task_show "$id") || fail "task $id is absent from $DATA/backlog.md"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   { [ "$state" != "done" ] && [ "$hold_kind" = captain ]; } \
@@ -958,7 +970,7 @@ command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
   fi
   if [ -n "$deliverable" ]; then
     line="Deliverable of the finished work: $deliverable"
-    body=$(decode_shown_value "$(show_field "$show" body)") \
+    body=$(show_field_value "$show" body) \
       || fail "could not decode the existing body for $id"
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*) ;;
