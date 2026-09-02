@@ -21,10 +21,13 @@
 # the paths that already proceed to remove the record.
 # The close - and only the close - DEFERS while the backlog item is still an
 # open captain call (bin/fm-captain-hold.sh owns that predicate). Cleanup runs
-# as usual, the deliverable is recorded on the row that stays open and held, and
-# no pending-close record is staged, so nothing here or at the next session
-# start closes a question the captain has not answered; --force does not lift
-# that, and bin/fm-captain-hold.sh answer stays the only act that closes it.
+# first, then the deliverable and Queued transition commit immediately before
+# record removal under the metadata lock. Teardown passes that already-held lock
+# path through FM_CAPTAIN_META_LOCK_ALREADY_HELD so retain does not reacquire it,
+# and keeps ownership until removal completes. No pending-close record is staged,
+# so nothing here or at the next session start closes a question the captain has
+# not answered; --force does not lift that, and bin/fm-captain-hold.sh answer
+# stays the only act that closes it.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch (a fork counts as a remote, so
@@ -2744,20 +2747,10 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
     || { echo "error: the pending backlog close for $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); retaining every durable task record" >&2; exit 1; }
 elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
-  # The row outlives this cleanup, so the completion links this record carries
-  # move onto it before the record goes. bin/fm-captain-hold.sh owns what that
-  # does to a captain call; teardown only hands it the same links it would have
-  # closed with. No pending-close record is staged on purpose: replaying one
-  # would close the captain call at the next session start, which is the very
-  # loss this branch exists to prevent.
   backlog_done_args || {
     echo "error: the completion links for captain-held $ID could not be resolved; refusing destructive teardown" >&2
     exit 1
   }
-  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" retain "$ID" \
-    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" >/dev/null \
-    || { echo "error: captain-held $ID could not be retained across the removal of its record; retaining every durable task record" >&2; exit 1; }
 else
   if [ "$CLEANUP_RECOVERY" = orca ]; then
     BACKLOG_SKIP_REASON="Orca cleanup recovery is not a launched backlog worker"
@@ -2945,6 +2938,23 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     echo "error: $ID's endpoint and local copy are cleaned up, but its backlog item could not be closed atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending close is recorded and the next session start retries it" >&2
+    exit 1
+  fi
+elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    FM_CONFIG_OVERRIDE="$CONFIG" FM_CAPTAIN_META_LOCK_ALREADY_HELD="$META_LOCK" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" retain "$ID" \
+    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" >/dev/null \
+    || { echo "error: captain-held $ID could not be retained after endpoint cleanup; retaining its task record" >&2; exit 1; }
+  if ! fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE"; then
+    retain_remove_error=$FM_BACKLOG_TRANSITION_ERROR
+    if ! fm_backlog_start "$DATA" "$ID"; then
+      echo "error: captain-held $ID was retained, its task record could not be removed ($retain_remove_error), and its In flight state could not be restored ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+    else
+      echo "error: captain-held $ID could not retire its task record ($retain_remove_error); its row was restored to In flight for retry" >&2
+    fi
+    fm_lock_release "$META_LOCK"
+    META_LOCK_HELD=0
     exit 1
   fi
 elif [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then

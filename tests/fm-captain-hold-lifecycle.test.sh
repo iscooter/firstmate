@@ -1312,6 +1312,101 @@ EOF
   pass "cleanup retains captain calls in the configured backlog"
 }
 
+test_concurrent_answer_survives_retention() {
+  local home id teardown_pid answer_pid i show
+  home=$(make_home retain-answer-race)
+  id=sample-retain-answer-race
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate concurrent sample answer" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the retain-answer fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Concurrent answer\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose the concurrent outcome" >/dev/null \
+    || fail "could not hold the retain-answer fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the retain-answer fixture"
+  printf 'Use the captain selected concurrent outcome.\n' > "$home/answer.txt"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_TEST_PAUSE_RETAIN:-0}" = 1 ] && [ "${1:-}" = update ] \
+    && [ "${2:-}" = "${FM_TEST_RETAIN_ID:-}" ]; then
+  : > "$FM_TEST_RETAIN_READY"
+  while [ ! -f "$FM_TEST_RETAIN_RELEASE" ]; do sleep 0.02; done
+fi
+exec "${REAL_TASKS_AXI:?}" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_TEST_PAUSE_RETAIN=1 FM_TEST_RETAIN_ID="$id" \
+    FM_TEST_RETAIN_READY="$home/retain.ready" FM_TEST_RETAIN_RELEASE="$home/retain.release" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    "$TEARDOWN" "$id" > "$home/teardown.out" 2> "$home/teardown.err" &
+  teardown_pid=$!
+  for i in $(seq 1 250); do
+    [ ! -f "$home/retain.ready" ] || break
+    sleep 0.02
+  done
+  [ -f "$home/retain.ready" ] || fail "retention never reached its body update"
+  run_captain "$home" answer "$id" --decision-file "$home/answer.txt" \
+    > "$home/answer.out" 2> "$home/answer.err" &
+  answer_pid=$!
+  sleep 0.1
+  : > "$home/retain.release"
+  wait "$teardown_pid" || fail "concurrent retention failed: $(cat "$home/teardown.err")"
+  wait "$answer_pid" || fail "concurrent answer failed: $(cat "$home/answer.err")"
+
+  show=$(tasks_in "$home" show "$id" --full) || fail "the concurrently answered row disappeared"
+  assert_contains "$show" "state: done" "retention silently reopened the concurrent answer"
+  assert_contains "$show" "Use the captain selected concurrent outcome." \
+    "retention overwrote the concurrent captain answer"
+  assert_contains "$show" "Deliverable of the finished work" \
+    "the serialized answer lost the retained deliverable"
+  pass "retention serializes with a concurrent captain answer"
+}
+
+test_late_cleanup_failure_keeps_hold_in_flight() {
+  local home id wt show rc
+  home=$(make_home retained-cleanup-failure)
+  id=sample-retained-cleanup-failure
+  wt="$home/projects/$id"
+  mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
+  tasks_in "$home" add "$id" "Investigate failed sample cleanup" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the cleanup-failure fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
+    "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Failed cleanup\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose after cleanup retry" >/dev/null \
+    || fail "could not hold the cleanup-failure fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the cleanup-failure fixture"
+  cat > "$home/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$home/fakebin/treehouse"
+
+  set +e
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" --force \
+    > "$home/teardown.out" 2> "$home/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree return"
+  assert_present "$home/state/$id.meta" "late cleanup failure removed the task record"
+  show=$(tasks_in "$home" show "$id" --full) || fail "late cleanup failure erased the captain call"
+  assert_contains "$show" "state: in_flight" "late cleanup failure left the held row queued"
+  assert_contains "$show" "hold_kind: captain" "late cleanup failure dropped the captain hold"
+  assert_not_contains "$show" "Deliverable of the finished work" \
+    "retention committed before destructive cleanup succeeded"
+  pass "late cleanup failure preserves the in-flight captain call record"
+}
+
 test_teardown_refuses_when_captain_hold_cannot_be_read() {
   local home id rc show
   home=$(make_home teardown-hold-read-error)
@@ -1374,4 +1469,6 @@ test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task
 test_teardown_uses_relocated_captain_hold_backlog
+test_concurrent_answer_survives_retention
+test_late_cleanup_failure_keeps_hold_in_flight
 test_teardown_refuses_when_captain_hold_cannot_be_read

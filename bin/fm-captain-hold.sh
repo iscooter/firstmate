@@ -137,6 +137,10 @@
 # re-recording the same deliverable is a no-op. Every refusal here is loud and
 # leaves the call intact, because a caller reaches this command only on the path
 # where its alternative would have been to close the captain's own question.
+# `answer` and `retain` serialize their complete body-and-state transactions on
+# the task metadata lock. Teardown already owns that lock and passes its exact
+# path in FM_CAPTAIN_META_LOCK_ALREADY_HELD; only `retain` accepts that private
+# handoff, and teardown keeps ownership until the task record is removed.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
@@ -231,6 +235,17 @@ BINDING_ANY='(any)'
 
 DECISION_TEXT=''
 DECISION_DIGEST=''
+
+captain_task_lock_acquire() {  # <task-id> [allow-inherited-0-or-1]
+  local expected
+  expected=$(fm_meta_lock_path "$STATE/$1.meta") || fail "could not resolve task metadata lock"
+  if [ "${2:-0}" = 1 ] && [ "${FM_CAPTAIN_META_LOCK_ALREADY_HELD:-}" = "$expected" ]; then
+    return 0
+  fi
+  CAPTAIN_META_LOCK=$expected
+  fm_lock_acquire_wait "$CAPTAIN_META_LOCK" || fail "could not acquire task metadata lock for $1"
+  CAPTAIN_META_LOCK_HELD=1
+}
 
 load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
   local path=$1 decision
@@ -529,6 +544,7 @@ command_answer() {
   validate_slug task-id "$id"
   load_decision "$decision_file"
   require_tasks_axi
+  captain_task_lock_acquire "$id" 0
   show=$(task_show "$id") || fail "captain-held task $id is absent from $FM_HOME/data/backlog.md"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -951,6 +967,7 @@ command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
   done
   validate_slug "task id" "$id"
   require_tasks_axi
+  captain_task_lock_acquire "$id" 1
   show=$(task_show "$id") || fail "task $id is absent from $DATA/backlog.md"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
