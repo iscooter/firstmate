@@ -686,9 +686,9 @@ command_answer() {
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
       occurrence=$resolution_generation
       if [ "$recorded_mode" = repaired ]; then
-        publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)" || true
+        publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)" || return "$?"
       else
-        publish_parent_hold "$id" "$occurrence" resolved answered || true
+        publish_parent_hold "$id" "$occurrence" resolved answered || return "$?"
       fi
       printf 'answered: %s\n' "$id"
       return 0
@@ -732,7 +732,7 @@ command_answer() {
       esac
       occurrence=$hold_generation
       close_answered "$id" "$release"
-      publish_parent_hold "$id" "$occurrence" resolved "$outcome" || true
+      publish_parent_hold "$id" "$occurrence" resolved "$outcome" || return "$?"
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
@@ -755,7 +755,7 @@ command_answer() {
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     occurrence=$resolution_generation
-    publish_parent_hold "$id" "$occurrence" resolved released || true
+    publish_parent_hold "$id" "$occurrence" resolved released || return "$?"
     printf 'released: %s\n' "$id"
     return 0
   fi
@@ -855,7 +855,7 @@ sanitize_field() {  # <text>
 
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
-  local recorded_digest recorded_mode tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
+  local recorded_digest recorded_mode resolution_generation parent_note tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) shift; source=${1:-} ;;
@@ -934,11 +934,17 @@ command_answers() {
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] && [ "$recorded_mode" != released ]; } \
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
+        resolution_generation=$(recorded_resolution_generation "$body" || resolution_record_count "$body")
         case "$recorded_mode" in
-          released) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved released || true ;;
-          repaired) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved "answered (repaired)" || true ;;
-          *) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved answered || true ;;
+          released) parent_note=released ;;
+          repaired) parent_note='answered (repaired)' ;;
+          *) parent_note=answered ;;
         esac
+        if ! publish_parent_hold "$id" "$resolution_generation" resolved "$parent_note"; then
+          printf 'skipped: %s (parent channel delivery failed)\n' "$id"
+          skipped=$((skipped + 1))
+          continue
+        fi
         printf 'closed: %s\n' "$id"
         closed=$((closed + 1))
         continue

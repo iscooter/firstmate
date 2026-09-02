@@ -266,6 +266,14 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "the unavailable parent close was not reported as actionable"
   [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call-1\]' "$channel" || true)" = 0 ] \
     || fail "the unavailable answer unexpectedly reached the parent"
+  if run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" \
+    > "$home/answer-retry.out" 2> "$home/answer-retry.err"; then
+    fail "an answer retry reported success while its durable parent close was still unavailable"
+  fi
+  [ ! -s "$home/answer-retry.out" ] \
+    || fail "the failed answer retry reported the task answered: $(cat "$home/answer-retry.out")"
+  grep -F 'actionable:' "$home/answer-retry.err" >/dev/null \
+    || fail "the failed answer retry did not preserve its actionable parent-channel diagnostic"
   mv "$home/.fm-secondmate-parent.saved" "$home/.fm-secondmate-parent"
   run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" >/dev/null \
     || fail "idempotent answer retry failed in the mate home"
