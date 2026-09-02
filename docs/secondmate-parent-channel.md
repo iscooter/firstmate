@@ -106,6 +106,8 @@ The mirror needs a live mate watcher, which is already required whenever the mat
 
 ## Regression coverage
 
-`tests/fm-parent-mirror.test.sh` covers the sweep against real ledgers with no harness: immediate done delivery, thresholded decision and failure delivery with keyed close, the PR registration hook, the captain-hold hook, the teardown final sweep and retirement, orphan retry, the inactive-outcome scan yielding to the mirror, main-home inertness, the unreadable-binding diagnostic, and the watcher poll driving the sweep.
-`tests/fm-inactive-reconcile.test.sh` keeps the silent-ledger cases that remain the inactive scan's own.
+`tests/fm-parent-mirror.test.sh` covers the sweep against real ledgers with no harness: immediate done delivery with recorded context and the scout report pointer, whole-line delivery, thresholded decision and failure delivery with keyed close, silence for anything handled inside the threshold, untrackable decision lines, the remote route, the PR registration hook, the retire path with orphan retry, bounded lock waits, main-home inertness, the once-per-episode unreadable-binding diagnostic, and the real watcher poll driving the sweep.
+`tests/fm-captain-hold-lifecycle.test.sh` covers a mate home publishing a captain hold and its answer, and the real teardown delivering a scout's final line before retiring its record.
+`tests/fm-inactive-reconcile.test.sh` covers the inactive scan yielding terminal-verb ledgers to the mirror while keeping the silent-ledger cases that remain its own.
+`tests/fm-pr-merge.test.sh` keeps the merge outcome path's upward reporting and its loud refusal without a binding.
 `tests/fm-brief.test.sh` pins the charter's channel rule.
