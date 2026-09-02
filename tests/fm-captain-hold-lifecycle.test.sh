@@ -1374,6 +1374,53 @@ SH
   pass "captain hold creation serializes with teardown"
 }
 
+test_pending_close_blocks_new_captain_hold() {
+  local home id wt rc show
+  home=$(make_home pending-close-hold)
+  id=sample-pending-close-hold
+  wt="$home/projects/$id"
+  mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
+  tasks_in "$home" add "$id" "Investigate pending close hold" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the pending-close fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
+    "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Pending close\n\nNo captain call exists yet.\n' > "$home/data/$id/report.md"
+  run_captain "$home" complete "$id" --none >/dev/null \
+    || fail "completion gate failed for the pending-close fixture"
+  cat > "$home/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$home/fakebin/treehouse"
+
+  set +e
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" --force \
+    > "$home/teardown.out" 2> "$home/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree return"
+  assert_present "$home/state/$id.backlog-close" \
+    "failed ordinary cleanup did not preserve its pending close"
+
+  if run_captain "$home" hold "$id" --reason "captain call attempted over pending close" \
+    > "$home/hold.out" 2> "$home/hold.err"; then
+    fail "captain hold succeeded over an older pending close"
+  fi
+  assert_grep "pending backlog close" "$home/hold.err" \
+    "captain hold did not explain the pending close refusal"
+  assert_present "$home/state/$id.backlog-close" \
+    "refused captain hold discarded the pending close"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the pending-close row disappeared"
+  assert_contains "$show" "state: in_flight" "refused captain hold changed the task state"
+  assert_not_contains "$show" "hold_kind: captain" \
+    "refused captain hold mutated the row before detecting the pending close"
+  pass "a pending close blocks a new captain hold"
+}
+
 test_concurrent_answer_survives_retention() {
   local home id teardown_pid answer_pid show
   home=$(make_home retain-answer-race)
@@ -1765,6 +1812,7 @@ test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task
 test_teardown_uses_relocated_captain_hold_backlog
 test_hold_cannot_race_past_teardown_open_check
+test_pending_close_blocks_new_captain_hold
 test_concurrent_answer_survives_retention
 test_bootstrap_recovers_kill_after_reopen
 test_bootstrap_recovers_kill_during_cleanup

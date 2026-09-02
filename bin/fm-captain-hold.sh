@@ -461,6 +461,9 @@ command_hold() {
   fi
   require_tasks_axi
   captain_task_lock_acquire "$id"
+  if [ -e "$STATE/$id.backlog-close" ] || [ -L "$STATE/$id.backlog-close" ]; then
+    fail "task $id has a pending backlog close; recover or complete it before creating a captain hold"
+  fi
   if show=$(task_show "$id"); then
     state=$(show_field "$show" state)
     [ "$state" != "done" ] \
