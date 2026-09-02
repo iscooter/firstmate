@@ -1215,6 +1215,27 @@ backlog_record_reconcile() {
   # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
   . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+  for marker in "$STATE"/*.backlog-retain; do
+    [ -e "$marker" ] || [ -L "$marker" ] || continue
+    if ! fm_backlog_record_present "$marker" "pending-retention record" "$STATE"; then
+      echo "BACKLOG_RECONCILE: unsafe pending retention refused: $FM_BACKLOG_TRANSITION_ERROR"
+      return 2
+    fi
+    label=$(basename "$marker" .backlog-retain)
+    if ! fm_backlog_close_marker_validate "$marker" "$DATA" "$label" "$STATE"; then
+      echo "BACKLOG_RECONCILE: $label: pending retention could not be validated: $FM_BACKLOG_TRANSITION_ERROR"
+      continue
+    fi
+    [ "$FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE" = 1 ] || continue
+    if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+        FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" \
+        recover-retain "$marker" >/dev/null; then
+      echo "BOOTSTRAP_INFO: completed replayable retention for captain-held $label"
+    else
+      echo "BACKLOG_RECONCILE: $label: recorded captain-call retention could not be replayed"
+    fi
+  done
+
   # Finish any close an interrupted cleanup recorded but never landed.
   for marker in "$STATE"/*.backlog-close; do
     [ -e "$marker" ] || [ -L "$marker" ] || continue
@@ -1262,7 +1283,8 @@ backlog_record_reconcile() {
     id=$(basename "$meta" .meta)
     meta_lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$meta_lock" || continue
-    if [ -e "$STATE/$id.backlog-close" ] || [ -L "$STATE/$id.backlog-close" ]; then
+    if [ -e "$STATE/$id.backlog-close" ] || [ -L "$STATE/$id.backlog-close" ] \
+       || [ -e "$STATE/$id.backlog-retain" ] || [ -L "$STATE/$id.backlog-retain" ]; then
       fm_lock_release "$meta_lock"
       continue
     fi
@@ -1332,10 +1354,10 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
       echo "error: bootstrap cannot reconcile task state ($FM_BACKLOG_TRANSITION_ERROR)" >&2
       exit 1
     fi
-    for BOOTSTRAP_BACKLOG_MARKER in "$STATE"/*.backlog-close; do
+    for BOOTSTRAP_BACKLOG_MARKER in "$STATE"/*.backlog-close "$STATE"/*.backlog-retain; do
       [ -e "$BOOTSTRAP_BACKLOG_MARKER" ] || [ -L "$BOOTSTRAP_BACKLOG_MARKER" ] || continue
-      if ! fm_backlog_record_present "$BOOTSTRAP_BACKLOG_MARKER" "pending-close record" "$STATE"; then
-        echo "error: bootstrap refused unsafe pending close ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      if ! fm_backlog_record_present "$BOOTSTRAP_BACKLOG_MARKER" "pending backlog transition record" "$STATE"; then
+        echo "error: bootstrap refused unsafe pending backlog transition ($FM_BACKLOG_TRANSITION_ERROR)" >&2
         exit 1
       fi
       BOOTSTRAP_BACKLOG_GATE_KIND=ship

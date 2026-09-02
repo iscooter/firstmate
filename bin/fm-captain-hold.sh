@@ -30,6 +30,7 @@
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id>
 #   fm-captain-hold.sh retain <task-id> [--report <path>] [--pr <url>] [--note <text>]
+#   fm-captain-hold.sh recover-retain <state/task-id.backlog-retain>
 #   fm-captain-hold.sh diverged
 #
 # `hold` places an existing task under an active captain hold, or creates the
@@ -138,9 +139,9 @@
 # leaves the call intact, because a caller reaches this command only on the path
 # where its alternative would have been to close the captain's own question.
 # `answer` and `retain` serialize their complete body-and-state transactions on
-# the task metadata lock. Teardown already owns that lock and passes its exact
-# path in FM_CAPTAIN_META_LOCK_ALREADY_HELD; only `retain` accepts that private
-# handoff, and teardown keeps ownership until the task record is removed.
+# the task metadata lock. Teardown records retention before cleanup, marks it
+# replayable afterward, releases its lock, and lets `recover-retain` acquire that
+# lock as the sole owner while it retains the current row and removes the record.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
@@ -236,13 +237,9 @@ BINDING_ANY='(any)'
 DECISION_TEXT=''
 DECISION_DIGEST=''
 
-captain_task_lock_acquire() {  # <task-id> [allow-inherited-0-or-1]
-  local expected
-  expected=$(fm_meta_lock_path "$STATE/$1.meta") || fail "could not resolve task metadata lock"
-  if [ "${2:-0}" = 1 ] && [ "${FM_CAPTAIN_META_LOCK_ALREADY_HELD:-}" = "$expected" ]; then
-    return 0
-  fi
-  CAPTAIN_META_LOCK=$expected
+captain_task_lock_acquire() {  # <task-id>
+  CAPTAIN_META_LOCK=$(fm_meta_lock_path "$STATE/$1.meta") \
+    || fail "could not resolve task metadata lock"
   fm_lock_acquire_wait "$CAPTAIN_META_LOCK" || fail "could not acquire task metadata lock for $1"
   CAPTAIN_META_LOCK_HELD=1
 }
@@ -458,7 +455,7 @@ command_hold() {
     esac
   fi
   require_tasks_axi
-  captain_task_lock_acquire "$id" 0
+  captain_task_lock_acquire "$id"
   if show=$(task_show "$id"); then
     state=$(show_field "$show" state)
     [ "$state" != "done" ] \
@@ -545,7 +542,7 @@ command_answer() {
   validate_slug task-id "$id"
   load_decision "$decision_file"
   require_tasks_axi
-  captain_task_lock_acquire "$id" 0
+  captain_task_lock_acquire "$id"
   show=$(task_show "$id") || fail "captain-held task $id is absent from $FM_HOME/data/backlog.md"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -950,46 +947,23 @@ command_open() {  # <task-id>
   [ "$state" != "done" ] && [ "$hold_kind" = captain ]
 }
 
-# See `retain` in the header. Every guard that makes this safe is here: the task
-# must still be an open captain call, the deliverable must be one line, and the
-# body already carrying that exact line is left alone.
-command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
-  local id=${1:-} report='' pr='' note='' show state hold_kind body deliverable='' line new_body tmp
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
-  shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --report) shift; report=${1:-} ;;
-      --pr) shift; pr=${1:-} ;;
-      --note) shift; note=${1:-} ;;
-      *) fail "unknown retain argument: $1" ;;
-    esac
-    shift
-  done
-  validate_slug "task id" "$id"
-  require_tasks_axi
-  captain_task_lock_acquire "$id" 1
+retain_task_locked() {  # <task-id> <report> <pr> <note> <allow-answered-0-or-1>
+  local id=$1 report=$2 pr=$3 note=$4 allow_answered=$5
+  local show state hold_kind body deliverable='' line new_body tmp
   show=$(task_show "$id") || fail "task $id is absent from $DATA/backlog.md"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
-  { [ "$state" != "done" ] && [ "$hold_kind" = captain ]; } \
+  body=$(show_field_value "$show" body) || fail "could not decode the existing body for $id"
+  if [ "$state" = done ] && [ "$allow_answered" = 1 ] && body_has_resolution_record "$body"; then
+    return 0
+  fi
+  { [ "$state" != done ] && [ "$hold_kind" = captain ]; } \
     || fail "task $id is not an open captain call, so there is nothing to retain"
-  if [ -n "$report" ]; then
-    validate_one_line "--report" "$report"
-    deliverable="report $report"
-  fi
-  if [ -n "$pr" ]; then
-    validate_one_line "--pr" "$pr"
-    deliverable="${deliverable:+$deliverable; }PR $pr"
-  fi
-  if [ -n "$note" ]; then
-    validate_one_line "--note" "$note"
-    deliverable="${deliverable:+$deliverable; }$note"
-  fi
+  [ -z "$report" ] || deliverable="report $report"
+  [ -z "$pr" ] || deliverable="${deliverable:+$deliverable; }PR $pr"
+  [ -z "$note" ] || deliverable="${deliverable:+$deliverable; }$note"
   if [ -n "$deliverable" ]; then
     line="Deliverable of the finished work: $deliverable"
-    body=$(show_field_value "$show" body) \
-      || fail "could not decode the existing body for $id"
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*) ;;
       *)
@@ -1009,9 +983,76 @@ command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
         ;;
     esac
   fi
+  show=$(task_show "$id") || fail "task $id disappeared while retaining it"
+  state=$(show_field "$show" state)
+  body=$(show_field_value "$show" body) || fail "could not re-read the body for $id"
+  if [ "$state" = done ] && [ "$allow_answered" = 1 ] && body_has_resolution_record "$body"; then
+    return 0
+  fi
+  [ "$state" != done ] || fail "task $id closed while it was being retained"
   tasks_axi reopen "$id" >/dev/null \
     || fail "could not return captain-held $id to Queued through tasks-axi reopen; the call itself is intact, so fix that and retry rather than closing it"
+}
+
+command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
+  local id=${1:-} report='' pr='' note=''
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --report) shift; report=${1:-} ;;
+      --pr) shift; pr=${1:-} ;;
+      --note) shift; note=${1:-} ;;
+      *) fail "unknown retain argument: $1" ;;
+    esac
+    shift
+  done
+  validate_slug "task id" "$id"
+  [ -z "$report" ] || validate_one_line "--report" "$report"
+  [ -z "$pr" ] || validate_one_line "--pr" "$pr"
+  [ -z "$note" ] || validate_one_line "--note" "$note"
+  require_tasks_axi
+  captain_task_lock_acquire "$id"
+  retain_task_locked "$id" "$report" "$pr" "$note" 0
   printf 'retained: %s\n' "$id"
+}
+
+command_recover_retain() {  # <pending-retention-record>
+  local marker=${1:-} marker_name id ready meta meta_spawn report='' pr='' note='' arg
+  local args=()
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  marker_name=${marker##*/}
+  case "$marker_name" in *.backlog-retain) id=${marker_name%.backlog-retain} ;; *) fail "invalid pending-retention record" ;; esac
+  validate_slug "task id" "$id"
+  [ "$marker" = "$STATE/$id.backlog-retain" ] || fail "pending-retention record is outside this home"
+  require_tasks_axi
+  captain_task_lock_acquire "$id"
+  fm_backlog_close_marker_validate "$marker" "$DATA" "$id" "$STATE" \
+    || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  ready=$FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE
+  [ "$ready" = 1 ] || fail "pending retention for $id is not ready to replay"
+  args=("${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]+"${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]}"}")
+  while [ "${#args[@]}" -gt 0 ]; do
+    arg=${args[0]}
+    case "$arg" in
+      --report) report=${args[1]:-} ;;
+      --pr) pr=${args[1]:-} ;;
+      --note) note=${args[1]:-}; [ "$note" != local%20main ] || note='local main' ;;
+    esac
+    args=("${args[@]:2}")
+  done
+  retain_task_locked "$id" "$report" "$pr" "$note" 1
+  meta="$STATE/$id.meta"
+  if [ -e "$meta" ] || [ -L "$meta" ]; then
+    fm_backlog_meta_spawn_gen "$meta" "$STATE" || fail "$FM_BACKLOG_TRANSITION_ERROR"
+    meta_spawn=$FM_BACKLOG_META_SPAWN_GEN
+    [ "$meta_spawn" = "$FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN" ] \
+      || fail "pending retention for $id belongs to another task incarnation"
+    fm_backlog_atomic_transition remove "$meta" "task record" "$STATE" \
+      || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  fi
+  fm_backlog_retain_marker_clear "$STATE" "$id" || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  printf 'recovered-retention: %s\n' "$id"
 }
 
 # --- record divergence ------------------------------------------------------
@@ -1144,6 +1185,7 @@ case "${1:-}" in
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
   retain) shift; command_retain "$@" ;;
+  recover-retain) shift; command_recover_retain "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;

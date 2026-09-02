@@ -21,10 +21,9 @@
 # the paths that already proceed to remove the record.
 # The close - and only the close - DEFERS while the backlog item is still an
 # open captain call (bin/fm-captain-hold.sh owns that predicate). Cleanup runs
-# first, then the deliverable and Queued transition commit immediately before
-# record removal under the metadata lock. Teardown passes that already-held lock
-# path through FM_CAPTAIN_META_LOCK_ALREADY_HELD so retain does not reacquire it,
-# and keeps ownership until removal completes. No pending-close record is staged,
+# first, then a durable pending-retention record becomes replayable immediately
+# before the deliverable, Queued transition, and record removal commit under one
+# child-owned metadata lock. No pending-close record is staged,
 # so nothing here or at the next session start closes a question the captain has
 # not answered; --force does not lift that, and bin/fm-captain-hold.sh answer
 # stays the only act that closes it.
@@ -2751,6 +2750,10 @@ elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
     echo "error: the completion links for captain-held $ID could not be resolved; refusing destructive teardown" >&2
     exit 1
   }
+  META_SPAWN_GEN=$TEARDOWN_META_SPAWN_GEN
+  fm_backlog_retain_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
+    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
+    || { echo "error: pending retention for captain-held $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); refusing destructive teardown" >&2; exit 1; }
 else
   if [ "$CLEANUP_RECOVERY" = orca ]; then
     BACKLOG_SKIP_REASON="Orca cleanup recovery is not a launched backlog worker"
@@ -2941,22 +2944,16 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
     exit 1
   fi
 elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
+  fm_backlog_retain_marker_mark_ready "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
+    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
+    || { echo "error: pending retention for captain-held $ID could not be made replayable ($FM_BACKLOG_TRANSITION_ERROR)" >&2; exit 1; }
+  BACKLOG_RETAIN_MARKER=$(fm_backlog_retain_marker_path "$STATE" "$ID") || exit 1
+  fm_lock_release "$META_LOCK"
+  META_LOCK_HELD=0
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-    FM_CONFIG_OVERRIDE="$CONFIG" FM_CAPTAIN_META_LOCK_ALREADY_HELD="$META_LOCK" \
-    "$SCRIPT_DIR/fm-captain-hold.sh" retain "$ID" \
-    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" >/dev/null \
-    || { echo "error: captain-held $ID could not be retained after endpoint cleanup; retaining its task record" >&2; exit 1; }
-  if ! fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE"; then
-    retain_remove_error=$FM_BACKLOG_TRANSITION_ERROR
-    if ! fm_backlog_start "$DATA" "$ID"; then
-      echo "error: captain-held $ID was retained, its task record could not be removed ($retain_remove_error), and its In flight state could not be restored ($FM_BACKLOG_TRANSITION_ERROR)" >&2
-    else
-      echo "error: captain-held $ID could not retire its task record ($retain_remove_error); its row was restored to In flight for retry" >&2
-    fi
-    fm_lock_release "$META_LOCK"
-    META_LOCK_HELD=0
-    exit 1
-  fi
+    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" \
+    recover-retain "$BACKLOG_RETAIN_MARKER" >/dev/null \
+    || { echo "error: captain-held $ID could not complete its replayable retention; the pending-retention record remains for session-start recovery" >&2; exit 1; }
 elif [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
   # A nested remote retirement can keep its route record inside the home being
   # removed. remove_firstmate_home above already performed that physical
@@ -2970,8 +2967,10 @@ else
     exit 1
   fi
 fi
-fm_lock_release "$META_LOCK"
-META_LOCK_HELD=0
+if [ "$META_LOCK_HELD" = 1 ]; then
+  fm_lock_release "$META_LOCK"
+  META_LOCK_HELD=0
+fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

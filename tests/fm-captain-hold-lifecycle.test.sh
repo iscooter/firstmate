@@ -1212,6 +1212,8 @@ EOF
   assert_absent "$home/state/$id.meta" "cleanup did not release the finished worker record"
   assert_absent "$home/state/$id.backlog-close" \
     "a pending close would let the next session start close the captain call anyway"
+  assert_absent "$home/state/$id.backlog-retain" \
+    "successful cleanup left its retention recovery record behind"
   json=$(run_bearings "$home") || fail "Bearings failed after cleanup of a captain-held task"
   printf '%s' "$json" | jq -e --arg id "$id" '
     (.decisions_open | any(.id == $id and .verb == "captain-hold"))
@@ -1410,13 +1412,20 @@ SH
     sleep 0.02
   done
   [ -f "$home/retain.ready" ] || fail "retention never reached its body update"
+  kill -9 "$teardown_pid" 2>/dev/null || true
+  wait "$teardown_pid" 2>/dev/null || true
   run_captain "$home" answer "$id" --decision-file "$home/answer.txt" \
     > "$home/answer.out" 2> "$home/answer.err" &
   answer_pid=$!
   sleep 0.1
   : > "$home/retain.release"
-  wait "$teardown_pid" || fail "concurrent retention failed: $(cat "$home/teardown.err")"
   wait "$answer_pid" || fail "concurrent answer failed: $(cat "$home/answer.err")"
+  for i in $(seq 1 250); do
+    [ -e "$home/state/$id.backlog-retain" ] || break
+    sleep 0.02
+  done
+  assert_absent "$home/state/$id.backlog-retain" \
+    "orphaned retention did not finish its durable transaction"
 
   show=$(tasks_in "$home" show "$id" --full) || fail "the concurrently answered row disappeared"
   assert_contains "$show" "state: done" "retention silently reopened the concurrent answer"
@@ -1425,6 +1434,70 @@ SH
   assert_contains "$show" "Deliverable of the finished work" \
     "the serialized answer lost the retained deliverable"
   pass "retention serializes with a concurrent captain answer"
+}
+
+test_bootstrap_recovers_kill_after_reopen() {
+  local home id teardown_pid worker_pid i show bootstrap
+  home=$(make_home retain-reopen-crash)
+  id=sample-retain-reopen-crash
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate retain reopen crash" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the retain-reopen fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Retain reopen crash\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose after recovery" >/dev/null \
+    || fail "could not hold the retain-reopen fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the retain-reopen fixture"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_TEST_PAUSE_REOPEN:-0}" = 1 ] && [ "${1:-}" = reopen ] \
+    && [ "${2:-}" = "${FM_TEST_REOPEN_ID:-}" ]; then
+  "${REAL_TASKS_AXI:?}" "$@"
+  rc=$?
+  printf '%s\n' "$PPID" > "$FM_TEST_REOPEN_WORKER"
+  : > "$FM_TEST_REOPEN_READY"
+  while [ ! -f "$FM_TEST_REOPEN_RELEASE" ]; do sleep 0.02; done
+  exit "$rc"
+fi
+exec "${REAL_TASKS_AXI:?}" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_TEST_PAUSE_REOPEN=1 FM_TEST_REOPEN_ID="$id" \
+    FM_TEST_REOPEN_READY="$home/reopen.ready" FM_TEST_REOPEN_RELEASE="$home/reopen.release" \
+    FM_TEST_REOPEN_WORKER="$home/reopen.worker" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" \
+    > "$home/teardown.out" 2> "$home/teardown.err" &
+  teardown_pid=$!
+  for i in $(seq 1 250); do
+    [ ! -f "$home/reopen.ready" ] || break
+    sleep 0.02
+  done
+  [ -f "$home/reopen.ready" ] || fail "retention never reached its reopened state"
+  worker_pid=$(cat "$home/reopen.worker")
+  kill -9 "$worker_pid" "$teardown_pid" 2>/dev/null || true
+  : > "$home/reopen.release"
+  wait "$teardown_pid" 2>/dev/null || true
+
+  assert_present "$home/state/$id.meta" "the crash fixture did not preserve its torn task record"
+  assert_present "$home/state/$id.backlog-retain" "the crash lost its retention recovery record"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the crashed retained row disappeared"
+  assert_contains "$show" "state: queued" "the crash fixture did not reach the reopen window"
+  bootstrap=$(PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1) \
+    || fail "bootstrap could not replay retained captain state: $bootstrap"
+  assert_absent "$home/state/$id.meta" "bootstrap left retained metadata behind"
+  assert_absent "$home/state/$id.backlog-retain" "bootstrap left the retention record behind"
+  show=$(tasks_in "$home" show "$id" --full) || fail "bootstrap erased the retained row"
+  assert_contains "$show" "state: queued" "bootstrap did not preserve the retained queue state"
+  assert_contains "$show" "hold_kind: captain" "bootstrap dropped the recovered captain hold"
+  pass "bootstrap recovers a kill between reopen and record removal"
 }
 
 test_late_cleanup_failure_keeps_hold_in_flight() {
@@ -1531,5 +1604,6 @@ test_teardown_never_closes_a_captain_held_task
 test_teardown_uses_relocated_captain_hold_backlog
 test_hold_cannot_race_past_teardown_open_check
 test_concurrent_answer_survives_retention
+test_bootstrap_recovers_kill_after_reopen
 test_late_cleanup_failure_keeps_hold_in_flight
 test_teardown_refuses_when_captain_hold_cannot_be_read

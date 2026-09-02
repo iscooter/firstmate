@@ -5,8 +5,9 @@
 # caller that already sourced it keeps its memoised compatibility verdict).
 #
 # INVARIANT. In ordinary successful lifecycle state, `state/<id>.meta` exists
-# <=> this home's backlog row for <id> is In flight; the one teardown crash
-# window is represented by `state/<id>.backlog-close`. Deferring an open captain
+# <=> this home's backlog row for <id> is In flight; teardown crash windows are
+# represented by `state/<id>.backlog-close` or `state/<id>.backlog-retain`.
+# Deferring an open captain
 # call preserves this invariant: teardown returns the row to Queued when it
 # removes the record, rather than retiring the captain's own question.
 # bin/fm-captain-hold.sh answer later closes that queued row. The script performing the
@@ -40,6 +41,9 @@
 # with it the completion links, so a process killed between the two halves would
 # leave nothing to reconstruct the close from. It writes
 # `state/<id>.backlog-close` first, and removes it once the close lands.
+# Captain-call deferral similarly stages `state/<id>.backlog-retain`, marks it
+# replayable only after cleanup succeeds, and recovery can only retain, never
+# close, that row.
 # The writer and replay share one complete-record validator, and teardown stages
 # that record before destructive cleanup, so it never publishes or acts on a close
 # replay would reject. The validator pins the data path to this home's configured
@@ -472,6 +476,10 @@ fm_backlog_close_marker_path() {  # <state-dir> <id>
   printf '%s/%s.backlog-close\n' "$1" "$2"
 }
 
+fm_backlog_retain_marker_path() {  # <state-dir> <id>
+  printf '%s/%s.backlog-retain\n' "$1" "$2"
+}
+
 fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <expected-id> <state-dir>
   local marker=$1 authorized_data data_resolved expected_id=$3 state=$4
   local id='' data='' marker_spawn_gen='' cleanup_incomplete=0 line raw_bytes arg_value
@@ -678,6 +686,33 @@ fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [fl
   fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 0 "$@" || return 1
   fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-close record" "$state" \
     || { rm -f "$tmp"; return 1; }
+}
+
+fm_backlog_retain_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
+  local state=$1 id=$2 data=$3 spawn_gen=$4 marker tmp
+  fm_backlog_directory_present "$state" "state directory" || return 1
+  shift 4
+  marker=$(fm_backlog_retain_marker_path "$state" "$id") || return 1
+  tmp="$state/.$id.backlog-retain.${BASHPID:-$$}"
+  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 0 "$@" || return 1
+  fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-retention record" "$state" \
+    || { rm -f "$tmp"; return 1; }
+}
+
+fm_backlog_retain_marker_mark_ready() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
+  local state=$1 id=$2 data=$3 spawn_gen=$4 marker tmp
+  shift 4
+  marker=$(fm_backlog_retain_marker_path "$state" "$id") || return 1
+  tmp="$state/.$id.backlog-retain.${BASHPID:-$$}"
+  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 1 "$@" || return 1
+  fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-retention record" "$state" \
+    || { rm -f "$tmp"; return 1; }
+}
+
+fm_backlog_retain_marker_clear() {  # <state-dir> <id>
+  local marker
+  marker=$(fm_backlog_retain_marker_path "$1" "$2") || return 1
+  fm_backlog_atomic_transition remove "$marker" "pending-retention record" "$1"
 }
 
 fm_backlog_close_marker_mark_cleanup_incomplete() {  # <state-dir> <marker-path> <id> <data-dir> <spawn-gen> [flag...]
