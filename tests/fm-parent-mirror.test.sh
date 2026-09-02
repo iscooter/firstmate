@@ -171,7 +171,7 @@ test_open_decision_thresholded_then_closed() {
   sweep "$MATE" 1030 >/dev/null || fail "second sweep failed"
   [ ! -e "$(parent_channel)" ] || fail "a decision inside the threshold was raised"
   sweep "$MATE" 1060 >/dev/null || fail "third sweep failed"
-  grep -F 'needs-decision [key=mirror-child-api]: mirror: child=child decision api open past 60s without an answer or a captain hold: choose A or B' "$(parent_channel)" >/dev/null \
+  grep -F 'needs-decision [key=mirror-child-api]: mirror: child=child decision api (opened at line 1) open past 60s without an answer or a captain hold: choose A or B' "$(parent_channel)" >/dev/null \
     || fail "the standing decision was not raised: $(cat "$(parent_channel)")"
   parent_open_decisions | grep -q "^mirror-child-api	needs-decision	" \
     || fail "the parent's fold did not open the mirrored decision"
@@ -179,10 +179,36 @@ test_open_decision_thresholded_then_closed() {
   [ "$(channel_lines)" = 1 ] || fail "a standing decision was raised twice"
   ledger "$MATE" child 'resolved [key=api]: chose A'
   sweep "$MATE" 1300 >/dev/null || fail "closing sweep failed"
-  grep -F 'resolved [key=mirror-child-api]: mirror: child=child decision api closed' "$(parent_channel)" >/dev/null \
+  grep -F 'resolved [key=mirror-child-api]: mirror: child=child decision api (opened at line 1) closed' "$(parent_channel)" >/dev/null \
     || fail "the closed decision was not closed on the parent: $(cat "$(parent_channel)")"
   [ -z "$(parent_open_decisions)" ] || fail "the parent's fold still holds the closed decision: $(parent_open_decisions)"
   pass "an open decision is raised past the threshold and closed with the child's own close"
+}
+
+# The same key re-opened after a close, even with the same note, is a new
+# opening: it is raised and closed again rather than lost to deduplication.
+test_reopened_decision_is_raised_again() {
+  make_world reopen; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'needs-decision [key=api]: choose A or B'
+  sweep "$MATE" 1000 >/dev/null || fail "first sweep failed"
+  sweep "$MATE" 1060 >/dev/null || fail "second sweep failed"
+  ledger "$MATE" child 'resolved [key=api]: chose A'
+  sweep "$MATE" 1100 >/dev/null || fail "closing sweep failed"
+  ledger "$MATE" child 'needs-decision [key=api]: choose A or B'
+  sweep "$MATE" 1200 >/dev/null || fail "re-open sweep failed"
+  sweep "$MATE" 1260 >/dev/null || fail "re-open threshold sweep failed"
+  grep -F 'decision api (opened at line 3) open past 60s' "$(parent_channel)" >/dev/null \
+    || fail "the re-opened decision was not raised: $(cat "$(parent_channel)")"
+  parent_open_decisions | grep -q "^mirror-child-api	needs-decision	" \
+    || fail "the parent's fold did not re-open the decision"
+  ledger "$MATE" child 'resolved [key=api]: chose B after all'
+  sweep "$MATE" 1300 >/dev/null || fail "second closing sweep failed"
+  grep -F 'decision api (opened at line 3) closed' "$(parent_channel)" >/dev/null \
+    || fail "the re-opened decision was not closed again: $(cat "$(parent_channel)")"
+  [ "$(channel_lines)" = 4 ] || fail "expected two openings and two closes, got: $(cat "$(parent_channel)")"
+  [ -z "$(parent_open_decisions)" ] || fail "the parent's fold still holds the re-closed decision"
+  pass "a decision re-opened under the same key is raised and closed again"
 }
 
 # A decision the mate answers, or transfers to a captain hold, inside the
@@ -427,6 +453,7 @@ test_done_line_delivered_once
 test_scout_report_pointer
 test_partial_line_waits_for_newline
 test_open_decision_thresholded_then_closed
+test_reopened_decision_is_raised_again
 test_decision_handled_inside_threshold_is_silent
 test_failed_line_thresholded_and_superseded
 test_untracked_decision_line_is_delivered_as_done

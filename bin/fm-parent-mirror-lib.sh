@@ -20,7 +20,7 @@
 #   terminal_first_seen=<epoch that line was first seen standing>
 #   terminal_reported=0|1
 #   orphan=0|1        (1: the child's record is gone but delivery is still owed)
-#   open=<key>|<first-seen-epoch>|<mirrored 0|1>   (one line per open decision)
+#   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>   (one per open decision)
 # The record is rewritten atomically; a changed ledger identity or a shrunk
 # ledger resets the offset to 0, and exact-line deduplication on the channel
 # keeps a re-examined line from being delivered twice. A record whose child
@@ -36,9 +36,12 @@
 #   - a needs-decision or blocked decision, once it has stayed open in the
 #     child's fold (bin/fm-classify-lib.sh's status_open_decisions) for that
 #     same threshold without a resolution or captain-held transfer:
-#       <verb> [key=mirror-<child>-<key>]: mirror: child=<child> decision <key> open past <threshold>s without an answer or a captain hold: <note>
+#       <verb> [key=mirror-<child>-<key>]: mirror: child=<child> decision <key> (opened at line <n>) open past <threshold>s without an answer or a captain hold: <note>
 #     and its close, when the child's fold no longer holds the key:
-#       resolved [key=mirror-<child>-<key>]: mirror: child=<child> decision <key> closed
+#       resolved [key=mirror-<child>-<key>]: mirror: child=<child> decision <key> (opened at line <n>) closed
+#     An opening is identified by its key and the ledger line that opened it,
+#     so a key re-opened after a close is a new delivery even with the same
+#     note, while the exact-line deduplication still holds for one opening.
 #   - a decision line the fold cannot track (invalid or reserved key) is
 #     delivered immediately under the done verb with an explicit note, because
 #     an untrackable open must never open a parent decision nothing can close.
@@ -159,10 +162,20 @@ EOF
   return 1
 }
 
-_fm_parent_mirror_open_entry() {  # <open-lines> <key> -> "<key>|<seen>|<mirrored>"
+_fm_parent_mirror_open_entry() {  # <open-lines> <key> -> "<key>|<seen>|<mirrored>|<origin>"
   local line
   while IFS= read -r line; do
     case "$line" in "$2|"*) printf '%s' "$line"; return 0 ;; esac
+  done <<EOF
+$1
+EOF
+  return 1
+}
+
+_fm_parent_mirror_origin_of() {  # <origins> <key> -> opening line number
+  local line
+  while IFS= read -r line; do
+    case "$line" in "$2"$'\t'*) printf '%s' "${line#*$'\t'}"; return 0 ;; esac
   done <<EOF
 $1
 EOF
@@ -252,7 +265,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1>
   local terminal_line terminal_first_seen terminal_reported
   local open_lines='' next_open='' fold='' changed=0 rc=0
   local chunk line verb note key line_offset line_start committed context last last_verb
-  local entry entry_key entry_seen entry_mirrored fold_verb fold_note fold_entry age
+  local entry entry_key entry_seen entry_mirrored entry_origin origins origin fold_verb fold_note fold_entry age
   local LC_ALL=C
   status="$STATE/$child.status"
   record=$(fm_parent_mirror_record_path "$STATE" "$child")
@@ -375,33 +388,37 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1>
 
   # 3. Open decisions: fold the ledger when it changed, age what is still
   #    open, deliver what stood past the threshold, close what folded closed.
+  #    An opening is (key, origin line): a key re-opened at a later line is a
+  #    new opening, closed and re-raised separately.
   if [ "$rc" -eq 0 ]; then
     if [ "$changed" -eq 1 ] || [ ! -f "$record" ]; then
       fold=$(status_open_decisions "$status")
+      origins=$(_fm_status_open_decision_origins "$status")
     else
       fold=''
-      while IFS= read -r entry; do
-        [ -n "$entry" ] || continue
-        fold="${fold}${entry%%|*}"$'\t'"kept"$'\t'$'\n'
+      origins=''
+      while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
+        [ -n "$entry_key" ] || continue
+        fold="${fold}${entry_key}"$'\t'"kept"$'\t'$'\n'
+        origins="${origins}${entry_key}"$'\t'"${entry_origin}"$'\n'
       done <<EOF
 $open_lines
 EOF
     fi
-    # Close what is no longer open.
+    # Close what is no longer open at the same origin.
     next_open=''
-    while IFS= read -r entry; do
-      [ -n "$entry" ] || continue
-      entry_key=${entry%%|*}
-      entry_mirrored=${entry##*|}
-      if _fm_parent_mirror_fold_has "$fold" "$entry_key"; then
-        next_open="${next_open}${entry}"$'\n'
+    while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
+      [ -n "$entry_key" ] || continue
+      origin=$(_fm_parent_mirror_origin_of "$origins" "$entry_key") || origin=''
+      if _fm_parent_mirror_fold_has "$fold" "$entry_key" && [ "$origin" = "$entry_origin" ]; then
+        next_open="${next_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
         continue
       fi
       if [ "$entry_mirrored" = 1 ]; then
         if ! _fm_parent_mirror_publish \
-          "resolved [key=mirror-$child-$entry_key]: mirror: child=$child decision $entry_key closed"; then
+          "resolved [key=mirror-$child-$entry_key]: mirror: child=$child decision $entry_key (opened at line $entry_origin) closed"; then
           rc=4
-          next_open="${next_open}${entry}"$'\n'
+          next_open="${next_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
         fi
       fi
     done <<EOF
@@ -412,10 +429,13 @@ EOF
     next_open=''
     while IFS=$'\t' read -r key fold_verb fold_note; do
       [ -n "$key" ] || continue
-      entry=$(_fm_parent_mirror_open_entry "$open_lines" "$key") || entry="$key|$now|0"
-      entry_seen=${entry#*|}; entry_seen=${entry_seen%%|*}
-      entry_mirrored=${entry##*|}
+      origin=$(_fm_parent_mirror_origin_of "$origins" "$key") || origin=0
+      entry=$(_fm_parent_mirror_open_entry "$open_lines" "$key") || entry="$key|$now|0|$origin"
+      IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin <<EOF
+$entry
+EOF
       case "$entry_seen" in ''|*[!0-9]*) entry_seen=$now ;; esac
+      [ -n "$entry_origin" ] || entry_origin=$origin
       if [ "$rc" -eq 0 ] && [ "$entry_mirrored" != 1 ]; then
         age=$((now - entry_seen))
         if [ "$age" -ge "$open_secs" ]; then
@@ -432,7 +452,7 @@ EOF
           case "$fold_verb" in
             needs-decision|blocked)
               if _fm_parent_mirror_publish \
-                "$fold_verb [key=mirror-$child-$key]: mirror: child=$child decision $key open past ${open_secs}s without an answer or a captain hold: $(fm_parent_channel_clean_note "$fold_note")$context"; then
+                "$fold_verb [key=mirror-$child-$key]: mirror: child=$child decision $key (opened at line $entry_origin) open past ${open_secs}s without an answer or a captain hold: $(fm_parent_channel_clean_note "$fold_note")$context"; then
                 entry_mirrored=1
               else
                 rc=4
@@ -441,7 +461,7 @@ EOF
           esac
         fi
       fi
-      next_open="${next_open}${key}|${entry_seen}|${entry_mirrored}"$'\n'
+      next_open="${next_open}${key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
     done <<EOF
 $fold
 EOF
