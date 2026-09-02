@@ -29,12 +29,12 @@
 #   line_count=<whole ledger lines through offset>
 #   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>|<verb>|<note>
 # The record is rewritten atomically; a changed ledger identity or a shrunk
-# ledger resets the offset to 0, an incarnation change marks the prior
-# generation's standing failure handled while a later failed line starts a new
-# clock, and exact-line deduplication on the channel keeps a re-examined line
-# from being delivered twice. A record whose child
-# record is gone is an orphan and is swept until it is delivered or its ledger
-# disappears.
+# ledger resets the offset to 0, carries mirrored open decisions forward as
+# pending closes, and clears terminal state from the invalidated identity.
+# An incarnation change marks the prior generation's standing failure handled
+# while a later failed line starts a new clock, and exact-line deduplication on
+# the channel keeps a re-examined line from being delivered twice. A record
+# whose child record is gone is an orphan and is swept until delivery completes.
 #
 # What is mirrored, and when:
 #   - a done line, or a legacy free-text captain-relevant line, immediately:
@@ -79,8 +79,9 @@
 # Return codes for the sweep entry points: 0 delivered or nothing to deliver,
 # 2 unusable identity marker, 3 unreadable parent binding, 4 an append or
 # record write failed (the record keeps the undelivered position for the next
-# sweep), and 5 a targeted sweep deferred by lock contention. Every non-zero outcome is also queued once per unhandled episode as
-# a durable check wake in this home, and printed on stdout only when newly
+# sweep), and 5 a targeted sweep deferred by lock contention. Channel and
+# delivery failures 2 through 4 are queued once per unhandled episode as a
+# durable check wake in this home, and printed on stdout only when newly
 # queued, so an unreportable home is loud rather than quietly silent and a
 # standing problem does not wake the mate on every poll.
 #
@@ -195,7 +196,7 @@ EOF
   return 1
 }
 
-_fm_parent_mirror_open_entry() {  # <open-lines> <key> -> "<key>|<seen>|<mirrored>|<origin>"
+_fm_parent_mirror_open_entry() {  # <open-lines> <key> -> "<key>|<seen>|<mirrored>|<origin>|<verb>|<note>"
   local line
   while IFS= read -r line; do
     case "$line" in "$2|"*) printf '%s' "$line"; return 0 ;; esac

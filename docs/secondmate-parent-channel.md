@@ -109,14 +109,15 @@ The delivery rule has one sentence: the machinery reports facts, the mate report
 ## Noise and failure direction
 
 A mate that also appends its own line about a mirrored child produces a second line, never a missed one; the parent reads the mirror line as the fact and the mate's line as commentary.
-Every mirrored line uses the injective key `mirror-<child-length>-<child>-<offset-or-key>` and is appended at most once, so distinct child and decision pairs cannot collide and a restart, a replayed sweep, or a relaunched child cannot duplicate a delivered event.
+Offset-addressed events use `mirror-<child-length>-<child>-l<offset>`, while decisions use `mirror-<child-length>-<child>-<decision-key>` and carry their opening line in the rendered event text.
+The child-length prefix prevents ambiguous child and suffix boundaries, exact-line append deduplicates a retry of one rendered event, and a decision explicitly closed and later reopened at a new line remains a distinct opening.
 Standing failures retain their ledger offset as event identity, so an identical failure recurring after recovery is delivered as a new event.
 An unreadable parent binding is reported once through an atomic bounded append-if-key-absent wake operation in the mate home, so concurrent diagnostics cannot duplicate the episode, an already-queued episode stays quiet, and contention on either the queue or recovery-marker lock degrades to stderr rather than wedging the watcher.
 The mirror needs a live mate watcher, which is already required whenever the mate has work in flight; a mate with no work has no ledger to mirror.
 
 ## Regression coverage
 
-`tests/fm-parent-mirror.test.sh` covers the sweep against real ledgers with no harness: immediate done delivery with recorded context and the scout report pointer, whole-line delivery, thresholded decision and failure delivery with keyed close, silence for anything handled inside the threshold, untrackable decision lines, the remote route, the PR registration hook, the retire path with orphan retry, bounded lock waits, main-home inertness, the once-per-episode unreadable-binding diagnostic, and the real watcher poll driving the sweep.
+`tests/fm-parent-mirror.test.sh` covers the sweep against real ledgers with no harness: immediate done delivery with recorded context and the scout report pointer, whole-line and incremental-span delivery, thresholded decision and failure delivery, decision updates and keyed closes and reopens, ledger replacement recovery, trailing blank lines, silence for anything handled inside the threshold, untrackable decision lines, the remote route, the PR registration hook, the retire path with orphan retry, bounded lock waits, main-home inertness, the once-per-episode unreadable-binding diagnostic, and the real watcher poll driving the sweep.
 `tests/fm-captain-hold-lifecycle.test.sh` covers a mate home publishing a captain hold and its answer, and the real teardown delivering a scout's final line before retiring its record.
 `tests/fm-inactive-reconcile.test.sh` covers the inactive scan yielding terminal-verb ledgers to the mirror while keeping the silent-ledger cases that remain its own.
 `tests/fm-pr-merge.test.sh` keeps the merge outcome path's upward reporting and its loud refusal without a binding.

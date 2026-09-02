@@ -12,8 +12,9 @@
 # is a silent no-op. The watcher (bin/fm-watch.sh) runs it on every poll,
 # bin/fm-pr-check.sh runs it for a child whose PR it just registered, and
 # bin/fm-teardown.sh runs the same library in-process before a child's record
-# is removed. Output is empty on a quiet sweep and one `actionable:` line per
-# problem otherwise; the exit status is the library's return code.
+# is removed. Output is empty on a quiet sweep and prints an `actionable:` line
+# only when a channel or delivery diagnostic is newly queued; the exit status
+# is the library's return code, including 5 for targeted lock contention.
 #
 # `owns-ledger` exits 0 when the child's ledger ends in a terminal captain
 # verb, the evidence this mirror delivers on its own clock; the inactive
