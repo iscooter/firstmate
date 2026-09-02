@@ -306,7 +306,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   local child=$1 meta=$2 orphan=$3 deliver_now=${4:-0} status record now open_secs
   local size ident offset rec_ident incarnation rec_incarnation complete_size=0 scan_start=0 span_complete=0
   local terminal_line terminal_offset terminal_first_seen terminal_reported tail=0 captured='' prefix='' dir
-  local open_lines='' next_open='' close_failed='' fold='' rc=0 rec_line_count=0 line_count=0 processed_lines=0
+  local open_lines='' next_open='' close_failed='' reset_open='' fold='' rc=0 rec_line_count=0 line_count=0 processed_lines=0
   local chunk line verb note key mirror_key line_offset line_start committed context last last_verb last_offset
   local entry entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note origins origin fold_verb fold_note age timing
   local line_number resolve held after
@@ -344,9 +344,20 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   case "$rec_line_count" in ''|*[!0-9]*) rec_line_count=0; offset=0; open_lines='' ;; esac
   case "$terminal_reported" in 1) ;; *) terminal_reported=0 ;; esac
   if [ "$rec_ident" != "$ident" ] || [ "$offset" -gt "$size" ]; then
+    reset_open=''
+    while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note; do
+      [ -n "$entry_key" ] && [ "$entry_mirrored" = 1 ] || continue
+      reset_open="${reset_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}|closed|${entry_note}"$'\n'
+    done <<EOF
+$open_lines
+EOF
+    open_lines=$reset_open
+    terminal_line=''
+    terminal_offset=''
+    terminal_first_seen=''
+    terminal_reported=0
     offset=0
     rec_line_count=0
-    open_lines=''
   fi
   scan_start=$offset
   line_count=$rec_line_count
@@ -541,7 +552,8 @@ EOF
   while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note; do
     [ -n "$entry_key" ] || continue
     origin=$(_fm_parent_mirror_origin_of "$origins" "$entry_key") || origin=''
-    if _fm_parent_mirror_fold_has "$fold" "$entry_key" && [ "$origin" = "$entry_origin" ]; then
+    if [ "$entry_verb" != closed ] \
+      && _fm_parent_mirror_fold_has "$fold" "$entry_key" && [ "$origin" = "$entry_origin" ]; then
       next_open="${next_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}|${entry_verb}|${entry_note}"$'\n'
       continue
     fi

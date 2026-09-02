@@ -309,6 +309,44 @@ test_open_decision_thresholded_then_closed() {
   pass "an open decision is raised past the threshold and closed with the child's own close"
 }
 
+test_ledger_reset_closes_decisions_and_clears_failures() {
+  make_world reset-decision; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'needs-decision [key=api]: choose before reset'
+  sweep "$MATE" 1000 >/dev/null || fail "reset decision observation failed"
+  sweep "$MATE" 1060 >/dev/null || fail "reset decision delivery failed"
+  parent_open_decisions | grep -q '^mirror-5-child-api' \
+    || fail "reset fixture did not open its parent decision"
+  printf 'working: replacement generation\n' > "$MATE/state/child.status.next"
+  mv "$MATE/state/child.status.next" "$MATE/state/child.status" \
+    || fail "could not replace the decision ledger"
+  sweep "$MATE" 1070 >/dev/null || fail "replacement decision sweep failed"
+  grep -F 'resolved [key=mirror-5-child-api]: mirror: child=child decision api (opened at line 1) closed' "$(parent_channel)" >/dev/null \
+    || fail "ledger replacement did not close the mirrored decision"
+  [ -z "$(parent_open_decisions)" ] || fail "ledger replacement left the parent decision open"
+
+  make_world reset-failure; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'failed: old generation failure'
+  sweep "$MATE" 2000 >/dev/null || fail "reset failure observation failed"
+  printf 'working: replacement generation\n' > "$MATE/state/child.status.next"
+  mv "$MATE/state/child.status.next" "$MATE/state/child.status" \
+    || fail "could not replace the failed ledger"
+  sweep "$MATE" 2010 >/dev/null || fail "replacement failure sweep failed"
+  sweep "$MATE" 2060 >/dev/null || fail "old failure threshold sweep failed"
+  [ ! -e "$(parent_channel)" ] || fail "old failure survived ledger replacement"
+  ledger "$MATE" child 'failed: replacement generation failure'
+  sweep "$MATE" 2070 >/dev/null || fail "replacement failure observation failed"
+  [ ! -e "$(parent_channel)" ] || fail "replacement failure skipped its own threshold"
+  sweep "$MATE" 2130 >/dev/null || fail "replacement failure delivery failed"
+  grep -F 'replacement generation failure (unhandled past 60s)' "$(parent_channel)" >/dev/null \
+    || fail "new failure after ledger replacement was not delivered"
+  if grep -F 'old generation failure' "$(parent_channel)" >/dev/null; then
+    fail "stale failure from the replaced ledger was delivered"
+  fi
+  pass "ledger resets close decisions and discard stale failures"
+}
+
 test_failed_decision_close_retries_without_child_change() {
   local rc=0
   make_world close-retry; bind_secondmate local
@@ -860,6 +898,7 @@ test_partial_line_waits_for_newline
 test_orphan_retains_unterminated_tail
 test_partial_thresholded_outcomes_do_not_age
 test_open_decision_thresholded_then_closed
+test_ledger_reset_closes_decisions_and_clears_failures
 test_failed_decision_close_retries_without_child_change
 test_reopened_decision_is_raised_again
 test_decision_handled_inside_threshold_is_silent
