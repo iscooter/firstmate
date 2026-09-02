@@ -1266,8 +1266,9 @@ backlog_record_reconcile() {
   done
 
   # A home that owns no records has nothing to pair, so it never pays for a
-  # backlog read. A pending close remains authoritative even when replay failed:
-  # the record sweep below must not start that item while its marker survives.
+  # backlog read. A pending close or retention remains authoritative even when
+  # replay failed, so the record sweep below must not start that item while its
+  # marker survives.
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || [ -L "$meta" ] || continue
     if ! fm_backlog_record_present "$meta" "task record" "$STATE"; then

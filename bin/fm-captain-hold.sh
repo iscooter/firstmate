@@ -138,7 +138,7 @@
 # re-recording the same deliverable is a no-op. Every refusal here is loud and
 # leaves the call intact, because a caller reaches this command only on the path
 # where its alternative would have been to close the captain's own question.
-# `answer` and `retain` serialize their complete body-and-state transactions on
+# All `hold`, `answer`, `retain`, and `recover-retain` mutations serialize on
 # the task metadata lock. Teardown records replayable retention before cleanup,
 # marks cleanup complete afterward, releases its lock, and lets `recover-retain`
 # acquire that lock as the sole owner while it retains the current row and removes

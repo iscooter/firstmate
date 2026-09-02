@@ -46,10 +46,12 @@
 # A kill or reported cleanup failure in that window still recovers a durably
 # held captain call; recovery can only retain, never close, and removes the
 # record once the transition completes.
-# The writer and replay share one complete-record validator, and teardown stages
-# that record before destructive cleanup, so it never publishes or acts on a close
-# replay would reject. The validator pins the data path to this home's configured
-# root before any recovery mutation, then re-runs exactly that close.
+# Both marker writers share one complete-record validator with their recovery
+# paths, and teardown stages each record before destructive cleanup, so it never
+# publishes or acts on a transition recovery would reject. The validator pins
+# the data path to this home's configured root before any recovery mutation.
+# Close recovery re-runs exactly the recorded close, while retention recovery
+# can only re-assert the recorded hold.
 # `tasks-axi done` on an already-closed task backfills links
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
 # it publishes the meta first, so a crash
