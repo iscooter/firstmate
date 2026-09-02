@@ -1262,6 +1262,49 @@ EOF
   pass "cleanup leaves a captain-held work item open with its deliverable, and only an answer closes it"
 }
 
+test_teardown_refuses_when_captain_hold_cannot_be_read() {
+  local home id rc show
+  home=$(make_home teardown-hold-read-error)
+  id=sample-unreadable-hold
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate unreadable sample hold" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the unreadable-hold fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Unreadable hold\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose the sample outcome" >/dev/null \
+    || fail "could not hold the unreadable-hold fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the unreadable-hold fixture"
+
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = show ] && [ "${2:-}" = "${TASKS_AXI_FAIL_SHOW_ID:-}" ]; then
+  printf 'error: temporary backlog read failure\n' >&2
+  exit 75
+fi
+exec "${REAL_TASKS_AXI:?}" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  set +e
+  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    TASKS_AXI_FAIL_SHOW_ID="$id" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" \
+    > "$home/teardown.out" 2> "$home/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "cleanup treated an unreadable captain hold as permission to close"
+  assert_present "$home/state/$id.meta" "read uncertainty must refuse before removing task metadata"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the unreadable captain-held row disappeared"
+  assert_contains "$show" "state: in_flight" "read uncertainty allowed cleanup to transition the row"
+  assert_contains "$show" "hold_kind: captain" "read uncertainty dropped the captain hold"
+  assert_grep "temporary backlog read failure" "$home/teardown.err" \
+    "the underlying captain-hold read failure was hidden"
+  pass "cleanup fails closed when the captain hold cannot be read"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -1280,3 +1323,4 @@ test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task
+test_teardown_refuses_when_captain_hold_cannot_be_read

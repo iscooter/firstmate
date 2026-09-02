@@ -6,10 +6,10 @@
 #
 # INVARIANT. In ordinary successful lifecycle state, `state/<id>.meta` exists
 # <=> this home's backlog row for <id> is In flight; the one teardown crash
-# window is represented by `state/<id>.backlog-close`. The one deliberate
-# exception is a row that is still an open captain call: teardown defers that
-# close rather than retiring the captain's own question, so the row outlives its
-# record until bin/fm-captain-hold.sh answer closes it. The script performing the
+# window is represented by `state/<id>.backlog-close`. Deferring an open captain
+# call preserves this invariant: teardown returns the row to Queued when it
+# removes the record, rather than retiring the captain's own question.
+# bin/fm-captain-hold.sh answer later closes that queued row. The script performing the
 # mechanical record change owns the paired backlog transition and runs it in the
 # same process, under the per-task meta lock it already holds, before it reports
 # success. Nothing else - not a later agent turn, not a printed reminder - is

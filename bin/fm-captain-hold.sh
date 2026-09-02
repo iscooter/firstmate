@@ -900,12 +900,21 @@ EOF
 # cannot be read - is a 2, because a closer must never read "cannot tell" as
 # permission to close.
 command_open() {  # <task-id>
-  local id=${1:-} show state hold_kind
+  local id=${1:-} show show_status diagnostic state hold_kind
   CAPTAIN_HOLD_FAIL_STATUS=2
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug "task id" "$id"
   require_tasks_axi
-  show=$(task_show "$id") || return 1
+  show_status=0
+  show=$(tasks_axi show "$id" --full 2>&1) || show_status=$?
+  if [ "$show_status" -ne 0 ]; then
+    if printf '%s\n' "$show" | grep -q '^code: NOT_FOUND$'; then
+      return 1
+    fi
+    diagnostic=$(printf '%s\n' "$show" | sed -n '1p')
+    [ -n "$diagnostic" ] || diagnostic="tasks-axi show $id failed with no output"
+    fail "$diagnostic"
+  fi
   state=$(show_field "$show" state)
   [ -n "$state" ] || fail "tasks-axi show $id returned no state"
   hold_kind=$(show_field_value "$show" hold_kind)
