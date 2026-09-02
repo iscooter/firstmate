@@ -1644,6 +1644,27 @@ while :; do
     touch "$STATE/.last-check"
   fi
 
+  # Secondmate parent mirror: deliver every child ledger event the parent is
+  # still owed (docs/secondmate-parent-channel.md). Silent in a main home and
+  # on a quiet poll; the library queues a delivery problem once as a durable
+  # wake and prints it only when newly queued, so a standing problem wakes
+  # firstmate once per episode rather than every poll. It runs after the slow
+  # checks so a merge poll's own loud failure is never masked by a mirror
+  # diagnostic in the same cycle, and before the signal scan so a chatty
+  # sibling cannot starve delivery.
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    mirror_out=
+    mirror_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      "$SCRIPT_DIR/fm-parent-mirror.sh" sweep 2>"$STATE/.parent-mirror.stderr") || true
+    if [ -s "$STATE/.parent-mirror.stderr" ]; then
+      triage_log "parent mirror: $(head -c 400 "$STATE/.parent-mirror.stderr" | tr '\n' ' ')"
+    fi
+    rm -f "$STATE/.parent-mirror.stderr"
+    if [ -n "$mirror_out" ]; then
+      wake "check: parent-mirror"
+    fi
+  fi
+
   # On the first changed signal, linger one grace period and re-scan before
   # classifying: a crewmate's final status write and the same turn's turn-end
   # hook land seconds apart, and reporting them as separate actionable wakes

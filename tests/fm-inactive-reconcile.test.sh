@@ -140,9 +140,11 @@ test_main_direct_terminal_presentation_receipt() {
   pass "main direct terminal presentation has a durable receipt"
 }
 
-# A secondmate independently reports a genuinely terminal inactive child.
+# A secondmate independently reports a genuinely terminal inactive child whose
+# ledger is silent about it: the authoritative current state says done while
+# the last status line is still a progress note.
 test_local_secondmate_reports_terminal_child() {
-  make_world local; bind_secondmate local; write_child "$MATE" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  make_world local; bind_secondmate local; write_child "$MATE" child 'working: validation running'
   FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
   grep -Fq 'done [key=inactive-outcome-mate-child-done]:' "$MAIN/state/mate.status" \
     || fail "secondmate did not append its durable parent report"
@@ -150,11 +152,30 @@ test_local_secondmate_reports_terminal_child() {
   pass "secondmate reports its own inactive terminal child"
 }
 
+# A child whose ledger already ends in a terminal verb is the parent mirror's
+# evidence (bin/fm-parent-mirror-lib.sh); the inactive scan yields it rather
+# than reporting the same outcome a second time on a slower clock.
+test_local_secondmate_yields_terminal_ledger_to_mirror() {
+  make_world yield; bind_secondmate local
+  write_child "$MATE" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
+  [ ! -e "$MAIN/state/mate.status" ] \
+    || fail "inactive scan reported a terminal-verb ledger the mirror owns"
+  [ "$(outcome_count "$MATE" pending)" = 0 ] && [ "$(outcome_count "$MATE" reported)" = 0 ] \
+    || fail "inactive scan created a receipt for a ledger the mirror owns"
+  # A main home keeps its own presentation for the same ledger shape.
+  make_world yield-main; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] \
+    || fail "main home stopped presenting a terminal-verb ledger"
+  pass "secondmate inactive scan yields terminal-verb ledgers to the parent mirror"
+}
+
 test_local_secondmate_rejects_relative_parent_home() {
   make_world relative-parent; bind_secondmate local
   printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=relative-parent\n' \
     > "$MATE/.fm-secondmate-parent"
-  write_child "$MATE" child 'failed: terminal'
+  write_child "$MATE" child 'working: still validating'
   (cd "$WORLD" && FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE" --startup)
   [ ! -e "$WORLD/relative-parent/state/mate.status" ] \
     || fail "relative parent home received a false durable report"
@@ -173,7 +194,7 @@ test_invalid_secondmate_marker_blocks_routing() {
   local kind out target
   for kind in malformed symlink; do
     make_world "invalid-marker-$kind"
-    write_child "$MATE" child 'failed: terminal'
+    write_child "$MATE" child 'working: still validating'
     if [ "$kind" = malformed ]; then
       printf '../main\n' > "$MATE/.fm-secondmate-home"
     else
@@ -199,7 +220,7 @@ test_invalid_secondmate_marker_blocks_routing() {
 
 # A remote child route writes the existing mirror input once even across restarts.
 test_remote_parent_reply_is_idempotent() {
-  make_world remote; bind_secondmate remote; write_child "$MATE" child 'done: green'
+  make_world remote; bind_secondmate remote; write_child "$MATE" child 'working: checks running'
   FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
   FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup
   [ "$(grep -c 'inactive-outcome-mate-child-done' "$MATE/state/parent-replies.status")" = 1 ] \
@@ -212,10 +233,10 @@ test_remote_parent_reply_is_idempotent() {
 # when its terminal state and status text match the retired worker exactly.
 test_reused_task_id_reports_each_incarnation() {
   make_world reused-id; bind_secondmate remote
-  write_child "$MATE" child 'failed: terminal' spawn-one
+  write_child "$MATE" child 'working: still validating' spawn-one
   FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE" --startup
   rm -f "$MATE/state/child.meta" "$MATE/state/child.status" "$MATE/state/child.turn-ended"
-  write_child "$MATE" child 'failed: terminal' spawn-two
+  write_child "$MATE" child 'working: still validating' spawn-two
   FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE" --startup
   [ "$(outcome_count "$MATE" reported)" = 2 ] \
     || fail "reused task id collided with the retired incarnation receipt"
@@ -229,7 +250,7 @@ test_reused_task_id_reports_each_incarnation() {
 test_legacy_metadata_rewrite_keeps_receipt_identity() {
   local meta tmp
   make_world legacy-rewrite; bind_secondmate remote
-  write_child "$MATE" child 'failed: terminal' spawn-old
+  write_child "$MATE" child 'working: still validating' spawn-old
   meta="$MATE/state/child.meta"
   tmp="$MATE/state/.child.meta.legacy"
   awk '$0 !~ /^spawn_gen=/' "$meta" > "$tmp"
@@ -255,7 +276,7 @@ test_legacy_metadata_rewrite_keeps_receipt_identity() {
 test_relaunch_cannot_replace_metadata_during_state_snapshot() {
   local recon_pid update_pid record i
   make_world relaunch-race; bind_secondmate remote
-  write_child "$MATE" child 'failed: terminal' spawn-old
+  write_child "$MATE" child 'working: still validating' spawn-old
   cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
 : > "${FM_RACE_WORLD:?}/state-started"
@@ -422,7 +443,7 @@ test_missing_parent_binding_names_itself() {
   local out
   make_world missing-binding
   printf 'mate\n' > "$MATE/.fm-secondmate-home"
-  write_child "$MATE" child 'done: PR merged'
+  write_child "$MATE" child 'working: pipeline finishing'
   out=$(FM_FAKE_CREW_STATE='done' run_reconcile "$MATE" --startup)
   case "$out" in
     *"actionable: inactive terminal outcome needs parent report"*".fm-secondmate-parent"*) ;;
@@ -437,7 +458,7 @@ test_notice_recovery_does_not_duplicate_wake() {
   local record err seq generation
   make_world notice-recovery; bind_secondmate remote
   printf 'schema=fm-secondmate-parent.v1\nroute=invalid\n' > "$MATE/.fm-secondmate-parent"
-  write_child "$MATE" child 'failed: terminal'
+  write_child "$MATE" child 'working: still validating'
   FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE" --startup
   [ "$(wake_count "$MATE" 'inactive-reconcile:')" = 1 ] || fail "parent-report failure did not queue one notice"
 
@@ -468,6 +489,7 @@ test_reconciliation_never_calls_forge() {
 
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_reports_terminal_child
+test_local_secondmate_yields_terminal_ledger_to_mirror
 test_local_secondmate_rejects_relative_parent_home
 test_invalid_secondmate_marker_blocks_routing
 test_remote_parent_reply_is_idempotent

@@ -140,6 +140,26 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-wake-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-parent-channel-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+
+# A task held for the captain inside a secondmate home is a parent-facing fact
+# the moment it is recorded, and so is its answer, so both are published on the
+# parent channel here rather than left to the mate remembering to append them
+# (docs/secondmate-parent-channel.md). A main home has no channel and the
+# publication is a silent no-op there. The hold or answer itself is already
+# durable in this home's backlog, so a delivery problem is reported as
+# actionable rather than undoing the record.
+publish_parent_hold() {  # <task-id> <verb> <note>
+  local id=$1 verb=$2 note=$3 rc=0
+  fm_parent_channel_report "$FM_HOME" "$STATE" \
+    "$verb [key=captain-hold-$id]: captain hold $id: $(fm_parent_channel_clean_note "$note")" || rc=$?
+  case "$rc" in
+    0|1) ;;
+    *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
+  esac
+}
 
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
@@ -441,6 +461,11 @@ command_hold() {
   show=$(task_show "$id") || fail "task $id disappeared while holding it"
   hold_kind=$(show_field_value "$show" hold_kind)
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
+  if [ -n "$origin" ]; then
+    publish_parent_hold "$id" needs-decision "$reason (origin $origin)"
+  else
+    publish_parent_hold "$id" needs-decision "$reason"
+  fi
   printf '%s\n' "$id"
 }
 
@@ -520,6 +545,7 @@ command_answer() {
     [ "$(show_field "$show" state)" = "done" ] || fail "recording the answer reopened closed task $id"
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
+    publish_parent_hold "$id" resolved "answered (repaired)"
     printf 'repaired: %s\n' "$id"
     return 0
   fi
@@ -539,6 +565,7 @@ command_answer() {
         answered) [ "$release" = 0 ] || fail "task $id records this answer as a close; retry without --release" ;;
       esac
       close_answered "$id" "$release"
+      publish_parent_hold "$id" resolved "$outcome"
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
@@ -547,6 +574,7 @@ command_answer() {
     show=$(task_show "$id") || fail "task $id disappeared after closing"
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
+    publish_parent_hold "$id" resolved "$outcome"
     printf '%s: %s\n' "$outcome" "$id"
     return 0
   fi

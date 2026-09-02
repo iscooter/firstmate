@@ -185,6 +185,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# shellcheck source=bin/fm-parent-mirror-lib.sh
+. "$SCRIPT_DIR/fm-parent-mirror-lib.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
@@ -2871,6 +2873,18 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
+# In a secondmate home, deliver whatever this child's ledger still owes the
+# parent before the child's record disappears, then retire its mirror state
+# (docs/secondmate-parent-channel.md). The ledger itself survives teardown, so
+# an undelivered final sweep leaves an orphan record that later sweeps retry;
+# a main home has no channel and this is a silent no-op there.
+if [ "$KIND" != secondmate ]; then
+  MIRROR_RC=0
+  fm_parent_mirror_retire_locked "$ID" || MIRROR_RC=$?
+  if [ "$MIRROR_RC" -ne 0 ]; then
+    echo "actionable: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC); its mirror record is retained for the next supervision poll" >&2
+  fi
+fi
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.turn-ended" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \

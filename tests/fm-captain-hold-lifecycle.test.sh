@@ -226,6 +226,67 @@ EOF
   pass "the completion gate attests captain-held inventory and transfers open status decisions"
 }
 
+# In a secondmate home a captain hold and its answer are parent-facing facts
+# published by the record itself on the parent channel, and a scout's final
+# done line reaches the parent inside teardown before the child's record goes
+# (docs/secondmate-parent-channel.md). The parent here is a registry-valid
+# home so teardown's own parent resolution is the real one.
+test_secondmate_home_publishes_holds_and_final_outcomes() {
+  local home parent channel id open
+  home=$(make_home mate-home)
+  parent="$TMP_ROOT/mate-parent"
+  mkdir -p "$parent/state" "$parent/data"
+  fm_write_secondmate_meta "$parent/state/mate.meta" "$home"
+  printf -- '- mate - Sample domain mate (home: %s; scope: sample work; projects: sample; added 2026-07-14)\n' "$home" \
+    > "$parent/data/secondmates.md"
+  printf 'mate\n' > "$home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" > "$home/.fm-secondmate-parent"
+  channel="$parent/state/mate.status"
+
+  run_captain "$home" hold mate-route-call \
+    --title "Choose route: north, south" --reason "captain route choice pending" --repo sample >/dev/null \
+    || fail "could not hold a task for the captain in the mate home"
+  grep -Fx 'needs-decision [key=captain-hold-mate-route-call]: captain hold mate-route-call: captain route choice pending' "$channel" >/dev/null \
+    || fail "the hold did not reach the parent channel: $(cat "$channel" 2>/dev/null)"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  printf '%s\n' "$open" | grep -q "^captain-hold-mate-route-call	needs-decision	" \
+    || fail "the parent's fold did not open the published hold: $open"
+  run_captain "$home" hold mate-route-call \
+    --title "Choose route: north, south" --reason "captain route choice pending" --repo sample >/dev/null \
+    || fail "idempotent hold retry failed in the mate home"
+  [ "$(grep -c 'captain-hold-mate-route-call' "$channel")" = 1 ] \
+    || fail "an idempotent hold retry duplicated the parent line"
+
+  printf 'north\n' > "$home/answer.txt"
+  run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" >/dev/null \
+    || fail "could not record the captain's answer in the mate home"
+  grep -Fx 'resolved [key=captain-hold-mate-route-call]: captain hold mate-route-call: answered' "$channel" >/dev/null \
+    || fail "the answer did not close the hold on the parent channel: $(cat "$channel")"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  [ -z "$open" ] || fail "the parent's fold still holds the answered hold: $open"
+  run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" >/dev/null \
+    || fail "idempotent answer retry failed in the mate home"
+  [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call\]' "$channel")" = 1 ] \
+    || fail "an idempotent answer retry duplicated the parent close"
+
+  id='mate-scout'
+  tasks_in "$home" add "$id" "Investigate mate systems" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the mate scout fixture"
+  write_origin_meta "$home" "$id"
+  mkdir -p "$home/data/$id"
+  printf '# findings\n' > "$home/data/$id/report.md"
+  printf 'working: drafting\ndone: report complete\n' > "$home/state/$id.status"
+  run_captain "$home" complete "$id" --none >/dev/null \
+    || fail "mate scout completion gate failed"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/teardown.err" \
+    || fail "mate scout teardown failed: $(cat "$home/teardown.err")"
+  grep -F "done [key=mirror-$id-l" "$channel" | grep -F "mirror: child=$id report complete report=data/$id/report.md" >/dev/null \
+    || fail "teardown did not deliver the scout's final line to the parent: $(cat "$channel")"
+  [ ! -e "$home/state/parent-mirror/$id.record" ] || fail "teardown did not retire the scout's mirror record"
+  [ ! -e "$home/state/$id.meta" ] || fail "teardown left the scout's record behind"
+  pass "a mate home publishes captain holds, their answers, and a scout's final line on the parent channel"
+}
+
 # The recorded-answer rule: answering closes with the captain's exact words, an
 # exact retry is idempotent, a drifted retry is rejected, dependent work routed
 # behind the answered task is released by the close, and the completion gate is
@@ -1169,6 +1230,7 @@ EOF
 }
 
 test_uninventoried_report_decision_refuses_completion
+test_secondmate_home_publishes_holds_and_final_outcomes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
 test_release_frees_held_work

@@ -2067,8 +2067,14 @@ test_secondmate_without_parent_binding_is_loud() {
   expect_code 0 "$rc" "unbound-secondmate: the merge itself landed and must not be reported as failed"
   assert_grep 'could not report it upward' "$case_dir/stderr" \
     "unbound-secondmate: a merge that could not be reported upward said nothing about it"
-  assert_absent "$case_dir/state/.wake-queue" \
-    "unbound-secondmate: a secondmate home fell back to the main-home record"
+  # The merge outcome must not fall back to the main-home record. The
+  # registration's parent-channel sweep may queue its own channel diagnostic
+  # here, which names the missing binding rather than the merge.
+  if grep -F "$url" "$case_dir/state/.wake-queue" >/dev/null 2>&1; then
+    fail "unbound-secondmate: a secondmate home fell back to the main-home record"
+  fi
+  grep -F 'parent-mirror-diagnostic:channel' "$case_dir/state/.wake-queue" >/dev/null 2>&1 \
+    || fail "unbound-secondmate: the broken parent channel was not queued as a durable diagnostic"
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 

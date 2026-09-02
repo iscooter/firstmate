@@ -511,6 +511,23 @@ test_secondmate_no_projects_charter() {
     "secondmate charter did not close a quietly ended routed-work phase"
   assert_grep 'use the same key on its later' "$brief" \
     "secondmate charter did not supersede working phases with later states"
+  # The parent-channel rule is the belt under the deterministic mirror
+  # (docs/secondmate-parent-channel.md): the charter must open with it, name
+  # the machinery that delivers child facts, and leave only judgement to the
+  # mate's own appends.
+  assert_grep '# The captain and the parent channel' "$brief" \
+    "secondmate charter lost its parent-channel section"
+  assert_grep 'a captain-facing sentence that is not appended there has not been sent' "$brief" \
+    "secondmate charter does not state that chat never reaches the captain"
+  assert_grep 'in this home it IS the captain' "$brief" \
+    "secondmate charter does not bind the captain to the parent channel"
+  assert_grep 'bin/fm-parent-mirror.sh' "$brief" \
+    "secondmate charter does not name the mirror that delivers child facts"
+  assert_grep 'What only you can append is judgement' "$brief" \
+    "secondmate charter does not confine the mate's own appends to judgement"
+  if ! awk '/^# The captain and the parent channel/{seen=1} /^# Requests from the main firstmate/{exit !seen}' "$brief"; then
+    fail "secondmate charter states the parent-channel rule after the marker rules instead of before"
+  fi
   if grep -nE '^-[[:space:]]*$' "$brief" >/dev/null; then
     fail "project-less charter left a stray empty project bullet"
   fi

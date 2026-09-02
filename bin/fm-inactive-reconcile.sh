@@ -28,11 +28,15 @@
 # outcome record or wake the supervisor.
 # Working, paused, parked, blocked, unknown, persistent secondmates, and
 # captain-held work retain their existing supervision semantics.
+# In a secondmate home this scan owns only the SILENT ledger: a child whose
+# ledger already ends in a terminal captain verb is the parent mirror's
+# evidence (bin/fm-parent-mirror-lib.sh delivers it on its own clock), so it
+# is skipped here rather than reported twice.
 #
 # A terminal-outcomes/<fingerprint>.pending record remains until its upstream
 # receipt is durable.
-# In a secondmate home, that receipt is an idempotent parent-channel status
-# append.
+# In a secondmate home, that receipt is an idempotent parent-channel append
+# through bin/fm-parent-channel-lib.sh.
 # In a main home, a presentation-stage record is acknowledged by fm-wake-drain
 # only after its corresponding inactive-outcome wake is handled.
 # A receipt is intentionally independent of .hb-surfaced-* bookkeeping.
@@ -62,8 +66,8 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
-# shellcheck source=bin/fm-secondmate-parent-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# shellcheck source=bin/fm-parent-mirror-lib.sh
+. "$SCRIPT_DIR/fm-parent-mirror-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
@@ -290,44 +294,15 @@ pr_for_task() { # <meta> <status>
 }
 
 home_secondmate_id() {
-  local marker="$FM_HOME/.fm-secondmate-home" id
-  if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
-    return 1
-  fi
-  [ -f "$marker" ] && [ ! -L "$marker" ] || return 2
-  [ "$(wc -c < "$marker")" -eq "$(LC_ALL=C tr -d '\0' < "$marker" | wc -c)" ] || return 2
-  id=$(cat "$marker" 2>/dev/null) || return 2
-  valid_id "$id" || return 2
-  printf '%s\n' "$id"
-}
-
-append_once() { # <path> <line>
-  local path=$1 line=$2
-  [ ! -L "$path" ] || return 1
-  mkdir -p "$(dirname "$path")" || return 1
-  if grep -Fqx -- "$line" "$path" 2>/dev/null; then
-    return 0
-  fi
-  printf '%s\n' "$line" >> "$path"
+  fm_parent_channel_home_id "$FM_HOME"
 }
 
 report_to_parent() { # <self-id> <task> <state> <outcome-key> <fingerprint> <pr>
-  local self=$1 task=$2 state=$3 outcome_key=$4 fingerprint=$5 pr=$6 parent_record destination line
-  parent_record="$FM_HOME/.fm-secondmate-parent"
-  fm_secondmate_parent_record_parse "$parent_record" || return 1
-  case "$FM_SECONDMATE_PARENT_ROUTE" in
-    local)
-      [ -n "$FM_SECONDMATE_PARENT_HOME" ] || return 1
-      destination="$FM_SECONDMATE_PARENT_HOME/state/$self.status"
-      ;;
-    remote)
-      destination="$STATE/parent-replies.status"
-      ;;
-    *) return 1 ;;
-  esac
+  local self=$1 task=$2 state=$3 outcome_key=$4 fingerprint=$5 pr=$6 line
+  [ -n "$self" ] || return 1
   line="$state [key=$outcome_key]: inactive terminal child=$task fingerprint=$fingerprint"
   [ -z "$pr" ] || line="$line pr=$pr"
-  append_once "$destination" "$line"
+  fm_parent_channel_report "$FM_HOME" "$STATE" "$line"
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
@@ -339,6 +314,10 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   turn="$STATE/$id.turn-ended"
   last=$(last_status_line "$status")
   status_line_verb "$last" | grep -Fx captain-held >/dev/null 2>&1 && return 0
+  # A ledger that states its own outcome is the parent mirror's to deliver.
+  if [ -n "$self" ] && fm_parent_mirror_owns_ledger "$STATE" "$id"; then
+    return 0
+  fi
   age=$(last_activity_age "$meta" "$status" "$turn")
   [ "$age" -ge "$FM_INACTIVE_RECONCILE_SECS" ] || return 0
   state_line=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \

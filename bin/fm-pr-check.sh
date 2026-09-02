@@ -17,6 +17,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-parent-mirror-lib.sh
+. "$SCRIPT_DIR/fm-parent-mirror-lib.sh"
 
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
@@ -132,4 +134,16 @@ fm_pr_poll_publish_prepared || {
   echo "error: could not publish PR poll" >&2
   exit 1
 }
+# In a secondmate home the registration itself is a parent-facing fact: deliver
+# the child's ready line now, carrying the canonical pr= just recorded, instead
+# of on the next watcher poll (docs/secondmate-parent-channel.md). A main home
+# has no parent channel and this is a silent no-op there. The poll is armed
+# either way; a delivery problem is reported, queued once as a durable wake by
+# the library, and retried by the next supervision poll.
+MIRROR_RC=0
+fm_parent_mirror_sweep "$ID" || MIRROR_RC=$?
+if [ "$MIRROR_RC" -ne 0 ]; then
+  printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s); the next supervision poll retries\n' \
+    "$URL" "$MIRROR_RC" >&2
+fi
 printf 'armed: state/%s.check.sh\n' "$ID"
