@@ -356,6 +356,25 @@ test_failed_line_thresholded_and_superseded() {
   sweep "$MATE" 2000 >/dev/null || fail "relaunch third sweep failed"
   [ ! -e "$(parent_channel)" ] || fail "a superseded failure was raised: $(cat "$(parent_channel)")"
 
+  make_world incarnation-relaunch; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'failed: prior generation failed'
+  sweep "$MATE" 3000 >/dev/null || fail "incarnation first observation failed"
+  sed 's/^spawn_gen=.*/spawn_gen=gen-two/' "$MATE/state/child.meta" > "$MATE/state/child.meta.next" \
+    && mv "$MATE/state/child.meta.next" "$MATE/state/child.meta" \
+    || fail "could not record the relaunch generation"
+  sweep "$MATE" 3010 >/dev/null || fail "incarnation change sweep failed"
+  sweep "$MATE" 3060 >/dev/null || fail "incarnation old-threshold sweep failed"
+  [ ! -e "$(parent_channel)" ] || fail "a prior-generation failure survived relaunch handling"
+  ledger "$MATE" child 'failed: new generation failed'
+  sweep "$MATE" 3070 >/dev/null || fail "new-generation failure observation failed"
+  [ ! -e "$(parent_channel)" ] || fail "a new-generation failure skipped its own threshold"
+  sweep "$MATE" 3130 >/dev/null || fail "new-generation failure threshold failed"
+  [ "$(channel_count 'failed [key=mirror-5-child-l')" = 1 ] \
+    || fail "the new-generation failure was not delivered exactly once"
+  grep -F 'new generation failed (unhandled past 60s)' "$(parent_channel)" >/dev/null \
+    || fail "the delivered failure did not belong to the new generation"
+
   make_world recurring; bind_secondmate local
   write_child "$MATE" child
   ledger "$MATE" child 'failed: same failure'

@@ -24,8 +24,10 @@
 #   orphan=0|1        (1: the child's record is gone but delivery is still owed)
 #   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>   (one per open decision)
 # The record is rewritten atomically; a changed ledger identity or a shrunk
-# ledger resets the offset to 0, and exact-line deduplication on the channel
-# keeps a re-examined line from being delivered twice. A record whose child
+# ledger resets the offset to 0, an incarnation change marks the prior
+# generation's standing failure handled while a later failed line starts a new
+# clock, and exact-line deduplication on the channel keeps a re-examined line
+# from being delivered twice. A record whose child
 # record is gone is an orphan and is swept until it is delivered or its ledger
 # disappears.
 #
@@ -361,6 +363,10 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   fi
   incarnation=$(_fm_parent_mirror_meta_field "$meta" spawn_gen)
   [ -n "$incarnation" ] || incarnation=$rec_incarnation
+  if [ -n "$rec_incarnation" ] && [ "$incarnation" != "$rec_incarnation" ] \
+    && [ "$rec_ident" = "$ident" ]; then
+    terminal_reported=1
+  fi
   if [ "$offset" -lt "$complete_size" ]; then changed=1; fi
 
   context=$(_fm_parent_mirror_context "$child" "$meta")
