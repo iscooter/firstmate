@@ -309,7 +309,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   local open_lines='' next_open='' close_failed='' reset_open='' fold='' rc=0 rec_line_count=0 line_count=0 processed_lines=0
   local chunk line verb note key mirror_key line_offset line_start committed context last last_verb last_offset
   local entry entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note origins origin fold_verb fold_note age timing
-  local line_number resolve held after
+  local line_number resolve held after was_open
   local context_pr context_mode context_yolo context_report report data
   local LC_ALL=C
   status="$STATE/$child.status"
@@ -525,6 +525,11 @@ EOF
   while IFS= read -r line && [ "$processed_lines" -lt "$((line_count - rec_line_count))" ]; do
     processed_lines=$((processed_lines + 1))
     line_number=$((line_number + 1))
+    was_open=0
+    if key=$(_fm_decision_key "$line") \
+      && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
+      _fm_open_set_has "$fold" "$key" && was_open=1
+    fi
     after=$(_fm_decision_fold_line "$fold" "$line" "$resolve" "$held")
     if key=$(_fm_decision_key "$line") \
       && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
@@ -532,7 +537,7 @@ EOF
       note=$(status_line_note "$line")
       case "$verb" in
         needs-decision|blocked)
-          if _fm_open_set_has "$after" "$key" \
+          if [ "$was_open" -eq 0 ] && _fm_open_set_has "$after" "$key" \
             && [ "$(_fm_open_set_verb "$after" "$key")" = "$verb" ]; then
             origins=$(_fm_decision_origin_drop "$origins" "$key")
             [ -n "$origins" ] && origins="${origins}"$'\n'

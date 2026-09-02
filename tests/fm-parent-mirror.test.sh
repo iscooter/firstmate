@@ -309,6 +309,35 @@ test_open_decision_thresholded_then_closed() {
   pass "an open decision is raised past the threshold and closed with the child's own close"
 }
 
+test_open_decision_updates_retain_occurrence() {
+  make_world decision-updates; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'needs-decision [key=api]: initial choice'
+  sweep "$MATE" 1000 >/dev/null || fail "initial decision observation failed"
+  ledger "$MATE" child 'needs-decision [key=api]: refined choice'
+  sweep "$MATE" 1020 >/dev/null || fail "first decision update failed"
+  ledger "$MATE" child 'blocked [key=api]: latest blocking detail'
+  sweep "$MATE" 1040 >/dev/null || fail "second decision update failed"
+  [ ! -e "$(parent_channel)" ] || fail "an updated decision was raised before its original threshold"
+  sweep "$MATE" 1060 >/dev/null || fail "updated decision delivery failed"
+  grep -F 'blocked [key=mirror-5-child-api]: mirror: child=child decision api (opened at line 1) open past 60s without an answer or a captain hold: latest blocking detail' "$(parent_channel)" >/dev/null \
+    || fail "updated decision did not retain its origin and latest state: $(cat "$(parent_channel)")"
+  [ "$(channel_lines)" = 1 ] || fail "updated decision was raised more than once"
+  parent_open_decisions | grep -q '^mirror-5-child-api' \
+    || fail "the updated decision was not open on the parent"
+  ledger "$MATE" child 'needs-decision [key=api]: final open detail'
+  sweep "$MATE" 1061 >/dev/null || fail "mirrored decision update failed"
+  [ "$(channel_lines)" = 1 ] || fail "a mirrored decision update emitted a false close or reopen"
+  parent_open_decisions | grep -q '^mirror-5-child-api' \
+    || fail "a mirrored decision update falsely closed the parent decision"
+  ledger "$MATE" child 'resolved [key=api]: explicit answer'
+  sweep "$MATE" 1070 >/dev/null || fail "updated decision close failed"
+  [ "$(channel_count 'resolved [key=mirror-5-child-api]')" = 1 ] \
+    || fail "updated decision did not close exactly once"
+  [ -z "$(parent_open_decisions)" ] || fail "explicit close left the updated parent decision open"
+  pass "decision updates retain their original occurrence and latest state"
+}
+
 test_ledger_reset_closes_decisions_and_clears_failures() {
   make_world reset-decision; bind_secondmate local
   write_child "$MATE" child
@@ -898,6 +927,7 @@ test_partial_line_waits_for_newline
 test_orphan_retains_unterminated_tail
 test_partial_thresholded_outcomes_do_not_age
 test_open_decision_thresholded_then_closed
+test_open_decision_updates_retain_occurrence
 test_ledger_reset_closes_decisions_and_clears_failures
 test_failed_decision_close_retries_without_child_change
 test_reopened_decision_is_raised_again
