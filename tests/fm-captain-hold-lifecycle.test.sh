@@ -1694,7 +1694,8 @@ SH
   assert_absent "$home/state/$id.meta" "released-answer recovery left worker metadata behind"
   assert_absent "$home/state/$id.backlog-retain" "released-answer recovery left retention behind"
   show=$(tasks_in "$home" show "$id" --full) || fail "released-answer recovery erased the task"
-  assert_contains "$show" "state: in_flight" "released-answer recovery closed the task"
+  assert_contains "$show" "state: queued" \
+    "released-answer recovery left an In-flight task without worker metadata"
   assert_not_contains "$show" "hold_kind: captain" "released-answer recovery restored the captain hold"
   assert_contains "$show" "Proceed with the released work." \
     "released-answer recovery lost the captain's recorded answer"

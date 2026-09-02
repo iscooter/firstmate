@@ -1362,7 +1362,14 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
     for BOOTSTRAP_BACKLOG_MARKER in "$STATE"/*.backlog-close "$STATE"/*.backlog-retain; do
       [ -e "$BOOTSTRAP_BACKLOG_MARKER" ] || [ -L "$BOOTSTRAP_BACKLOG_MARKER" ] || continue
       if ! fm_backlog_record_present "$BOOTSTRAP_BACKLOG_MARKER" "pending backlog transition record" "$STATE"; then
-        echo "error: bootstrap refused unsafe pending backlog transition ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+        case "$BOOTSTRAP_BACKLOG_MARKER" in
+          *.backlog-close)
+            echo "error: bootstrap refused unsafe pending close ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+            ;;
+          *)
+            echo "error: bootstrap refused unsafe pending retention ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+            ;;
+        esac
         exit 1
       fi
       BOOTSTRAP_BACKLOG_GATE_KIND=ship

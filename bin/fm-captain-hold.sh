@@ -142,7 +142,9 @@
 # the task metadata lock. Teardown records replayable retention before cleanup,
 # marks cleanup complete afterward, releases its lock, and lets `recover-retain`
 # acquire that lock as the sole owner while it retains the current row and removes
-# the record.
+# the record. If `answer --release` won first, recovery preserves the recorded
+# answer and lifted hold but still returns the ownerless row to Queued before
+# removing the worker record.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
@@ -961,6 +963,10 @@ retain_task_locked() {  # <task-id> <report> <pr> <note> <allow-answered-0-or-1>
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field_value "$show" body) || fail "could not decode the existing body for $id"
   if [ "$allow_answered" = 1 ] && retention_answer_recorded "$state" "$hold_kind" "$body"; then
+    if [ "$state" != "done" ] && [ "$state" != "queued" ]; then
+      tasks_axi reopen "$id" >/dev/null \
+        || fail "could not return released $id to Queued while completing retention recovery"
+    fi
     return 0
   fi
   { [ "$state" != "done" ] && [ "$hold_kind" = captain ]; } \
@@ -994,6 +1000,10 @@ retain_task_locked() {  # <task-id> <report> <pr> <note> <allow-answered-0-or-1>
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field_value "$show" body) || fail "could not re-read the body for $id"
   if [ "$allow_answered" = 1 ] && retention_answer_recorded "$state" "$hold_kind" "$body"; then
+    if [ "$state" != "done" ] && [ "$state" != "queued" ]; then
+      tasks_axi reopen "$id" >/dev/null \
+        || fail "could not return released $id to Queued while completing retention recovery"
+    fi
     return 0
   fi
   [ "$state" != "done" ] || fail "task $id closed while it was being retained"

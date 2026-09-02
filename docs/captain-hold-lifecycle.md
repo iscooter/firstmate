@@ -36,6 +36,7 @@ Only the close is affected; every other cleanup step runs exactly as before, and
 
 Teardown stages a bounded and immediately replayable `state/<id>.backlog-retain` intent before cleanup, marks cleanup complete after endpoint and worktree cleanup succeeds, and then `recover-retain` records the completion links and returns the row to Queued while keeping its hold.
 All `hold`, `answer`, `retain`, and `recover-retain` mutations serialize on the same per-task metadata lock, and recovery always re-reads current state so it cannot overwrite or reopen a concurrent recorded answer.
+If `answer --release` wins before retention replay, recovery preserves that answer and lifted hold but returns the ownerless row to Queued before removing the worker metadata and retention marker.
 Queued-and-held is the shape every other captain call already has, and it is what the `captain_actionable` classifier requires, so the retained call lands in Captain's Call rather than reading as work still under way.
 `retain` refuses any task that is not an open captain call, so no closer can use it to keep an ordinary finished task alive.
 No `state/<id>.backlog-close` record is staged on this path: its distinct pending-retention record can replay only retention and is cleared once retention and record removal land.
