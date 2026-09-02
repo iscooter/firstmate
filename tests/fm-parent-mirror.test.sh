@@ -636,12 +636,12 @@ test_unreadable_binding_is_loud_once() {
   printf 'mate\n' > "$MATE/.fm-secondmate-home"
   write_child "$MATE" child
   ledger "$MATE" child "done: PR $PR_URL checks green"
-  out=$(sweep "$MATE" 1000) || rc=$?
+  out=$(sweep "$MATE" 1000 2>&1) || rc=$?
   [ "$rc" -eq 3 ] || fail "unreadable binding did not return 3 (rc=$rc): $out"
   case "$out" in *actionable:*".fm-secondmate-parent"*) ;; *) fail "the missing binding was not named: $out" ;; esac
   [ "$(wake_count "$MATE" 'parent-mirror-diagnostic:channel')" = 1 ] || fail "the diagnostic was not queued once"
   rc=0
-  out=$(sweep "$MATE" 1001) || rc=$?
+  out=$(sweep "$MATE" 1001 2>&1) || rc=$?
   [ "$rc" -eq 3 ] || fail "second sweep did not keep returning 3"
   [ -z "$out" ] || fail "a still-queued diagnostic was printed again: $out"
   [ "$(wake_count "$MATE" 'parent-mirror-diagnostic:channel')" = 1 ] || fail "the diagnostic was queued twice"

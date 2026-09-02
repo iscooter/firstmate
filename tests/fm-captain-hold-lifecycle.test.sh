@@ -296,13 +296,14 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "could not re-hold released work in the mate home"
   grep -Fx 'needs-decision [key=captain-hold-mate-release-call-2]: captain hold mate-release-call occurrence 2: captain release pending' "$channel" >/dev/null \
     || fail "re-held work did not publish a distinct parent opening"
-  printf 'release again\n' > "$home/release-again.txt"
-  run_captain "$home" answer mate-release-call --decision-file "$home/release-again.txt" --release >/dev/null \
-    || fail "could not answer the re-held occurrence"
-  run_captain "$home" answer mate-release-call --decision-file "$home/release-again.txt" --release >/dev/null \
-    || fail "re-held occurrence retry failed"
+  run_captain "$home" answer mate-release-call --decision-file "$home/release.txt" --release >/dev/null \
+    || fail "could not answer the re-held occurrence with the same words"
+  run_captain "$home" answer mate-release-call --decision-file "$home/release.txt" --release >/dev/null \
+    || fail "re-held same-generation retry failed"
   [ "$(grep -c 'resolved \[key=captain-hold-mate-release-call-2\].*: released' "$channel")" = 1 ] \
     || fail "re-held occurrence did not publish exactly one matching close"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  [ -z "$open" ] || fail "same-answer re-hold left a parent occurrence open: $open"
 
   run_captain "$home" hold mate-batch-call \
     --title "Choose batch route" --reason "captain batch choice pending" --repo sample >/dev/null \

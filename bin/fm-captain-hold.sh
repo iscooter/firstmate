@@ -118,8 +118,9 @@
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
 #
-# Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, or repaired.
+# Resolution records: each hold stores its durable generation in the body, and
+# the answer block names this script, the decision digest, that generation, and
+# a `Resolution mode:` of answered, released, or repaired.
 # Records written by the retired fm-decision-hold.sh (routed, declined,
 # answered, repaired) are recognized everywhere a record is read, so nothing
 # already closed needs rewriting.
@@ -355,6 +356,30 @@ recorded_resolution_mode() {  # <task-body>
   printf '%s' "$rest"
 }
 
+recorded_hold_generation() {  # <task-body>
+  local rest=$1
+  case "$rest" in
+    *"Captain hold generation: "*) rest=${rest#*"Captain hold generation: "} ;;
+    *) return 1 ;;
+  esac
+  rest=${rest%%\\n*}
+  rest=${rest%%$'\n'*}
+  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$rest"
+}
+
+recorded_resolution_generation() {  # <task-body>
+  local rest=$1
+  case "$rest" in
+    *"Hold generation: "*) rest=${rest#*"Hold generation: "} ;;
+    *) return 1 ;;
+  esac
+  rest=${rest%%\\n*}
+  rest=${rest%%$'\n'*}
+  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$rest"
+}
+
 resolution_record_count() {  # <task-body>
   printf '%s\n' "$1" | awk '
     { count += gsub(/Resolution recorded by fm-captain-hold\./, "") }
@@ -363,9 +388,24 @@ resolution_record_count() {  # <task-body>
   '
 }
 
-resolution_block() {  # <mode>
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\nCaptain decision:\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$DECISION_TEXT"
+resolution_block() {  # <mode> <hold-generation>
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nHold generation: %s\n\nCaptain decision:\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$2" "$DECISION_TEXT"
+}
+
+write_hold_generation() {  # <task-id> <generation> <shown-body>
+  local id=$1 generation=$2 body=$3 new_body tmp
+  body=$(decode_shown_value "$body") || fail "could not decode the existing body for $id"
+  body=$(printf '%s' "$body" | perl -0pe 's/(?:^|\n)Captain hold generation: [0-9]+\n?//g')
+  new_body="Captain hold generation: $generation"
+  [ -z "$body" ] || new_body=$(printf '%s\n\n%s' "$new_body" "$body")
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-generation.XXXXXX") \
+    || fail "cannot stage the hold generation"
+  printf '%s\n' "$new_body" > "$tmp" \
+    || { rm -f -- "$tmp"; fail "cannot stage the hold generation for $id"; }
+  tasks_axi update "$id" --body-file "$tmp" --archive-body >/dev/null \
+    || { rm -f -- "$tmp"; fail "could not record the hold generation on $id"; }
+  rm -f -- "$tmp"
 }
 
 # Durable state of one captain call: an active captain hold (annotations
@@ -405,7 +445,7 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints the resolved id or fails
 }
 
 command_hold() {
-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind occurrence
+  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind occurrence current_generation
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -459,6 +499,16 @@ command_hold() {
         || fail "could not create task $id"
     fi
   fi
+  show=$(task_show "$id") || fail "task $id disappeared before holding it"
+  body=$(show_field "$show" body)
+  hold_kind=$(show_field_value "$show" hold_kind)
+  current_generation=$(recorded_hold_generation "$body" || true)
+  if [ "$hold_kind" = captain ] && [ -n "$current_generation" ]; then
+    occurrence=$current_generation
+  else
+    occurrence=$(( $(resolution_record_count "$body") + 1 ))
+    write_hold_generation "$id" "$occurrence" "$body"
+  fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$reason" --kind captain --until "$until" >/dev/null \
       || fail "could not hold task $id for the captain"
@@ -469,8 +519,6 @@ command_hold() {
   show=$(task_show "$id") || fail "task $id disappeared while holding it"
   hold_kind=$(show_field_value "$show" hold_kind)
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
-  body=$(show_field "$show" body)
-  occurrence=$(( $(resolution_record_count "$body") + 1 ))
   if [ -n "$origin" ]; then
     publish_parent_hold "$id" "$occurrence" needs-decision "$reason (origin $origin)"
   else
@@ -481,9 +529,9 @@ command_hold() {
 
 # Record a resolution block at the top of the task body, preserving the
 # previous body below it and archiving the pristine original.
-write_resolution_record() {  # <task-id> <mode> <shown-body>
-  local id=$1 mode=$2 body=$3 new_body tmp
-  new_body=$(resolution_block "$mode")
+write_resolution_record() {  # <task-id> <mode> <hold-generation> <shown-body>
+  local id=$1 mode=$2 generation=$3 body=$4 new_body tmp
+  new_body=$(resolution_block "$mode" "$generation")
   body=$(decode_shown_value "$body") \
     || fail "could not decode the existing body for $id"
   if [ -n "$body" ]; then
@@ -512,6 +560,7 @@ close_answered() {  # <task-id> <release-0-or-1>
 
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
+  local hold_generation resolution_generation
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -529,6 +578,9 @@ command_answer() {
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
+  hold_generation=$(recorded_hold_generation "$body" || true)
+  resolution_generation=$(recorded_resolution_generation "$body" || true)
+  [ -n "$resolution_generation" ] || resolution_generation=$(resolution_record_count "$body")
   if [ "$release" = 1 ]; then outcome=released; else outcome=answered; fi
 
   if [ "$state" = "done" ]; then
@@ -541,7 +593,7 @@ command_answer() {
         || fail "task $id records this answer with mode released; a closed task cannot replay that release"
       [ "$release" = 0 ] \
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
-      occurrence=$(resolution_record_count "$body")
+      occurrence=$resolution_generation
       if [ "$recorded_mode" = repaired ]; then
         publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)"
       else
@@ -556,13 +608,13 @@ command_answer() {
     # this really was the captain's item rather than ordinary finished work.
     [ "$hold_kind" = captain ] \
       || fail "task $id was never held for the captain; nothing to record an answer on"
-    write_resolution_record "$id" repaired "$body"
+    occurrence=${hold_generation:-$(( $(resolution_record_count "$body") + 1 ))}
+    write_resolution_record "$id" repaired "$occurrence" "$body"
     show=$(task_show "$id") || fail "task $id disappeared while recording the answer"
     [ "$(show_field "$show" state)" = "done" ] || fail "recording the answer reopened closed task $id"
     body=$(show_field "$show" body)
     body_has_resolution_record "$body" \
       || fail "captain-held task $id did not retain its durable resolution record"
-    occurrence=$(resolution_record_count "$body")
     publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)"
     printf 'repaired: %s\n' "$id"
     return 0
@@ -575,21 +627,23 @@ command_answer() {
     # its own record on top. Either way the close mode is the caller's flag,
     # checked against an interrupted close's recorded mode so a retry cannot
     # silently flip a release into a close.
+    [ -n "$hold_generation" ] || hold_generation=$(( $(resolution_record_count "$body") + 1 ))
     if body_has_resolution_record "$body" \
-      && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ]; then
+      && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
+      && [ "$resolution_generation" = "$hold_generation" ]; then
       recorded_mode=$(recorded_resolution_mode "$body" || true)
       case "$recorded_mode" in
         released) [ "$release" = 1 ] || fail "task $id records this answer as a release; retry with --release" ;;
         answered) [ "$release" = 0 ] || fail "task $id records this answer as a close; retry without --release" ;;
       esac
-      occurrence=$(resolution_record_count "$body")
+      occurrence=$hold_generation
       close_answered "$id" "$release"
       publish_parent_hold "$id" "$occurrence" resolved "$outcome"
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
-    occurrence=$(( $(resolution_record_count "$body") + 1 ))
-    write_resolution_record "$id" "$outcome" "$body"
+    occurrence=$hold_generation
+    write_resolution_record "$id" "$outcome" "$occurrence" "$body"
     close_answered "$id" "$release"
     show=$(task_show "$id") || fail "task $id disappeared after closing"
     body_has_resolution_record "$(show_field "$show" body)" \
@@ -606,7 +660,7 @@ command_answer() {
       || fail "task $id records a different captain decision with mode ${recorded_mode:-unknown}"
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
-    occurrence=$(resolution_record_count "$body")
+    occurrence=$resolution_generation
     publish_parent_hold "$id" "$occurrence" resolved released
     printf 'released: %s\n' "$id"
     return 0
@@ -787,9 +841,9 @@ command_answers() {
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
         case "$recorded_mode" in
-          released) publish_parent_hold "$id" "$(resolution_record_count "$body")" resolved released ;;
-          repaired) publish_parent_hold "$id" "$(resolution_record_count "$body")" resolved "answered (repaired)" ;;
-          *) publish_parent_hold "$id" "$(resolution_record_count "$body")" resolved answered ;;
+          released) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved released ;;
+          repaired) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved "answered (repaired)" ;;
+          *) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved answered ;;
         esac
         printf 'closed: %s\n' "$id"
         closed=$((closed + 1))

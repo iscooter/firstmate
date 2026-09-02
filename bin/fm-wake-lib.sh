@@ -536,19 +536,12 @@ _fm_recovery_marker_write_locked() {
 # already-announced generation announced so it cannot be re-presented until a
 # new down stretch mints a new generation.
 # docs/watcher-continuity.md owns the recovery contract and sequence-safety rationale.
-_fm_recovery_marker_publish() {
-  local marker=$1 kind=${2:-downtime} lock saved_token generation='' status=pending
-  case "$kind" in handling|downtime) ;; *) return 1 ;; esac
-  lock="${marker}.lock"
-  fm_lock_acquire_wait "$lock" || return 1
+_fm_recovery_marker_publish_locked() {
+  local marker=$1 kind=${2:-downtime} saved_token generation='' status=pending
   if [ -d "$marker" ] && [ ! -L "$marker" ]; then
-    fm_lock_release "$lock"
     return 1
   fi
   if [ "$kind" = downtime ]; then
-    # Read inline rather than in a command substitution: this runs inside the
-    # marker-lock critical section, so it must not add a subshell fork there.
-    # The token is restored because publishing owns no snapshot of its own.
     saved_token=$FM_RECOVERY_MARKER_TOKEN
     if fm_recovery_marker_read "$marker"; then
       case "$FM_RECOVERY_MARKER_TOKEN" in
@@ -564,11 +557,27 @@ _fm_recovery_marker_publish() {
     fi
     FM_RECOVERY_MARKER_TOKEN=$saved_token
   fi
-  if ! _fm_recovery_marker_write_locked "$marker" "$kind" "$generation" "$status"; then
-    fm_lock_release "$lock"
-    return 1
-  fi
+  _fm_recovery_marker_write_locked "$marker" "$kind" "$generation" "$status"
+}
+
+_fm_recovery_marker_publish() {
+  local marker=$1 kind=${2:-downtime} lock rc=0
+  case "$kind" in handling|downtime) ;; *) return 1 ;; esac
+  lock="${marker}.lock"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_recovery_marker_publish_locked "$marker" "$kind" || rc=$?
   fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_recovery_marker_publish_bounded() {
+  local marker=$1 kind=${2:-downtime} seconds=$3 lock rc=0
+  case "$kind" in handling|downtime) ;; *) return 1 ;; esac
+  lock="${marker}.lock"
+  fm_lock_acquire_wait_bounded "$lock" "$seconds" || return $?
+  _fm_recovery_marker_publish_locked "$marker" "$kind" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
 }
 
 _fm_recovery_marker_begin_handling() {
@@ -1470,7 +1479,7 @@ _fm_wake_kind_valid() {
 }
 
 _fm_wake_append_locked() {
-  local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
+  local kind=$1 key=$2 payload=$3 recovery_seconds=${4:-} clean_key clean_payload epoch seq seq_file status
   local recovery_marker
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)
@@ -1478,7 +1487,11 @@ _fm_wake_append_locked() {
   seq_file="$STATE/.wake-queue.seq"
   recovery_marker="$STATE/.watcher-down"
   status=0
-  _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
+  if [ -n "$recovery_seconds" ]; then
+    _fm_recovery_marker_publish_bounded "$recovery_marker" downtime "$recovery_seconds" || status=$?
+  else
+    _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
+  fi
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
     case "$seq" in
@@ -1509,7 +1522,7 @@ fm_wake_append_bounded() {
   _fm_wake_kind_valid "$kind" \
     || { printf 'fm_wake_append_bounded: invalid wake kind: %s\n' "$kind" >&2; return 2; }
   fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" "$seconds" || return $?
-  _fm_wake_append_locked "$kind" "$2" "$3"
+  _fm_wake_append_locked "$kind" "$2" "$3" "$seconds"
   status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"
@@ -1525,7 +1538,7 @@ fm_wake_append_if_key_absent_bounded() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 3
   fi
-  _fm_wake_append_locked "$kind" "$clean_key" "$3"
+  _fm_wake_append_locked "$kind" "$clean_key" "$3" "$seconds"
   status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"

@@ -65,7 +65,37 @@ test_bounded_wake_queue_operations() {
   [ "$failures" -eq 0 ] || fail "atomic append-if-absent had an unexpected failure"
   count=$(awk -F '\t' '$3 == "check" && $4 == "atomic-key" { count++ } END { print count + 0 }' "$state/.wake-queue")
   [ "$count" -eq 1 ] || fail "atomic append-if-absent queued $count duplicate rows"
-  pass "bounded wake queue operations refuse contention and append keys atomically"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$STATE/.watcher-down.lock"
+    : > "$2"
+    sleep 30
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$dir/recovery-held" &
+  holder=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$dir/recovery-held" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -e "$dir/recovery-held" ] || fail "recovery marker holder did not start"
+  started=$(date +%s)
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"; fm_wake_append_if_key_absent_bounded check recovery-key payload 1
+  ' _ "$ROOT/bin/fm-wake-lib.sh" >/dev/null 2>&1 || rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 0 ] || fail "bounded append entered a held recovery marker"
+  [ "$elapsed" -le 3 ] || fail "bounded append wedged on the recovery marker"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" 1
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" || fail "failed bounded append retained the queue lock"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"; fm_wake_append_if_key_absent_bounded check recovery-key payload 2
+  ' _ "$ROOT/bin/fm-wake-lib.sh" >/dev/null \
+    || fail "bounded append did not recover after the marker lock released"
+  pass "bounded wake queue operations bound both queue and recovery locks"
 }
 
 test_concurrent_append_and_drain() {

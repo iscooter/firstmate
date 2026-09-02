@@ -225,11 +225,11 @@ _fm_parent_mirror_diagnostic() {  # <rc>
   esac
   fm_wake_append_if_key_absent_bounded check "$key" "check: $payload" \
     "$FM_PARENT_MIRROR_LOCK_WAIT_SECS" >/dev/null 2>&1 || append_rc=$?
-  if [ "$append_rc" -eq 0 ]; then
-    printf 'actionable: %s\n' "$payload"
-  else
-    printf '%s\n' "$payload" >&2
-  fi
+  case "$append_rc" in
+    0) printf 'actionable: %s\n' "$payload" ;;
+    3) ;;
+    *) printf '%s\n' "$payload" >&2 ;;
+  esac
 }
 
 # Rewrite <record> atomically from the fields the caller assembled.
