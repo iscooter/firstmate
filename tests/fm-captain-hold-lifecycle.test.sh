@@ -1315,7 +1315,7 @@ EOF
 }
 
 test_hold_cannot_race_past_teardown_open_check() {
-  local home id teardown_pid hold_pid i show
+  local home id teardown_pid hold_pid show
   home=$(make_home hold-teardown-race)
   id=sample-hold-teardown-race
   mkdir -p "$home/data/$id"
@@ -1350,7 +1350,7 @@ SH
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     "$TEARDOWN" "$id" > "$home/teardown.out" 2> "$home/teardown.err" &
   teardown_pid=$!
-  for i in $(seq 1 250); do
+  for _ in $(seq 1 250); do
     [ ! -f "$home/open.ready" ] || break
     sleep 0.02
   done
@@ -1375,7 +1375,7 @@ SH
 }
 
 test_concurrent_answer_survives_retention() {
-  local home id teardown_pid answer_pid i show
+  local home id teardown_pid answer_pid show
   home=$(make_home retain-answer-race)
   id=sample-retain-answer-race
   mkdir -p "$home/data/$id"
@@ -1407,7 +1407,7 @@ SH
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     "$TEARDOWN" "$id" > "$home/teardown.out" 2> "$home/teardown.err" &
   teardown_pid=$!
-  for i in $(seq 1 250); do
+  for _ in $(seq 1 250); do
     [ ! -f "$home/retain.ready" ] || break
     sleep 0.02
   done
@@ -1420,7 +1420,7 @@ SH
   sleep 0.1
   : > "$home/retain.release"
   wait "$answer_pid" || fail "concurrent answer failed: $(cat "$home/answer.err")"
-  for i in $(seq 1 250); do
+  for _ in $(seq 1 250); do
     [ -e "$home/state/$id.backlog-retain" ] || break
     sleep 0.02
   done
@@ -1437,7 +1437,7 @@ SH
 }
 
 test_bootstrap_recovers_kill_after_reopen() {
-  local home id teardown_pid worker_pid i show bootstrap
+  local home id teardown_pid worker_pid show bootstrap
   home=$(make_home retain-reopen-crash)
   id=sample-retain-reopen-crash
   mkdir -p "$home/data/$id"
@@ -1473,7 +1473,7 @@ SH
     FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" \
     > "$home/teardown.out" 2> "$home/teardown.err" &
   teardown_pid=$!
-  for i in $(seq 1 250); do
+  for _ in $(seq 1 250); do
     [ ! -f "$home/reopen.ready" ] || break
     sleep 0.02
   done
@@ -1498,6 +1498,67 @@ SH
   assert_contains "$show" "state: queued" "bootstrap did not preserve the retained queue state"
   assert_contains "$show" "hold_kind: captain" "bootstrap dropped the recovered captain hold"
   pass "bootstrap recovers a kill between reopen and record removal"
+}
+
+test_bootstrap_recovers_kill_during_cleanup() {
+  local home id wt teardown_pid worker_pid show bootstrap
+  home=$(make_home retain-cleanup-crash)
+  id=sample-retain-cleanup-crash
+  wt="$home/projects/$id"
+  mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
+  tasks_in "$home" add "$id" "Investigate cleanup crash recovery" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the cleanup-crash fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
+    "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Cleanup crash\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose after interrupted cleanup" >/dev/null \
+    || fail "could not hold the cleanup-crash fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the cleanup-crash fixture"
+  cat > "$home/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "$FM_TEST_CLEANUP_WORKER"
+: > "$FM_TEST_CLEANUP_READY"
+while [ ! -f "$FM_TEST_CLEANUP_RELEASE" ]; do sleep 0.02; done
+SH
+  chmod +x "$home/fakebin/treehouse"
+
+  PATH="$home/fakebin:$PATH" FM_TEST_CLEANUP_WORKER="$home/cleanup.worker" \
+    FM_TEST_CLEANUP_READY="$home/cleanup.ready" FM_TEST_CLEANUP_RELEASE="$home/cleanup.release" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    "$TEARDOWN" "$id" --force > "$home/teardown.out" 2> "$home/teardown.err" &
+  teardown_pid=$!
+  for _ in $(seq 1 250); do
+    [ ! -f "$home/cleanup.ready" ] || break
+    sleep 0.02
+  done
+  [ -f "$home/cleanup.ready" ] || fail "teardown never entered destructive cleanup"
+  worker_pid=$(cat "$home/cleanup.worker")
+  kill -9 "$worker_pid" "$teardown_pid" 2>/dev/null || true
+  : > "$home/cleanup.release"
+  wait "$teardown_pid" 2>/dev/null || true
+  fm_fake_exit0 "$home/fakebin" treehouse
+
+  assert_present "$home/state/$id.meta" "the cleanup crash removed the task record"
+  assert_present "$home/state/$id.backlog-retain" "the cleanup crash lost its retention record"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the cleanup crash erased the captain call"
+  assert_contains "$show" "state: in_flight" "retention ran before interrupted cleanup ended"
+  bootstrap=$(PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1) \
+    || fail "bootstrap could not recover interrupted cleanup: $bootstrap"
+  assert_contains "$bootstrap" "kept the captain call for $id after interrupted cleanup" \
+    "bootstrap did not report interrupted retention cleanup"
+  assert_absent "$home/state/$id.meta" "bootstrap left interrupted worker metadata behind"
+  assert_absent "$home/state/$id.backlog-retain" "bootstrap left interrupted retention behind"
+  show=$(tasks_in "$home" show "$id" --full) || fail "bootstrap erased the recovered captain call"
+  assert_contains "$show" "state: queued" "bootstrap did not queue the recovered captain call"
+  assert_contains "$show" "hold_kind: captain" "bootstrap dropped the recovered captain hold"
+  pass "bootstrap recovers a kill during destructive cleanup"
 }
 
 test_stale_retention_does_not_mutate_new_incarnation() {
@@ -1530,8 +1591,8 @@ test_stale_retention_does_not_mutate_new_incarnation() {
   pass "stale retention recovery does not mutate a replacement incarnation"
 }
 
-test_late_cleanup_failure_keeps_hold_in_flight() {
-  local home id wt show rc
+test_reported_cleanup_failure_is_recoverable() {
+  local home id wt show rc bootstrap
   home=$(make_home retained-cleanup-failure)
   id=sample-retained-cleanup-failure
   wt="$home/projects/$id"
@@ -1567,7 +1628,77 @@ SH
   assert_contains "$show" "hold_kind: captain" "late cleanup failure dropped the captain hold"
   assert_not_contains "$show" "Deliverable of the finished work" \
     "retention committed before destructive cleanup succeeded"
-  pass "late cleanup failure preserves the in-flight captain call record"
+  assert_present "$home/state/$id.backlog-retain" \
+    "reported cleanup failure lost its replayable retention record"
+  fm_fake_exit0 "$home/fakebin" treehouse
+  bootstrap=$(PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1) \
+    || fail "bootstrap could not recover reported cleanup failure: $bootstrap"
+  assert_contains "$bootstrap" "kept the captain call for $id after interrupted cleanup" \
+    "bootstrap did not report the failed cleanup recovery"
+  assert_absent "$home/state/$id.meta" "bootstrap left failed-cleanup metadata behind"
+  assert_absent "$home/state/$id.backlog-retain" "bootstrap left failed-cleanup retention behind"
+  show=$(tasks_in "$home" show "$id" --full) || fail "bootstrap erased the retained captain call"
+  assert_contains "$show" "state: queued" "bootstrap did not queue the retained captain call"
+  assert_contains "$show" "hold_kind: captain" "bootstrap dropped the retained captain hold"
+  assert_contains "$show" "Deliverable of the finished work" \
+    "bootstrap did not retain the finished work's deliverable"
+  pass "reported cleanup failure preserves a recoverable captain call"
+}
+
+test_released_answer_completes_retention_recovery() {
+  local home id wt show rc bootstrap
+  home=$(make_home released-retention-recovery)
+  id=sample-released-retention-recovery
+  wt="$home/projects/$id"
+  mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
+  tasks_in "$home" add "$id" "Investigate released retention recovery" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the released-recovery fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
+    "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Released recovery\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  printf 'Proceed with the released work.\n' > "$home/answer.txt"
+  run_captain "$home" hold "$id" --reason "captain must choose whether work proceeds" >/dev/null \
+    || fail "could not hold the released-recovery fixture"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed for the released-recovery fixture"
+  cat > "$home/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$home/fakebin/treehouse"
+
+  set +e
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id" --force \
+    > "$home/teardown.out" 2> "$home/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the released-recovery failure"
+  assert_present "$home/state/$id.meta" "failed cleanup removed released-recovery metadata"
+  assert_present "$home/state/$id.backlog-retain" "failed cleanup lost released-recovery retention"
+  run_captain "$home" answer "$id" --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "captain could not release work before retention recovery"
+  fm_fake_exit0 "$home/fakebin" treehouse
+
+  bootstrap=$(PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1) \
+    || fail "bootstrap could not finish released-answer recovery: $bootstrap"
+  assert_absent "$home/state/$id.meta" "released-answer recovery left worker metadata behind"
+  assert_absent "$home/state/$id.backlog-retain" "released-answer recovery left retention behind"
+  show=$(tasks_in "$home" show "$id" --full) || fail "released-answer recovery erased the task"
+  assert_contains "$show" "state: in_flight" "released-answer recovery closed the task"
+  assert_not_contains "$show" "hold_kind: captain" "released-answer recovery restored the captain hold"
+  assert_contains "$show" "Proceed with the released work." \
+    "released-answer recovery lost the captain's recorded answer"
+  pass "released answer completes retention recovery without restoring the hold"
 }
 
 test_teardown_refuses_when_captain_hold_cannot_be_read() {
@@ -1635,6 +1766,8 @@ test_teardown_uses_relocated_captain_hold_backlog
 test_hold_cannot_race_past_teardown_open_check
 test_concurrent_answer_survives_retention
 test_bootstrap_recovers_kill_after_reopen
+test_bootstrap_recovers_kill_during_cleanup
 test_stale_retention_does_not_mutate_new_incarnation
-test_late_cleanup_failure_keeps_hold_in_flight
+test_reported_cleanup_failure_is_recoverable
+test_released_answer_completes_retention_recovery
 test_teardown_refuses_when_captain_hold_cannot_be_read

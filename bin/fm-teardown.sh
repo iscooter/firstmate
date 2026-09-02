@@ -20,10 +20,10 @@
 # None of this loosens the landed-work gates below: the transition runs only on
 # the paths that already proceed to remove the record.
 # The close - and only the close - DEFERS while the backlog item is still an
-# open captain call (bin/fm-captain-hold.sh owns that predicate). Cleanup runs
-# first, then a durable pending-retention record becomes replayable immediately
-# before the deliverable, Queued transition, and record removal commit under one
-# child-owned metadata lock. No pending-close record is staged,
+# open captain call (bin/fm-captain-hold.sh owns that predicate). A durable
+# pending-retention record is staged before any destructive step and is
+# replayable from that moment until the deliverable, Queued transition, and
+# record removal commit under one child-owned metadata lock. No pending-close record is staged,
 # so nothing here or at the next session start closes a question the captain has
 # not answered; --force does not lift that, and bin/fm-captain-hold.sh answer
 # stays the only act that closes it.
@@ -2944,9 +2944,9 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
     exit 1
   fi
 elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
-  fm_backlog_retain_marker_mark_ready "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
+  fm_backlog_retain_marker_mark_cleanup_complete "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
     "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
-    || { echo "error: pending retention for captain-held $ID could not be made replayable ($FM_BACKLOG_TRANSITION_ERROR)" >&2; exit 1; }
+    || echo "warning: pending retention for captain-held $ID still reads as interrupted ($FM_BACKLOG_TRANSITION_ERROR); recovery may over-warn about leftover cleanup" >&2
   BACKLOG_RETAIN_MARKER=$(fm_backlog_retain_marker_path "$STATE" "$ID") || exit 1
   fm_lock_release "$META_LOCK"
   META_LOCK_HELD=0

@@ -34,7 +34,7 @@ The policy prefers holding the very work item a question gates, so the backlog r
 `bin/fm-teardown.sh` therefore asks `bin/fm-captain-hold.sh open <task-id>` before its automatic close: exit 0 means the row is still an open captain call (not Done, still carrying `hold_kind: captain`), 1 means it is not, and 2 means the answer could not be established, which teardown treats as a refusal before any destructive step rather than as permission to close.
 Only the close is affected; every other cleanup step runs exactly as before, and `--force` does not lift the deferral because it authorizes discarding unlanded work, never the captain's question.
 
-Teardown stages a bounded `state/<id>.backlog-retain` intent before cleanup, marks it replayable only after endpoint and worktree cleanup succeeds, and then `recover-retain` records the completion links and returns the row to Queued while keeping its hold.
+Teardown stages a bounded and immediately replayable `state/<id>.backlog-retain` intent before cleanup, marks cleanup complete after endpoint and worktree cleanup succeeds, and then `recover-retain` records the completion links and returns the row to Queued while keeping its hold.
 `answer`, `retain`, and `recover-retain` serialize their complete body-and-state transactions on the same per-task metadata lock, and recovery always re-reads current state so it cannot overwrite or reopen a concurrent recorded answer.
 Queued-and-held is the shape every other captain call already has, and it is what `captain_actionable` above requires, so the retained call lands in Captain's Call rather than reading as work still under way.
 `retain` refuses any task that is not an open captain call, so no closer can use it to keep an ordinary finished task alive.

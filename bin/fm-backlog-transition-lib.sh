@@ -41,9 +41,11 @@
 # with it the completion links, so a process killed between the two halves would
 # leave nothing to reconstruct the close from. It writes
 # `state/<id>.backlog-close` first, and removes it once the close lands.
-# Captain-call deferral similarly stages `state/<id>.backlog-retain`, marks it
-# replayable only after cleanup succeeds, and recovery can only retain, never
-# close, that row.
+# Captain-call deferral similarly stages `state/<id>.backlog-retain` before
+# destructive cleanup, and that record is replayable from the moment it exists.
+# A kill or reported cleanup failure in that window still recovers a durably
+# held captain call; recovery can only retain, never close, and removes the
+# record once the transition completes.
 # The writer and replay share one complete-record validator, and teardown stages
 # that record before destructive cleanup, so it never publishes or acts on a close
 # replay would reject. The validator pins the data path to this home's configured
@@ -694,17 +696,17 @@ fm_backlog_retain_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [f
   shift 4
   marker=$(fm_backlog_retain_marker_path "$state" "$id") || return 1
   tmp="$state/.$id.backlog-retain.${BASHPID:-$$}"
-  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 0 "$@" || return 1
+  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 1 "$@" || return 1
   fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-retention record" "$state" \
     || { rm -f "$tmp"; return 1; }
 }
 
-fm_backlog_retain_marker_mark_ready() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
+fm_backlog_retain_marker_mark_cleanup_complete() {  # <state-dir> <id> <data-dir> <spawn-gen> [flag...]
   local state=$1 id=$2 data=$3 spawn_gen=$4 marker tmp
   shift 4
   marker=$(fm_backlog_retain_marker_path "$state" "$id") || return 1
   tmp="$state/.$id.backlog-retain.${BASHPID:-$$}"
-  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 1 "$@" || return 1
+  fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 0 "$@" || return 1
   fm_backlog_atomic_transition publish "$tmp" "$marker" "pending-retention record" "$state" \
     || { rm -f "$tmp"; return 1; }
 }

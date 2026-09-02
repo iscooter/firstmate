@@ -1192,7 +1192,7 @@ crew_dispatch_validate() {
 # snapshot's classifier and bin/fm-secondmate-reconcile.sh's nudge stay as
 # backstops for what this cannot see. Never reads or writes another home.
 backlog_record_reconcile() {
-  local marker meta meta_lock id row label has_record=0 gate_status
+  local marker meta meta_lock id row label recovery has_record=0 gate_status
   # A fresh home with no state directory has no physical task records to pair.
   # Keep bootstrap diagnostics working without creating state just for a no-op.
   [ -e "$STATE" ] || [ -L "$STATE" ] || return 0
@@ -1226,11 +1226,15 @@ backlog_record_reconcile() {
       echo "BACKLOG_RECONCILE: $label: pending retention could not be validated: $FM_BACKLOG_TRANSITION_ERROR"
       continue
     fi
-    [ "$FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE" = 1 ] || continue
-    if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    if recovery=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
         FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" \
-        recover-retain "$marker" >/dev/null; then
-      echo "BOOTSTRAP_INFO: completed replayable retention for captain-held $label"
+        recover-retain "$marker"); then
+      case "$recovery" in
+        recovered-retention-incomplete:*)
+          echo "BOOTSTRAP_INFO: kept the captain call for $label after interrupted cleanup; its endpoint or local copy may remain and should be reconciled"
+          ;;
+        *) echo "BOOTSTRAP_INFO: completed replayable retention for captain-held $label" ;;
+      esac
     else
       echo "BACKLOG_RECONCILE: $label: recorded captain-call retention could not be replayed"
     fi
