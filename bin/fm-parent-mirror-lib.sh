@@ -452,18 +452,20 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
 
   # 2. A standing failed line: deliver once it has stood past the threshold.
   if [ "$rc" -eq 0 ]; then
-    if [ "$processed_lines" -gt 0 ]; then
-      last=$(awk -v limit="$processed_lines" 'NR <= limit { value = $0 } END { print value }' "$prefix")
-    else
-      last=$terminal_line
-    fi
+    last=$terminal_line
+    last_offset=$terminal_offset
+    line_offset=$scan_start
+    line_number=0
+    while IFS= read -r line && [ "$line_number" -lt "$processed_lines" ]; do
+      line_start=$line_offset
+      line_offset=$((line_offset + ${#line} + 1))
+      line_number=$((line_number + 1))
+      case "$line" in
+        *[![:space:]]*) last=$line; last_offset=$line_start ;;
+      esac
+    done < "$prefix"
     last_verb=$(status_line_verb "$last")
     if [ "$last_verb" = failed ]; then
-      if [ "$processed_lines" -gt 0 ]; then
-        last_offset=$((committed - ${#last} - 1))
-      else
-        last_offset=$terminal_offset
-      fi
       if [ "$terminal_line" != "$last" ] || [ "$terminal_offset" != "$last_offset" ]; then
         terminal_line=$last
         terminal_offset=$last_offset

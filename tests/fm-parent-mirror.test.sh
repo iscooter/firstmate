@@ -387,6 +387,22 @@ test_failed_line_thresholded_and_superseded() {
   sweep "$MATE" 1200 >/dev/null || fail "third sweep failed"
   [ "$(channel_lines)" = 1 ] || fail "a standing failure was raised twice"
 
+  make_world trailing-blank-failure; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'failed: blank lines followed' ''
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" bash -c '
+    . "$1"; fm_parent_mirror_owns_ledger "$2" child
+  ' _ "$ROOT/bin/fm-parent-mirror-lib.sh" "$MATE/state" \
+    || fail "inactive reconciliation did not yield the trailing-blank failure to the mirror"
+  sweep "$MATE" 1000 >/dev/null || fail "trailing-blank failure observation failed"
+  [ ! -e "$(parent_channel)" ] || fail "trailing-blank failure skipped its threshold"
+  sweep "$MATE" 1060 >/dev/null || fail "trailing-blank failure threshold failed"
+  grep -F 'failed [key=mirror-5-child-l0]: mirror: child=child blank lines followed (unhandled past 60s)' "$(parent_channel)" >/dev/null \
+    || fail "trailing blank lines suppressed the standing failure"
+  sweep "$MATE" 1200 >/dev/null || fail "trailing-blank failure repeat sweep failed"
+  [ "$(channel_count 'failed [key=mirror-5-child-l0]')" = 1 ] \
+    || fail "trailing-blank failure was not delivered exactly once"
+
   make_world relaunched; bind_secondmate local
   write_child "$MATE" child
   ledger "$MATE" child 'failed: build broke on main'
