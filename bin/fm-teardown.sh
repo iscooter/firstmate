@@ -2882,7 +2882,11 @@ if [ "$KIND" != secondmate ]; then
   MIRROR_RC=0
   fm_parent_mirror_retire_locked "$ID" || MIRROR_RC=$?
   if [ "$MIRROR_RC" -ne 0 ]; then
-    echo "actionable: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC); its mirror record is retained for the next supervision poll" >&2
+    if ! fm_parent_mirror_orphan_durable "$ID"; then
+      echo "error: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC), and no durable orphan record exists; retaining the child record for retry" >&2
+      exit 1
+    fi
+    echo "actionable: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC); its durable orphan record is retained for the next supervision poll" >&2
   fi
 fi
 status_retire_presentation_task "$STATE" "$ID" || exit 1

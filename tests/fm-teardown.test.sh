@@ -544,6 +544,39 @@ seed_backlog_in_flight() {
   tasks-axi start task-x1 --file "$case_dir/data/backlog.md" >/dev/null
 }
 
+test_parent_mirror_requires_durable_orphan_before_record_removal() {
+  local case_dir rc target
+  case_dir=$(make_case mirror-orphan-refuse)
+  write_meta "$case_dir" local-only ship
+  seed_backlog_in_flight "$case_dir"
+  printf 'mate\n' > "$case_dir/.fm-secondmate-home"
+  printf 'invalid binding\n' > "$case_dir/.fm-secondmate-parent"
+  printf 'done: outcome awaiting parent\n' > "$case_dir/state/task-x1.status"
+  target="$case_dir/unsafe-parent-mirror"
+  mkdir -p "$target"
+  ln -s "$target" "$case_dir/state/parent-mirror"
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown removed a child without a durable orphan record"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "refused teardown removed the discoverable child record"
+  assert_grep "no durable orphan record exists" "$case_dir/stderr" \
+    "refused teardown did not explain the missing durable orphan"
+
+  case_dir=$(make_case mirror-orphan-confirmed)
+  write_meta "$case_dir" local-only ship
+  seed_backlog_in_flight "$case_dir"
+  printf 'mate\n' > "$case_dir/.fm-secondmate-home"
+  printf 'invalid binding\n' > "$case_dir/.fm-secondmate-parent"
+  printf 'done: outcome awaiting parent\n' > "$case_dir/state/task-x1.status"
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "teardown should proceed after confirming a durable orphan"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "verified orphan did not permit child-record removal"
+  [ -f "$case_dir/state/parent-mirror/task-x1.record" ] \
+    || fail "teardown did not preserve its verified orphan record"
+  pass "teardown removes child records only behind durable mirror evidence"
+}
+
 backlog_row_state() {
   local case_dir=$1
   tasks-axi show task-x1 --file "$case_dir/data/backlog.md" 2>/dev/null |
@@ -2605,6 +2638,7 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+test_parent_mirror_requires_durable_orphan_before_record_removal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator

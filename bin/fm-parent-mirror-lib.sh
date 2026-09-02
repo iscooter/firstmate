@@ -641,6 +641,17 @@ fm_parent_mirror_sweep() {  # [<child>]
   return "$rc"
 }
 
+fm_parent_mirror_orphan_durable() {  # <child>
+  local child=$1 dir record
+  _fm_parent_channel_id_valid "$child" || return 1
+  dir=$(fm_parent_mirror_dir "$STATE")
+  record=$(fm_parent_mirror_record_path "$STATE" "$child")
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  [ "$(_fm_parent_mirror_record_field "$record" schema)" = "$FM_PARENT_MIRROR_SCHEMA" ] || return 1
+  [ "$(_fm_parent_mirror_record_field "$record" orphan)" = 1 ]
+}
+
 # Final sweep for a child that is leaving the home, then retire its record.
 # The caller holds the child's meta lock, which is the only lock this path
 # takes. When the final sweep cannot deliver for any reason, a record is kept

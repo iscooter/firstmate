@@ -356,28 +356,50 @@ recorded_resolution_mode() {  # <task-body>
   printf '%s' "$rest"
 }
 
+body_has_hold_state_block() {  # <task-body>
+  local body
+  body=$(decode_shown_value "$1") || return 1
+  printf '%s\n' "$body" | awk '
+    NR == 1 && $0 != "Captain hold state recorded by fm-captain-hold." { exit 1 }
+    NR == 2 && $0 !~ /^Generation: [0-9]+$/ { exit 1 }
+    NR == 3 { exit !($0 == "End captain hold state.") }
+    END { if (NR < 3) exit 1 }
+  '
+}
+
 recorded_hold_generation() {  # <task-body>
-  local rest=$1
-  case "$rest" in
-    *"Captain hold generation: "*) rest=${rest#*"Captain hold generation: "} ;;
-    *) return 1 ;;
-  esac
-  rest=${rest%%\\n*}
-  rest=${rest%%$'\n'*}
-  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$rest"
+  local body
+  body=$(decode_shown_value "$1") || return 1
+  printf '%s\n' "$body" | awk '
+    NR == 1 && $0 == "Captain hold state recorded by fm-captain-hold." { state = 1; next }
+    NR == 1 && $0 ~ /^Captain hold generation: [0-9]+$/ {
+      sub(/^Captain hold generation: /, ""); print; exit
+    }
+    NR == 2 && state && $0 ~ /^Generation: [0-9]+$/ {
+      sub(/^Generation: /, ""); generation = $0; next
+    }
+    NR == 3 && state && $0 == "End captain hold state." { print generation; exit }
+    { exit 1 }
+  '
 }
 
 recorded_resolution_generation() {  # <task-body>
-  local rest=$1
-  case "$rest" in
-    *"Hold generation: "*) rest=${rest#*"Hold generation: "} ;;
-    *) return 1 ;;
-  esac
-  rest=${rest%%\\n*}
-  rest=${rest%%$'\n'*}
-  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$rest"
+  local body
+  body=$(decode_shown_value "$1") || return 1
+  printf '%s\n' "$body" | awk '
+    $0 == "Resolution recorded by fm-captain-hold." || $0 == "Resolution recorded by fm-decision-hold." {
+      if (!seen) { seen = 1; position = 0; next }
+    }
+    seen {
+      position++
+      if (position == 1 && $0 !~ /^Decision digest: /) exit 1
+      if (position == 2 && $0 !~ /^Resolution mode: /) exit 1
+      if (position == 3 && $0 ~ /^Hold generation: [0-9]+$/) {
+        sub(/^Hold generation: /, ""); print; exit
+      }
+      if (position >= 3) exit 1
+    }
+  '
 }
 
 resolution_record_count() {  # <task-body>
@@ -394,10 +416,19 @@ resolution_block() {  # <mode> <hold-generation>
 }
 
 write_hold_generation() {  # <task-id> <generation> <shown-body>
-  local id=$1 generation=$2 body=$3 new_body tmp
+  local id=$1 generation=$2 body=$3 old_generation new_body tmp prefix
   body=$(decode_shown_value "$body") || fail "could not decode the existing body for $id"
-  body=$(printf '%s' "$body" | perl -0pe 's/(?:^|\n)Captain hold generation: [0-9]+\n?//g')
-  new_body="Captain hold generation: $generation"
+  old_generation=$(recorded_hold_generation "$body" || true)
+  if [ -n "$old_generation" ]; then
+    prefix=$(printf 'Captain hold state recorded by fm-captain-hold.\nGeneration: %s\nEnd captain hold state.' "$old_generation")
+    case "$body" in
+      "$prefix"$'\n\n'*) body=${body#"$prefix"$'\n\n'} ;;
+      "$prefix") body='' ;;
+      "Captain hold generation: $old_generation"$'\n\n'*) body=${body#"Captain hold generation: $old_generation"$'\n\n'} ;;
+      "Captain hold generation: $old_generation") body='' ;;
+    esac
+  fi
+  new_body=$(printf 'Captain hold state recorded by fm-captain-hold.\nGeneration: %s\nEnd captain hold state.' "$generation")
   [ -z "$body" ] || new_body=$(printf '%s\n\n%s' "$new_body" "$body")
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-generation.XXXXXX") \
     || fail "cannot stage the hold generation"
@@ -505,6 +536,7 @@ command_hold() {
   current_generation=$(recorded_hold_generation "$body" || true)
   if [ "$hold_kind" = captain ] && [ -n "$current_generation" ]; then
     occurrence=$current_generation
+    body_has_hold_state_block "$body" || write_hold_generation "$id" "$occurrence" "$body"
   else
     occurrence=$(( $(resolution_record_count "$body") + 1 ))
     write_hold_generation "$id" "$occurrence" "$body"
@@ -530,13 +562,16 @@ command_hold() {
 # Record a resolution block at the top of the task body, preserving the
 # previous body below it and archiving the pristine original.
 write_resolution_record() {  # <task-id> <mode> <hold-generation> <shown-body>
-  local id=$1 mode=$2 generation=$3 body=$4 new_body tmp
-  new_body=$(resolution_block "$mode" "$generation")
+  local id=$1 mode=$2 generation=$3 body=$4 new_body tmp prefix
   body=$(decode_shown_value "$body") \
     || fail "could not decode the existing body for $id"
-  if [ -n "$body" ]; then
-    new_body=$(printf '%s\n\n%s' "$new_body" "$body")
-  fi
+  prefix=$(printf 'Captain hold state recorded by fm-captain-hold.\nGeneration: %s\nEnd captain hold state.' "$generation")
+  case "$body" in
+    "$prefix"$'\n\n'*) body=${body#"$prefix"$'\n\n'} ;;
+    "$prefix") body='' ;;
+  esac
+  new_body=$(printf '%s\n\n%s' "$prefix" "$(resolution_block "$mode" "$generation")")
+  [ -z "$body" ] || new_body=$(printf '%s\n\n%s' "$new_body" "$body")
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-body.XXXXXX") \
     || fail "cannot stage the resolution record"
   if ! printf '%s\n' "$new_body" > "$tmp"; then
@@ -627,7 +662,10 @@ command_answer() {
     # its own record on top. Either way the close mode is the caller's flag,
     # checked against an interrupted close's recorded mode so a retry cannot
     # silently flip a release into a close.
-    [ -n "$hold_generation" ] || hold_generation=$(( $(resolution_record_count "$body") + 1 ))
+    if [ -z "$hold_generation" ]; then
+      hold_generation=$resolution_generation
+      [ "$hold_generation" -gt 0 ] || hold_generation=$(( $(resolution_record_count "$body") + 1 ))
+    fi
     if body_has_resolution_record "$body" \
       && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
       && [ "$resolution_generation" = "$hold_generation" ]; then

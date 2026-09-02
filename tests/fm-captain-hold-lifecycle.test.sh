@@ -305,6 +305,33 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
   [ -z "$open" ] || fail "same-answer re-hold left a parent occurrence open: $open"
 
+  run_captain "$home" hold mate-marker-prose-call \
+    --title "Answer with marker-like prose" --reason "captain marker prose pending" --repo sample >/dev/null \
+    || fail "could not hold marker-prose work"
+  printf 'Captain hold generation: 99\n' > "$home/marker-prose.txt"
+  cat > "$home/fakebin/tasks-axi" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = done ] && [ ! -e "$FM_HOME/close-failed-once" ]; then
+  : > "$FM_HOME/close-failed-once"
+  exit 1
+fi
+exec "$REAL_TASKS_AXI" "$@"
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  if run_captain "$home" answer mate-marker-prose-call --decision-file "$home/marker-prose.txt" >/dev/null 2>&1; then
+    fail "marker-prose answer did not reproduce an interrupted close"
+  fi
+  run_captain "$home" answer mate-marker-prose-call --decision-file "$home/marker-prose.txt" >/dev/null \
+    || fail "marker-prose interrupted close did not retry"
+  grep -Fx 'resolved [key=captain-hold-mate-marker-prose-call-1]: captain hold mate-marker-prose-call occurrence 1: answered' "$channel" >/dev/null \
+    || fail "marker-like captain prose closed the wrong occurrence"
+  if grep -F 'captain-hold-mate-marker-prose-call-99' "$channel" >/dev/null; then
+    fail "marker-like captain prose became a hold generation"
+  fi
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  [ -z "$open" ] || fail "marker-prose retry left a parent occurrence open: $open"
+  rm -f "$home/fakebin/tasks-axi"
+
   run_captain "$home" hold mate-batch-call \
     --title "Choose batch route" --reason "captain batch choice pending" --repo sample >/dev/null \
     || fail "could not hold the batch-answer task"
