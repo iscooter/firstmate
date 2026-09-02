@@ -62,6 +62,7 @@ mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$HOME_DIR/config" \
 HOME_DIR=$(cd "$HOME_DIR" && pwd -P)
 printf '# Seeded Firstmate home\n' > "$HOME_DIR/AGENTS.md"
 printf 'mate\n' > "$HOME_DIR/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$HOME_DIR/.fm-secondmate-parent"
 fm_git_init_commit "$HOME_DIR/projects/task"
 git -C "$HOME_DIR/projects/task" checkout -q -b fm/ledger-task
 cat > "$HOME_DIR/data/backlog.md" <<'EOF'
@@ -162,6 +163,7 @@ mkdir -p "$CADENCE_HOME/state" "$CADENCE_HOME/data" "$CADENCE_HOME/config" \
   "$CADENCE_HOME/projects"
 printf '# Seeded Firstmate home\n' > "$CADENCE_HOME/AGENTS.md"
 printf 'cadence\n' > "$CADENCE_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$CADENCE_HOME/.fm-secondmate-parent"
 cat > "$CADENCE_HOME/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -524,6 +526,7 @@ mkdir -p "$COST_HOME/state" "$COST_HOME/data" "$COST_HOME/config" \
   "$COST_HOME/projects/task"
 printf '# Seeded Firstmate home\n' > "$COST_HOME/AGENTS.md"
 printf 'cost\n' > "$COST_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$COST_HOME/.fm-secondmate-parent"
 fm_git_init_commit "$COST_HOME/projects/task"
 cat > "$COST_HOME/data/backlog.md" <<'EOF'
 ## In flight
@@ -578,6 +581,7 @@ mkdir -p "$REMOTE_HOME/state" "$REMOTE_HOME/data" "$REMOTE_HOME/config" \
   "$REMOTE_HOME/projects" "$TMP_ROOT/sshbin"
 printf '# Seeded Firstmate home\n' > "$REMOTE_HOME/AGENTS.md"
 printf 'remote\n' > "$REMOTE_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$REMOTE_HOME/.fm-secondmate-parent"
 cat > "$REMOTE_HOME/data/backlog.md" <<'EOF'
 ## In flight
 - [ ] rsm - Read remote current state (repo: firstmate) (kind: ship) (since 2026-08-28)
@@ -641,6 +645,7 @@ mkdir -p "$BEAT_HOME/state" "$BEAT_HOME/data" "$BEAT_HOME/config" \
   "$BEAT_HOME/projects"
 printf '# Seeded Firstmate home\n' > "$BEAT_HOME/AGENTS.md"
 printf 'beat\n' > "$BEAT_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$BEAT_HOME/.fm-secondmate-parent"
 cat > "$BEAT_HOME/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -708,6 +713,7 @@ mkdir -p "$RESTART_HOME/state" "$RESTART_HOME/data" "$RESTART_HOME/config" \
   "$RESTART_HOME/projects/task"
 printf '# Seeded Firstmate home\n' > "$RESTART_HOME/AGENTS.md"
 printf 'restart\n' > "$RESTART_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$RESTART_HOME/.fm-secondmate-parent"
 fm_git_init_commit "$RESTART_HOME/projects/task"
 cat > "$RESTART_HOME/data/backlog.md" <<'EOF'
 ## In flight
@@ -826,6 +832,7 @@ mkdir -p "$REPORT_HOME/state" "$REPORT_HOME/data" "$REPORT_HOME/config" \
   "$REPORT_HOME/projects"
 printf '# Seeded Firstmate home\n' > "$REPORT_HOME/AGENTS.md"
 printf 'report\n' > "$REPORT_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$REPORT_HOME/.fm-secondmate-parent"
 cat > "$REPORT_HOME/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -850,6 +857,7 @@ mkdir -p "$COMPAT_HOME/state" "$COMPAT_HOME/data" "$COMPAT_HOME/config" \
   "$COMPAT_HOME/projects"
 printf '# Seeded Firstmate home\n' > "$COMPAT_HOME/AGENTS.md"
 printf 'compat\n' > "$COMPAT_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$COMPAT_HOME/.fm-secondmate-parent"
 cat > "$COMPAT_HOME/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -896,6 +904,7 @@ mkdir -p "$ORDER_HOME/state" "$ORDER_HOME/data" "$ORDER_HOME/config" \
   "$ORDER_HOME/projects" "$ORDER_DATE_BIN"
 printf '# Seeded Firstmate home\n' > "$ORDER_HOME/AGENTS.md"
 printf 'order\n' > "$ORDER_HOME/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$ORDER_HOME/.fm-secondmate-parent"
 cat > "$ORDER_HOME/data/backlog.md" <<'EOF'
 ## In flight
 

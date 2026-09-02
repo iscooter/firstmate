@@ -368,6 +368,36 @@ EOF
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
   [ -z "$open" ] || fail "same-answer re-hold left a parent occurrence open: $open"
 
+  run_captain "$home" hold mate-undelivered-close \
+    --title "Retry an undelivered close" --reason "captain close retry pending" --repo sample >/dev/null \
+    || fail "could not create the undelivered-close fixture"
+  printf 'release before re-hold\n' > "$home/undelivered-close.txt"
+  mv "$home/.fm-secondmate-parent" "$home/.fm-secondmate-parent.saved"
+  run_captain "$home" answer mate-undelivered-close \
+    --decision-file "$home/undelivered-close.txt" --release >/dev/null 2> "$home/undelivered-close.err" \
+    || fail "could not record the answer while its parent close was unavailable"
+  if run_captain "$home" hold mate-undelivered-close \
+    --title "Retry an undelivered close" --reason "captain second occurrence pending" --repo sample \
+    > "$home/undelivered-rehold.out" 2> "$home/undelivered-rehold.err"; then
+    fail "a new hold advanced past an undelivered parent close"
+  fi
+  assert_grep "cannot re-hold task mate-undelivered-close until its recorded answer reaches the parent channel" \
+    "$home/undelivered-rehold.err" "the refused re-hold did not name the retained close obligation"
+  mv "$home/.fm-secondmate-parent.saved" "$home/.fm-secondmate-parent"
+  run_captain "$home" hold mate-undelivered-close \
+    --title "Retry an undelivered close" --reason "captain second occurrence pending" --repo sample >/dev/null \
+    || fail "re-hold did not retry the durable old close"
+  grep -Fx 'resolved [key=captain-hold-mate-undelivered-close-1]: captain hold mate-undelivered-close occurrence 1: released' "$channel" >/dev/null \
+    || fail "re-hold did not deliver the prior occurrence close"
+  grep -Fx 'needs-decision [key=captain-hold-mate-undelivered-close-2]: captain hold mate-undelivered-close occurrence 2: captain second occurrence pending' "$channel" >/dev/null \
+    || fail "re-hold did not open a distinct occurrence after closing the prior one"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  printf '%s\n' "$open" | grep -q '^captain-hold-mate-undelivered-close-2	needs-decision	' \
+    || fail "the prior close was orphaned or the new occurrence was not open: $open"
+  run_captain "$home" answer mate-undelivered-close \
+    --decision-file "$home/undelivered-close.txt" --release >/dev/null \
+    || fail "could not close the regression fixture's second occurrence"
+
   run_captain "$home" hold mate-marker-prose-call \
     --title "Answer with marker-like prose" --reason "captain marker prose pending" --repo sample >/dev/null \
     || fail "could not hold marker-prose work"

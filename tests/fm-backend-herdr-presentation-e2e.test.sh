@@ -960,6 +960,8 @@ mkdir -p "$SECOND_HOME_A/state" "$SECOND_HOME_A/config" "$SECOND_HOME_A/data" \
   "$SECOND_HOME_B/state" "$SECOND_HOME_B/config" "$SECOND_HOME_B/data"
 printf 'alpha\n' > "$SECOND_HOME_A/.fm-secondmate-home"
 printf 'bravo\n' > "$SECOND_HOME_B/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$SECOND_HOME_A/.fm-secondmate-parent"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$SECOND_HOME_B/.fm-secondmate-parent"
 touch "$SECOND_HOME_A/state/.last-watcher-beat" "$SECOND_HOME_B/state/.last-watcher-beat"
 # Ensure the secondmate homes look like gitignored firstmate homes so inheritance
 # may write config/herdr-presentation-spaces.

@@ -1049,6 +1049,8 @@ test_relay_disabled_parent_allows_marked_child_teardown() {
   child=$(make_home teardown-disabled-child relay-off)
   fm_git_init_commit "$child/projects/worktree"
   printf '%s\n' disabled-mate > "$child/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$child/.fm-secondmate-parent"
   printf -- '- disabled-mate - synthetic (home: %s; scope: synthetic; projects: ; added 2026-07-30)\n' \
     "$child" > "$parent/data/secondmates.md"
   fm_write_meta "$parent/state/disabled-mate.meta" "kind=secondmate" "home=$child"

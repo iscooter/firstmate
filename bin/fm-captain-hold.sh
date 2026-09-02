@@ -157,9 +157,28 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
   fm_parent_channel_report "$FM_HOME" "$STATE" \
     "$verb [key=captain-hold-$id-$occurrence]: captain hold $id occurrence $occurrence: $(fm_parent_channel_clean_note "$note")" || rc=$?
   case "$rc" in
-    0|1) ;;
-    *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
+    0|1) return 0 ;;
+    *)
+      printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2
+      return "$rc"
+      ;;
   esac
+}
+
+# A resolution remains in the task body after a release, so a later re-hold can
+# retry its parent close before advancing the occurrence. Refusing the advance
+# while that retry cannot reach the parent prevents the old keyed decision from
+# becoming an uncloseable orphan behind a newer hold.
+publish_recorded_parent_resolution() {  # <task-id> <task-body>
+  local id=$1 body=$2 generation mode note
+  generation=$(recorded_resolution_generation "$body") || return 0
+  mode=$(recorded_resolution_mode "$body") || return 0
+  case "$mode" in
+    released) note=released ;;
+    repaired) note='answered (repaired)' ;;
+    *) note=answered ;;
+  esac
+  publish_parent_hold "$id" "$generation" resolved "$note"
 }
 
 CAPTAIN_META_LOCK=
@@ -560,6 +579,10 @@ command_hold() {
   body=$(show_field "$show" body)
   hold_kind=$(show_field_value "$show" hold_kind)
   current_generation=$(recorded_hold_generation "$body" || true)
+  if [ "$hold_kind" != captain ] && body_has_resolution_record "$body"; then
+    publish_recorded_parent_resolution "$id" "$body" \
+      || fail "cannot re-hold task $id until its recorded answer reaches the parent channel"
+  fi
   if [ "$hold_kind" = captain ] && [ -n "$current_generation" ]; then
     occurrence=$current_generation
     body_has_hold_state_block "$body" || write_hold_generation "$id" "$occurrence" "$body"
@@ -585,9 +608,9 @@ command_hold() {
   hold_kind=$(show_field_value "$show" hold_kind)
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
   if [ -n "$origin" ]; then
-    publish_parent_hold "$id" "$occurrence" needs-decision "$reason (origin $origin)"
+    publish_parent_hold "$id" "$occurrence" needs-decision "$reason (origin $origin)" || true
   else
-    publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+    publish_parent_hold "$id" "$occurrence" needs-decision "$reason" || true
   fi
   printf '%s\n' "$id"
 }
@@ -663,9 +686,9 @@ command_answer() {
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
       occurrence=$resolution_generation
       if [ "$recorded_mode" = repaired ]; then
-        publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)"
+        publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)" || true
       else
-        publish_parent_hold "$id" "$occurrence" resolved answered
+        publish_parent_hold "$id" "$occurrence" resolved answered || true
       fi
       printf 'answered: %s\n' "$id"
       return 0
@@ -683,7 +706,7 @@ command_answer() {
     body=$(show_field "$show" body)
     body_has_resolution_record "$body" \
       || fail "captain-held task $id did not retain its durable resolution record"
-    publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)"
+    publish_parent_hold "$id" "$occurrence" resolved "answered (repaired)" || true
     printf 'repaired: %s\n' "$id"
     return 0
   fi
@@ -709,7 +732,7 @@ command_answer() {
       esac
       occurrence=$hold_generation
       close_answered "$id" "$release"
-      publish_parent_hold "$id" "$occurrence" resolved "$outcome"
+      publish_parent_hold "$id" "$occurrence" resolved "$outcome" || true
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
@@ -719,7 +742,7 @@ command_answer() {
     show=$(task_show "$id") || fail "task $id disappeared after closing"
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
-    publish_parent_hold "$id" "$occurrence" resolved "$outcome"
+    publish_parent_hold "$id" "$occurrence" resolved "$outcome" || true
     printf '%s: %s\n' "$outcome" "$id"
     return 0
   fi
@@ -732,7 +755,7 @@ command_answer() {
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     occurrence=$resolution_generation
-    publish_parent_hold "$id" "$occurrence" resolved released
+    publish_parent_hold "$id" "$occurrence" resolved released || true
     printf 'released: %s\n' "$id"
     return 0
   fi
@@ -912,9 +935,9 @@ command_answers() {
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
         case "$recorded_mode" in
-          released) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved released ;;
-          repaired) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved "answered (repaired)" ;;
-          *) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved answered ;;
+          released) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved released || true ;;
+          repaired) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved "answered (repaired)" || true ;;
+          *) publish_parent_hold "$id" "$(recorded_resolution_generation "$body" || resolution_record_count "$body")" resolved answered || true ;;
         esac
         printf 'closed: %s\n' "$id"
         closed=$((closed + 1))

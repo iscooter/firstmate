@@ -732,9 +732,17 @@ fm_parent_mirror_orphan_durable() {  # <child>
 # (or created) as an orphan so later sweeps keep trying, because the ledger
 # outlives the child's record.
 fm_parent_mirror_retire_locked() {  # <child>
-  local child=$1 record meta rc=0 context_pr context_mode context_yolo context_report report data
+  local child=$1 record meta status rc=0 context_pr context_mode context_yolo context_report report data
   record=$(fm_parent_mirror_record_path "$STATE" "$child")
   meta="$STATE/$child.meta"
+  status="$STATE/$child.status"
+  # A pre-ledger task has no parent-facing evidence to preserve or deliver.
+  # Avoid resolving a channel merely because an unrelated teardown is running.
+  if { { [ ! -e "$status" ] && [ ! -L "$status" ]; } \
+      || { [ -f "$status" ] && [ ! -L "$status" ] && [ ! -s "$status" ]; }; } \
+    && [ ! -e "$record" ] && [ ! -L "$record" ]; then
+    return 0
+  fi
   _fm_parent_mirror_channel_ready || { rc=$?; [ "$rc" -eq 1 ] && return 0; }
   if [ "$rc" -eq 0 ]; then
     fm_parent_mirror_sweep_child_locked "$child" 1 || rc=$?

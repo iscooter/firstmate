@@ -2189,6 +2189,8 @@ test_a_secondmate_home_keeps_its_own_books() {
   # single-host, so its own dispatch and completion keep its own two records
   # paired with no parent involved.
   printf '%s\n' mate-h1 > "$(home_of "$case_dir")/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' \
+    > "$(home_of "$case_dir")/.fm-secondmate-parent"
   add_item "$case_dir" "$id"
 
   out=$(run_ship_spawn "$case_dir" "$id") || fail "mate-home spawn failed: $out"
