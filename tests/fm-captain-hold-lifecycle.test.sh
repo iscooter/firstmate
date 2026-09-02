@@ -1500,6 +1500,36 @@ SH
   pass "bootstrap recovers a kill between reopen and record removal"
 }
 
+test_stale_retention_does_not_mutate_new_incarnation() {
+  local home id marker show output
+  home=$(make_home stale-retention-incarnation)
+  id=sample-stale-retention-incarnation
+  marker="$home/state/$id.backlog-retain"
+  tasks_in "$home" add "$id" "Investigate replacement incarnation" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the replacement incarnation fixture"
+  run_captain "$home" hold "$id" --reason "captain must choose for the replacement worker" >/dev/null \
+    || fail "could not hold the replacement incarnation fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$home/projects/$id" \
+    "project=$home/projects/sample" "harness=codex" "kind=scout" "mode=scout" \
+    "spawn_gen=fixture-new-$id"
+  printf 'id=%s\ndata=%s\nspawn_gen=fixture-old-%s\ncleanup_incomplete=1\narg=--report\narg=reports/old.md\n' \
+    "$id" "$home/data" "$id" > "$marker"
+
+  output=$(run_captain "$home" recover-retain "$marker" 2>&1) \
+    || fail "stale retention recovery failed: $output"
+  assert_absent "$marker" "stale retention recovery left its obsolete record behind"
+  assert_present "$home/state/$id.meta" "stale retention recovery removed the replacement worker metadata"
+  assert_grep "spawn_gen=fixture-new-$id" "$home/state/$id.meta" \
+    "stale retention recovery replaced the current spawn generation"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the replacement task disappeared"
+  assert_contains "$show" "state: in_flight" "stale retention recovery reopened the replacement task"
+  assert_contains "$show" "hold_kind: captain" "stale retention recovery dropped the replacement hold"
+  assert_not_contains "$show" "Deliverable of the finished work" \
+    "stale retention recovery wrote the old incarnation's deliverable"
+  pass "stale retention recovery does not mutate a replacement incarnation"
+}
+
 test_late_cleanup_failure_keeps_hold_in_flight() {
   local home id wt show rc
   home=$(make_home retained-cleanup-failure)
@@ -1605,5 +1635,6 @@ test_teardown_uses_relocated_captain_hold_backlog
 test_hold_cannot_race_past_teardown_open_check
 test_concurrent_answer_survives_retention
 test_bootstrap_recovers_kill_after_reopen
+test_stale_retention_does_not_mutate_new_incarnation
 test_late_cleanup_failure_keeps_hold_in_flight
 test_teardown_refuses_when_captain_hold_cannot_be_read

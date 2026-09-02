@@ -1018,7 +1018,7 @@ command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
 }
 
 command_recover_retain() {  # <pending-retention-record>
-  local marker=${1:-} marker_name id ready meta meta_spawn report='' pr='' note='' arg
+  local marker=${1:-} marker_name id ready marker_spawn meta meta_spawn report='' pr='' note='' arg
   local args=()
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   marker_name=${marker##*/}
@@ -1031,6 +1031,17 @@ command_recover_retain() {  # <pending-retention-record>
     || fail "$FM_BACKLOG_TRANSITION_ERROR"
   ready=$FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE
   [ "$ready" = 1 ] || fail "pending retention for $id is not ready to replay"
+  marker_spawn=$FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN
+  meta="$STATE/$id.meta"
+  if [ -e "$meta" ] || [ -L "$meta" ]; then
+    fm_backlog_meta_spawn_gen "$meta" "$STATE" || fail "$FM_BACKLOG_TRANSITION_ERROR"
+    meta_spawn=$FM_BACKLOG_META_SPAWN_GEN
+    if [ "$meta_spawn" != "$marker_spawn" ]; then
+      fm_backlog_retain_marker_clear "$STATE" "$id" || fail "$FM_BACKLOG_TRANSITION_ERROR"
+      printf 'stale-retention: %s\n' "$id"
+      return 0
+    fi
+  fi
   args=("${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]+"${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]}"}")
   while [ "${#args[@]}" -gt 0 ]; do
     arg=${args[0]}
@@ -1042,12 +1053,7 @@ command_recover_retain() {  # <pending-retention-record>
     args=("${args[@]:2}")
   done
   retain_task_locked "$id" "$report" "$pr" "$note" 1
-  meta="$STATE/$id.meta"
   if [ -e "$meta" ] || [ -L "$meta" ]; then
-    fm_backlog_meta_spawn_gen "$meta" "$STATE" || fail "$FM_BACKLOG_TRANSITION_ERROR"
-    meta_spawn=$FM_BACKLOG_META_SPAWN_GEN
-    [ "$meta_spawn" = "$FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN" ] \
-      || fail "pending retention for $id belongs to another task incarnation"
     fm_backlog_atomic_transition remove "$meta" "task record" "$STATE" \
       || fail "$FM_BACKLOG_TRANSITION_ERROR"
   fi
