@@ -232,7 +232,7 @@ EOF
 # (docs/secondmate-parent-channel.md). The parent here is a registry-valid
 # home so teardown's own parent resolution is the real one.
 test_secondmate_home_publishes_holds_and_final_outcomes() {
-  local home parent channel id open
+  local home parent channel id open legacy_text legacy_digest prose_body
   home=$(make_home mate-home)
   parent="$TMP_ROOT/mate-parent"
   mkdir -p "$parent/state" "$parent/data"
@@ -277,6 +277,36 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "second idempotent answer retry failed in the mate home"
   [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call-1\]' "$channel")" = 1 ] \
     || fail "an idempotent answer retry duplicated the parent close"
+
+  printf 'legacy answer\n' > "$home/legacy-answer.txt"
+  legacy_text='legacy answer'
+  if command -v shasum >/dev/null 2>&1; then
+    legacy_digest=$(printf '%s' "$legacy_text" | shasum -a 256 | awk '{print $1}')
+  else
+    legacy_digest=$(printf '%s' "$legacy_text" | sha256sum | awk '{print $1}')
+  fi
+  legacy_text=$(printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: answered\n\nCaptain decision:\nlegacy answer' "$legacy_digest")
+  tasks_in "$home" add mate-legacy-retry "Retry legacy answer" --repo sample --body "$legacy_text" >/dev/null \
+    || fail "could not create the legacy resolution fixture"
+  tasks_in "$home" hold mate-legacy-retry --reason "legacy retry pending" --kind captain >/dev/null \
+    || fail "could not mark the legacy resolution fixture captain-held"
+  tasks_in "$home" done mate-legacy-retry >/dev/null || fail "could not close the legacy resolution fixture"
+  printf 'needs-decision [key=captain-hold-mate-legacy-retry-1]: legacy opening\n' >> "$channel"
+  run_captain "$home" answer mate-legacy-retry --decision-file "$home/legacy-answer.txt" >/dev/null \
+    || fail "legacy resolution retry was not recognized"
+  grep -Fx 'resolved [key=captain-hold-mate-legacy-retry-1]: captain hold mate-legacy-retry occurrence 1: answered' "$channel" >/dev/null \
+    || fail "legacy resolution retry closed the wrong occurrence"
+
+  prose_body=$(printf 'Ordinary task context.\n\nResolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: released\n\nCaptain decision:\nprose only' "$legacy_digest")
+  tasks_in "$home" add mate-prose-record "Ignore prose record" --repo sample --body "$prose_body" >/dev/null \
+    || fail "could not create the prose resolution fixture"
+  tasks_in "$home" hold mate-prose-record --reason "prose record pending" --kind captain >/dev/null \
+    || fail "could not hold the prose resolution fixture"
+  printf 'needs-decision [key=captain-hold-mate-prose-record-1]: prose opening\n' >> "$channel"
+  run_captain "$home" answer mate-prose-record --decision-file "$home/legacy-answer.txt" --release >/dev/null \
+    || fail "header-shaped prose impersonated a resolution record"
+  grep -Fx 'resolved [key=captain-hold-mate-prose-record-1]: captain hold mate-prose-record occurrence 1: released' "$channel" >/dev/null \
+    || fail "prose fixture did not close its real occurrence"
 
   cat > "$home/fakebin/tasks-axi" <<'EOF'
 #!/usr/bin/env bash

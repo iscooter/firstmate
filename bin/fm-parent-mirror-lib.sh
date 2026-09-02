@@ -26,7 +26,8 @@
 #   context_mode=<recorded delivery mode>
 #   context_yolo=<recorded merge posture>
 #   context_report=0|1
-#   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>   (one per open decision)
+#   line_count=<whole ledger lines through offset>
+#   open=<key>|<first-seen-epoch>|<mirrored 0|1>|<origin-line>|<verb>|<note>
 # The record is rewritten atomically; a changed ledger identity or a shrunk
 # ledger resets the offset to 0, an incarnation change marks the prior
 # generation's standing failure handled while a later failed line starts a new
@@ -249,10 +250,10 @@ _fm_parent_mirror_dir_ready() {  # <dir>
 }
 
 # Rewrite <record> atomically from the fields the caller assembled.
-_fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <terminal-line> <terminal-offset> <terminal-first-seen> <terminal-reported> <tail> <orphan> <open-lines> [<context-pr> <context-mode> <context-yolo> <context-report>]
+_fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <terminal-line> <terminal-offset> <terminal-first-seen> <terminal-reported> <tail> <orphan> <open-lines> [<context-pr> <context-mode> <context-yolo> <context-report> <line-count>]
   local record=$1 offset=$2 ident=$3 incarnation=$4 terminal_line=$5 terminal_offset=$6
   local terminal_first_seen=$7 terminal_reported=$8 tail=$9 orphan=${10} open_lines=${11}
-  local context_pr=${12:-} context_mode=${13:-} context_yolo=${14:-} context_report=${15:-0} dir tmp entry
+  local context_pr=${12:-} context_mode=${13:-} context_yolo=${14:-} context_report=${15:-0} line_count=${16:-0} dir tmp entry
   dir=$(dirname "$record")
   _fm_parent_mirror_dir_ready "$dir" || return 1
   tmp=$(mktemp "$dir/.record.XXXXXX") || return 1
@@ -271,6 +272,7 @@ _fm_parent_mirror_record_write() {  # <record> <offset> <ident> <incarnation> <t
     printf 'context_mode=%s\n' "$context_mode"
     printf 'context_yolo=%s\n' "$context_yolo"
     printf 'context_report=%s\n' "$context_report"
+    printf 'line_count=%s\n' "$line_count"
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
       printf 'open=%s\n' "$entry"
@@ -302,11 +304,12 @@ _fm_parent_mirror_publish() {  # <line>
 # Runs in the caller's shell; the entry points below wrap it in a subshell.
 _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-now 0|1>]
   local child=$1 meta=$2 orphan=$3 deliver_now=${4:-0} status record now open_secs
-  local size ident offset rec_ident incarnation rec_incarnation complete_size=0
+  local size ident offset rec_ident incarnation rec_incarnation complete_size=0 scan_start=0 span_complete=0
   local terminal_line terminal_offset terminal_first_seen terminal_reported tail=0 captured='' prefix='' dir
-  local open_lines='' next_open='' close_failed='' fold='' changed=0 refold=0 rc=0
+  local open_lines='' next_open='' close_failed='' fold='' rc=0 rec_line_count=0 line_count=0 processed_lines=0
   local chunk line verb note key mirror_key line_offset line_start committed context last last_verb last_offset
-  local entry entry_key entry_seen entry_mirrored entry_origin origins origin fold_verb fold_note fold_entry age timing
+  local entry entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note origins origin fold_verb fold_note age timing
+  local line_number resolve held after
   local context_pr context_mode context_yolo context_report report data
   local LC_ALL=C
   status="$STATE/$child.status"
@@ -336,41 +339,42 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   terminal_first_seen=$(_fm_parent_mirror_record_field "$record" terminal_first_seen)
   terminal_reported=$(_fm_parent_mirror_record_field "$record" terminal_reported)
   open_lines=$(_fm_parent_mirror_record_open_lines "$record")
+  rec_line_count=$(_fm_parent_mirror_record_field "$record" line_count)
   case "$offset" in ''|*[!0-9]*) offset=0 ;; esac
+  case "$rec_line_count" in ''|*[!0-9]*) rec_line_count=0; offset=0; open_lines='' ;; esac
   case "$terminal_reported" in 1) ;; *) terminal_reported=0 ;; esac
   if [ "$rec_ident" != "$ident" ] || [ "$offset" -gt "$size" ]; then
     offset=0
-    changed=1
+    rec_line_count=0
+    open_lines=''
   fi
+  scan_start=$offset
+  line_count=$rec_line_count
 
-  # Capture one stable endpoint, then materialize only its newline-terminated
-  # prefix. Every classifier below reads this prefix rather than the live file.
+  # Capture only bytes not represented by the durable cursor, then materialize
+  # its newline-terminated prefix for incremental classification.
   captured=$(mktemp "$dir/.capture.XXXXXX") || return 4
   prefix=$(mktemp "$dir/.prefix.XXXXXX") || { rm -f "$captured"; return 4; }
-  if ! _fm_status_read_span "$status" 0 "$size" > "$captured" 2>/dev/null; then
+  if ! _fm_status_read_span "$status" "$scan_start" "$((size - scan_start))" > "$captured" 2>/dev/null; then
     rm -f "$captured" "$prefix"
     return 4
   fi
   while IFS= read -r line; do
-    complete_size=$((complete_size + ${#line} + 1))
+    span_complete=$((span_complete + ${#line} + 1))
   done < "$captured"
-  if ! _fm_status_read_span "$captured" 0 "$complete_size" > "$prefix" 2>/dev/null; then
+  if ! _fm_status_read_span "$captured" 0 "$span_complete" > "$prefix" 2>/dev/null; then
     rm -f "$captured" "$prefix"
     return 4
   fi
   rm -f "$captured"
+  complete_size=$((scan_start + span_complete))
   [ "$complete_size" -eq "$size" ] || tail=1
-  if [ "$offset" -gt "$complete_size" ]; then
-    offset=0
-    changed=1
-  fi
   incarnation=$(_fm_parent_mirror_meta_field "$meta" spawn_gen)
   [ -n "$incarnation" ] || incarnation=$rec_incarnation
   if [ -n "$rec_incarnation" ] && [ "$incarnation" != "$rec_incarnation" ] \
     && [ "$rec_ident" = "$ident" ]; then
     terminal_reported=1
   fi
-  if [ "$offset" -lt "$complete_size" ]; then changed=1; fi
 
   context_pr=$(_fm_parent_mirror_record_field "$record" context_pr)
   context_mode=$(_fm_parent_mirror_record_field "$record" context_mode)
@@ -391,7 +395,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
   # 1. New whole lines since the cursor: done-class lines deliver now.
   if [ "$offset" -lt "$complete_size" ]; then
     chunk=$(mktemp "$dir/.span.XXXXXX") || { rm -f "$prefix"; return 4; }
-    if ! _fm_status_read_span "$prefix" "$offset" "$((complete_size - offset))" > "$chunk" 2>/dev/null; then
+    if ! _fm_status_read_span "$prefix" 0 "$span_complete" > "$chunk" 2>/dev/null; then
       rm -f "$chunk" "$prefix"
       return 4
     fi
@@ -399,9 +403,10 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
     while IFS= read -r line; do
       line_start=$line_offset
       line_offset=$((line_offset + ${#line} + 1))
-      case "$line" in *[![:space:]]*) ;; *) committed=$line_offset; continue ;; esac
+      case "$line" in *[![:space:]]*) ;; *) committed=$line_offset; processed_lines=$((processed_lines + 1)); continue ;; esac
       if ! status_is_captain_relevant "$line"; then
         committed=$line_offset
+        processed_lines=$((processed_lines + 1))
         continue
       fi
       verb=$(status_line_verb "$line")
@@ -409,12 +414,14 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
       case "$verb" in
         failed)
           committed=$line_offset
+          processed_lines=$((processed_lines + 1))
           continue
           ;;
         needs-decision|blocked)
           if key=$(_fm_decision_key "$line") \
             && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
             committed=$line_offset
+            processed_lines=$((processed_lines + 1))
             continue
           fi
           mirror_key=$(_fm_parent_mirror_key "$child" "l$line_start")
@@ -436,16 +443,27 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
           ;;
       esac
       committed=$line_offset
+      processed_lines=$((processed_lines + 1))
     done < "$chunk"
     rm -f "$chunk"
   fi
 
+  line_count=$((rec_line_count + processed_lines))
+
   # 2. A standing failed line: deliver once it has stood past the threshold.
   if [ "$rc" -eq 0 ]; then
-    last=$(last_status_line "$prefix")
+    if [ "$processed_lines" -gt 0 ]; then
+      last=$(awk -v limit="$processed_lines" 'NR <= limit { value = $0 } END { print value }' "$prefix")
+    else
+      last=$terminal_line
+    fi
     last_verb=$(status_line_verb "$last")
     if [ "$last_verb" = failed ]; then
-      last_offset=$((complete_size - ${#last} - 1))
+      if [ "$processed_lines" -gt 0 ]; then
+        last_offset=$((committed - ${#last} - 1))
+      else
+        last_offset=$terminal_offset
+      fi
       if [ "$terminal_line" != "$last" ] || [ "$terminal_offset" != "$last_offset" ]; then
         terminal_line=$last
         terminal_offset=$last_offset
@@ -457,11 +475,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
       if [ "$terminal_reported" -eq 0 ] \
         && { [ "$deliver_now" -eq 1 ] || [ "$age" -ge "$open_secs" ]; }; then
         note=$(fm_parent_channel_clean_note "$(status_line_note "$last")")
-        if [ "$deliver_now" -eq 1 ]; then
-          timing='unhandled when child retired'
-        else
-          timing="unhandled past ${open_secs}s"
-        fi
+        if [ "$deliver_now" -eq 1 ]; then timing='unhandled when child retired'; else timing="unhandled past ${open_secs}s"; fi
         mirror_key=$(_fm_parent_mirror_key "$child" "l$terminal_offset")
         if _fm_parent_mirror_publish \
           "failed [key=$mirror_key]: mirror: child=$child $note ($timing)$context"; then
@@ -478,49 +492,66 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
     fi
   fi
 
-  # 3. Open decisions: fold the ledger when it changed, age what is still
-  #    open, deliver what stood past the threshold, close what folded closed.
-  #    An opening is (key, origin line): a key re-opened at a later line is a
-  #    new opening, closed and re-raised separately.
-  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
-    [ "$entry_mirrored" = 1 ] || continue
-    refold=1
-    break
+  # 3. Fold only the new committed lines onto the compact durable open set.
+  origins=''
+  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note; do
+    [ -n "$entry_key" ] || continue
+    if [ "$entry_verb" != closed ]; then
+      [ -n "$fold" ] && fold="${fold}"$'\n'
+      fold="${fold}${entry_key}"$'\t'"${entry_verb}"$'\t'"${entry_note}"
+      [ -n "$origins" ] && origins="${origins}"$'\n'
+      origins="${origins}${entry_key}"$'\t'"${entry_origin}"
+    fi
   done <<EOF
 $open_lines
 EOF
-  if [ "$changed" -eq 1 ] || [ ! -f "$record" ] || [ "$refold" -eq 1 ]; then
-    fold=$(status_open_decisions "$prefix")
-    origins=$(_fm_status_open_decision_origins "$prefix")
-  else
-    fold=''
-    origins=''
-    while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
-      [ -n "$entry_key" ] || continue
-      fold="${fold}${entry_key}"$'\t'"kept"$'\t'$'\n'
-      origins="${origins}${entry_key}"$'\t'"${entry_origin}"$'\n'
-    done <<EOF
-$open_lines
-EOF
-  fi
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  line_number=$rec_line_count
+  processed_lines=0
+  while IFS= read -r line && [ "$processed_lines" -lt "$((line_count - rec_line_count))" ]; do
+    processed_lines=$((processed_lines + 1))
+    line_number=$((line_number + 1))
+    after=$(_fm_decision_fold_line "$fold" "$line" "$resolve" "$held")
+    if key=$(_fm_decision_key "$line") \
+      && _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
+      verb=$(status_line_verb "$line")
+      note=$(status_line_note "$line")
+      case "$verb" in
+        needs-decision|blocked)
+          if _fm_open_set_has "$after" "$key" \
+            && [ "$(_fm_open_set_verb "$after" "$key")" = "$verb" ]; then
+            origins=$(_fm_decision_origin_drop "$origins" "$key")
+            [ -n "$origins" ] && origins="${origins}"$'\n'
+            origins="${origins}${key}"$'\t'"${line_number}"
+          fi
+          ;;
+        "$resolve"|"$held")
+          _fm_open_set_has "$after" "$key" || origins=$(_fm_decision_origin_drop "$origins" "$key")
+          ;;
+      esac
+    fi
+    fold=$after
+  done < "$prefix"
+
   next_open=''
   close_failed=''
-  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin; do
+  while IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note; do
     [ -n "$entry_key" ] || continue
     origin=$(_fm_parent_mirror_origin_of "$origins" "$entry_key") || origin=''
     if _fm_parent_mirror_fold_has "$fold" "$entry_key" && [ "$origin" = "$entry_origin" ]; then
-      next_open="${next_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
+      next_open="${next_open}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}|${entry_verb}|${entry_note}"$'\n'
       continue
     fi
     if [ "$entry_mirrored" = 1 ]; then
       if [ "$rc" -ne 0 ]; then
-        close_failed="${close_failed}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
+        close_failed="${close_failed}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}|closed|${entry_note}"$'\n'
       else
         mirror_key=$(_fm_parent_mirror_key "$child" "$entry_key")
         if ! _fm_parent_mirror_publish \
           "resolved [key=$mirror_key]: mirror: child=$child decision $entry_key (opened at line $entry_origin) closed"; then
           rc=4
-          close_failed="${close_failed}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
+          close_failed="${close_failed}${entry_key}|${entry_seen}|${entry_mirrored}|${entry_origin}|closed|${entry_note}"$'\n'
         fi
       fi
     fi
@@ -532,8 +563,8 @@ EOF
   while IFS=$'\t' read -r key fold_verb fold_note; do
     [ -n "$key" ] || continue
     origin=$(_fm_parent_mirror_origin_of "$origins" "$key") || origin=0
-    entry=$(_fm_parent_mirror_open_entry "$open_lines" "$key") || entry="$key|$now|0|$origin"
-    IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin <<EOF
+    entry=$(_fm_parent_mirror_open_entry "$open_lines" "$key") || entry="$key|$now|0|$origin|$fold_verb|$fold_note"
+    IFS='|' read -r entry_key entry_seen entry_mirrored entry_origin entry_verb entry_note <<EOF
 $entry
 EOF
     case "$entry_seen" in ''|*[!0-9]*) entry_seen=$now ;; esac
@@ -541,21 +572,9 @@ EOF
     if [ "$rc" -eq 0 ] && [ "$entry_mirrored" != 1 ]; then
       age=$((now - entry_seen))
       if [ "$deliver_now" -eq 1 ] || [ "$age" -ge "$open_secs" ]; then
-        if [ "$fold_verb" = kept ]; then
-          if fold_entry=$(_fm_parent_mirror_fold_entry "$(status_open_decisions "$prefix")" "$key"); then
-            fold_verb=${fold_entry%%$'\t'*}
-            fold_note=${fold_entry#*$'\t'}
-          else
-            fold_verb=''
-          fi
-        fi
         case "$fold_verb" in
           needs-decision|blocked)
-            if [ "$deliver_now" -eq 1 ]; then
-              timing='open when child retired'
-            else
-              timing="open past ${open_secs}s"
-            fi
+            if [ "$deliver_now" -eq 1 ]; then timing='open when child retired'; else timing="open past ${open_secs}s"; fi
             mirror_key=$(_fm_parent_mirror_key "$child" "$key")
             if _fm_parent_mirror_publish \
               "$fold_verb [key=$mirror_key]: mirror: child=$child decision $key (opened at line $entry_origin) $timing without an answer or a captain hold: $(fm_parent_channel_clean_note "$fold_note")$context"; then
@@ -567,7 +586,7 @@ EOF
         esac
       fi
     fi
-    next_open="${next_open}${key}|${entry_seen}|${entry_mirrored}|${entry_origin}"$'\n'
+    next_open="${next_open}${key}|${entry_seen}|${entry_mirrored}|${entry_origin}|${fold_verb}|${fold_note}"$'\n'
   done <<EOF
 $fold
 EOF
@@ -576,7 +595,7 @@ EOF
   rm -f "$prefix"
   _fm_parent_mirror_record_write "$record" "$committed" "$ident" "$incarnation" \
     "$terminal_line" "$terminal_offset" "$terminal_first_seen" "$terminal_reported" \
-    "$tail" "$orphan" "$open_lines" "$context_pr" "$context_mode" "$context_yolo" "$context_report" || return 4
+    "$tail" "$orphan" "$open_lines" "$context_pr" "$context_mode" "$context_yolo" "$context_report" "$line_count" || return 4
   return "$rc"
 }
 
@@ -728,7 +747,8 @@ fm_parent_mirror_retire_locked() {  # <child>
       "$(_fm_parent_mirror_record_field "$record" tail)" \
       1 \
       "$(_fm_parent_mirror_record_open_lines "$record")" \
-      "$context_pr" "$context_mode" "$context_yolo" "$context_report"; then
+      "$context_pr" "$context_mode" "$context_yolo" "$context_report" \
+      "$(_fm_parent_mirror_record_field "$record" line_count)"; then
       [ "$rc" -ne 0 ] || rc=4
     fi
   fi

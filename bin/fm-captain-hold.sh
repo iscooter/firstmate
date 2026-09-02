@@ -320,40 +320,78 @@ origin_open_decisions() {  # <origin-id>
   printf '%s' "$open"
 }
 
-# A resolution record written by this script or by the retired
-# fm-decision-hold.sh. Both carry the same leader-then-captain-decision shape.
+RESOLUTION_RECORD_DIGEST=
+RESOLUTION_RECORD_MODE=
+RESOLUTION_RECORD_GENERATION=
+RESOLUTION_RECORD_WRITER=
+
+resolution_record_parse() {  # <task-body>
+  local body parsed
+  RESOLUTION_RECORD_DIGEST=
+  RESOLUTION_RECORD_MODE=
+  RESOLUTION_RECORD_GENERATION=
+  RESOLUTION_RECORD_WRITER=
+  body=$(decode_shown_value "$1") || return 1
+  parsed=$(printf '%s\n' "$body" | awk '
+    { line[NR] = $0 }
+    END {
+      start = 1
+      if (line[1] == "Captain hold state recorded by fm-captain-hold." \
+          && line[2] ~ /^Generation: [0-9]+$/ \
+          && line[3] == "End captain hold state." && line[4] == "") start = 5
+      if (line[start] == "Captain resolution record begins (fm-captain-hold)." \
+          && line[start + 1] == "Resolution recorded by fm-captain-hold." \
+          && line[start + 2] ~ /^Decision digest: / \
+          && line[start + 3] ~ /^Resolution mode: / \
+          && line[start + 4] ~ /^Hold generation: [0-9]+$/ \
+          && line[start + 5] ~ /^Decision lines: [0-9]+$/ \
+          && line[start + 6] == "" && line[start + 7] == "Captain decision:") {
+        count = line[start + 5]; sub(/^Decision lines: /, "", count)
+        if (line[start + 8 + count] != "Captain resolution record ends (fm-captain-hold).") exit 1
+        digest = line[start + 2]; sub(/^Decision digest: /, "", digest)
+        mode = line[start + 3]; sub(/^Resolution mode: /, "", mode)
+        generation = line[start + 4]; sub(/^Hold generation: /, "", generation)
+        print digest "\t" mode "\t" generation "\tfm-captain-hold"
+        exit
+      }
+      if (start != 1) exit 1
+      if (line[1] != "Resolution recorded by fm-captain-hold." \
+          && line[1] != "Resolution recorded by fm-decision-hold.") exit 1
+      if (line[2] !~ /^Decision digest: /) exit 1
+      digest = line[2]; sub(/^Decision digest: /, "", digest)
+      position = 3
+      if (line[position] ~ /^Routed identities: /) position++
+      if (line[position] !~ /^Resolution mode: /) exit 1
+      mode = line[position]; sub(/^Resolution mode: /, "", mode); position++
+      generation = 1
+      if (line[position] ~ /^Hold generation: [0-9]+$/) {
+        generation = line[position]; sub(/^Hold generation: /, "", generation); position++
+      }
+      if (line[position] != "" || line[position + 1] != "Captain decision:") exit 1
+      writer = line[1]; sub(/^Resolution recorded by /, "", writer); sub(/\.$/, "", writer)
+      print digest "\t" mode "\t" generation "\t" writer
+    }
+  ') || return 1
+  [ -n "$parsed" ] || return 1
+  IFS=$'\t' read -r RESOLUTION_RECORD_DIGEST RESOLUTION_RECORD_MODE RESOLUTION_RECORD_GENERATION RESOLUTION_RECORD_WRITER <<EOF
+$parsed
+EOF
+  [ -n "$RESOLUTION_RECORD_DIGEST" ] && [ -n "$RESOLUTION_RECORD_MODE" ] \
+    && [ -n "$RESOLUTION_RECORD_GENERATION" ] && [ -n "$RESOLUTION_RECORD_WRITER" ]
+}
+
 body_has_resolution_record() {  # <task-body>
-  case "$1" in
-    *"Resolution recorded by fm-captain-hold."*"Captain decision:"*) return 0 ;;
-    *"Resolution recorded by fm-decision-hold."*"Captain decision:"*) return 0 ;;
-  esac
-  return 1
+  resolution_record_parse "$1"
 }
 
-# The recorded decision digest of either record format, from the show-escaped
-# body (multi-line bodies print as one quoted line with \n escapes). Records
-# are prepended, so the first match is the newest record.
 recorded_decision_digest() {  # <task-body>
-  local rest=$1
-  case "$rest" in
-    *"Decision digest: "*) rest=${rest#*"Decision digest: "} ;;
-    *) return 1 ;;
-  esac
-  rest=${rest%%\\n*}
-  rest=${rest%%$'\n'*}
-  printf '%s' "$rest"
+  resolution_record_parse "$1" || return 1
+  printf '%s' "$RESOLUTION_RECORD_DIGEST"
 }
 
-# The newest record's `Resolution mode:` value; empty for a record predating it.
 recorded_resolution_mode() {  # <task-body>
-  local rest=$1
-  case "$rest" in
-    *"Resolution mode: "*) rest=${rest#*"Resolution mode: "} ;;
-    *) return 1 ;;
-  esac
-  rest=${rest%%\\n*}
-  rest=${rest%%$'\n'*}
-  printf '%s' "$rest"
+  resolution_record_parse "$1" || return 1
+  printf '%s' "$RESOLUTION_RECORD_MODE"
 }
 
 body_has_hold_state_block() {  # <task-body>
@@ -384,48 +422,16 @@ recorded_hold_generation() {  # <task-body>
 }
 
 recorded_resolution_generation() {  # <task-body>
-  local body
-  body=$(decode_shown_value "$1") || return 1
-  printf '%s\n' "$body" | awk '
-    { line[NR] = $0 }
-    END {
-      for (i = 1; i <= NR; i++) {
-        if (line[i] != "Captain resolution record begins (fm-captain-hold).") continue
-        if (line[i + 1] != "Resolution recorded by fm-captain-hold.") continue
-        if (line[i + 2] !~ /^Decision digest: / || line[i + 3] !~ /^Resolution mode: /) continue
-        if (line[i + 4] !~ /^Hold generation: [0-9]+$/ || line[i + 5] !~ /^Decision lines: [0-9]+$/) continue
-        generation = line[i + 4]; sub(/^Hold generation: /, "", generation)
-        lines = line[i + 5]; sub(/^Decision lines: /, "", lines)
-        if (line[i + 6] != "" || line[i + 7] != "Captain decision:") continue
-        if (line[i + 8 + lines] != "Captain resolution record ends (fm-captain-hold).") continue
-        print generation
-        exit
-      }
-      exit 1
-    }
-  '
+  resolution_record_parse "$1" || return 1
+  printf '%s' "$RESOLUTION_RECORD_GENERATION"
 }
 
 resolution_record_count() {  # <task-body>
-  local body
-  body=$(decode_shown_value "$1") || return 1
-  printf '%s\n' "$body" | awk '
-    { line[NR] = $0 }
-    END {
-      for (i = 1; i <= NR; i++) {
-        if (line[i] != "Captain resolution record begins (fm-captain-hold).") continue
-        if (line[i + 1] != "Resolution recorded by fm-captain-hold.") continue
-        if (line[i + 2] !~ /^Decision digest: / || line[i + 3] !~ /^Resolution mode: /) continue
-        if (line[i + 4] !~ /^Hold generation: [0-9]+$/ || line[i + 5] !~ /^Decision lines: [0-9]+$/) continue
-        lines = line[i + 5]; sub(/^Decision lines: /, "", lines)
-        if (line[i + 6] != "" || line[i + 7] != "Captain decision:") continue
-        if (line[i + 8 + lines] != "Captain resolution record ends (fm-captain-hold).") continue
-        count++
-        i += 8 + lines
-      }
-      print count + 0
-    }
-  '
+  if resolution_record_parse "$1"; then
+    printf '%s\n' "$RESOLUTION_RECORD_GENERATION"
+  else
+    printf '0\n'
+  fi
 }
 
 resolution_block() {  # <mode> <hold-generation>
@@ -900,7 +906,7 @@ command_answers() {
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \
       && { [ "$recorded_digest" = "$digest" ] \
-        || { case "$body" in *"Resolution recorded by fm-decision-hold."*) true ;; *) false ;; esac \
+        || { [ "$RESOLUTION_RECORD_WRITER" = fm-decision-hold ] \
           && [ -n "$legacy_digest" ] && [ "$recorded_digest" = "$legacy_digest" ]; }; }; then
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] && [ "$recorded_mode" != released ]; } \
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \

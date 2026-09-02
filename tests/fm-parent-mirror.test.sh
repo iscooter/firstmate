@@ -131,6 +131,46 @@ test_done_line_delivered_once() {
   pass "a child's done line is delivered once with its recorded context"
 }
 
+test_incremental_sweep_reads_only_new_ledger_bytes() {
+  local reader trace size
+  make_world incremental-span; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'working: initial line'
+  reader="$WORLD/span-reader"
+  trace="$WORLD/span-trace"
+  cat > "$reader" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$FM_SPAN_TRACE"
+perl -MFcntl=:DEFAULT -e '
+  my ($path, $start, $length) = @ARGV;
+  sysopen(my $file, $path, O_RDONLY | O_NOFOLLOW) or exit 1;
+  sysseek($file, $start, 0) == $start or exit 1;
+  while ($length > 0) {
+    my $read = sysread($file, my $chunk, $length);
+    defined($read) && $read > 0 or exit 1;
+    print $chunk or exit 1;
+    $length -= $read;
+  }
+' "$@"
+EOF
+  chmod +x "$reader"
+  FM_STATUS_SPAN_READER="$reader" FM_SPAN_TRACE="$trace" sweep "$MATE" 1000 >/dev/null \
+    || fail "initial traced sweep failed"
+  size=$(wc -c < "$MATE/state/child.status" | tr -d ' ')
+  : > "$trace"
+  ledger "$MATE" child 'done: incremental outcome'
+  FM_STATUS_SPAN_READER="$reader" FM_SPAN_TRACE="$trace" sweep "$MATE" 1001 >/dev/null \
+    || fail "incremental traced sweep failed"
+  awk -F '\t' -v file="$MATE/state/child.status" -v start="$size" '
+    $1 == file && $2 == start { found = 1 }
+    $1 == file && $2 == 0 { bad = 1 }
+    END { exit !(found && !bad) }
+  ' "$trace" || fail "second sweep reread the ledger before its durable cursor"
+  grep -F 'mirror: child=child incremental outcome' "$(parent_channel)" >/dev/null \
+    || fail "incremental span did not deliver its appended outcome"
+  pass "subsequent sweeps read only bytes after the durable cursor"
+}
+
 # A scout's done line carries the report pointer so the parent can read the
 # findings without entering the mate home.
 test_scout_report_pointer() {
@@ -797,6 +837,7 @@ test_watcher_poll_delivers_terminal_child() {
 }
 
 test_done_line_delivered_once
+test_incremental_sweep_reads_only_new_ledger_bytes
 test_scout_report_pointer
 test_scratch_paths_refuse_symlink_redirection
 test_partial_line_waits_for_newline
