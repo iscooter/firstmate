@@ -510,6 +510,8 @@ test_watcher_poll_delivers_terminal_child() {
   make_world watcher; bind_secondmate local
   write_child "$MATE" child
   ledger "$MATE" child "done: PR $PR_URL checks green"
+  printf 'do not truncate\n' > "$WORLD/diagnostic-target"
+  ln -s "$WORLD/diagnostic-target" "$MATE/state/.parent-mirror.stderr"
   prime_seen "$MATE/state" "$MATE/state/child.status"
   PATH="$WORLD/fakebin:$PATH" FM_ROOT_OVERRIDE="$WORLD/root" FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" \
     FM_DATA_OVERRIDE="$MATE/data" FM_CONFIG_OVERRIDE="$MATE/config" FM_FORGE_LOG="$WORLD/forge.log" \
@@ -524,6 +526,8 @@ test_watcher_poll_delivers_terminal_child() {
     i=$((i + 1))
   done
   reap "$pid"
+  [ "$(cat "$WORLD/diagnostic-target")" = 'do not truncate' ] \
+    || fail "the watcher followed the predictable diagnostic symlink"
   grep -F "done [key=mirror-child-l0]: mirror: child=child PR $PR_URL checks green" "$(parent_channel)" >/dev/null \
     || fail "the watcher poll did not deliver the terminal child: $(cat "$WORLD/watch.out")"
   ! grep -F 'check: parent-mirror' "$WORLD/watch.out" >/dev/null || fail "a clean delivery woke the mate: $(cat "$WORLD/watch.out")"

@@ -1654,12 +1654,22 @@ while :; do
   # sibling cannot starve delivery.
   if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
     mirror_out=
-    mirror_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-      "$SCRIPT_DIR/fm-parent-mirror.sh" sweep 2>"$STATE/.parent-mirror.stderr") || true
-    if [ -s "$STATE/.parent-mirror.stderr" ]; then
-      triage_log "parent mirror: $(head -c 400 "$STATE/.parent-mirror.stderr" | tr '\n' ' ')"
+    mirror_err=
+    if [ -d "$STATE" ] && [ ! -L "$STATE" ]; then
+      mirror_err=$(umask 077; mktemp "$STATE/.parent-mirror.stderr.XXXXXX") || mirror_err=
     fi
-    rm -f "$STATE/.parent-mirror.stderr"
+    if [ -n "$mirror_err" ]; then
+      mirror_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+        "$SCRIPT_DIR/fm-parent-mirror.sh" sweep 2>"$mirror_err") || true
+      if [ -s "$mirror_err" ]; then
+        triage_log "parent mirror: $(head -c 400 "$mirror_err" | tr '\n' ' ')"
+      fi
+      rm -f "$mirror_err"
+    else
+      mirror_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+        "$SCRIPT_DIR/fm-parent-mirror.sh" sweep 2>/dev/null) || true
+      triage_log "parent mirror: temporary diagnostic capture unavailable"
+    fi
     if [ -n "$mirror_out" ]; then
       wake "check: parent-mirror"
     fi
