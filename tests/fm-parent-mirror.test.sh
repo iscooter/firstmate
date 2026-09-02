@@ -484,7 +484,8 @@ test_failed_line_thresholded_and_superseded() {
   ledger "$MATE" child 'failed: prior generation failed'
   sweep "$MATE" 3000 >/dev/null || fail "incarnation first observation failed"
   sed 's/^spawn_gen=.*/spawn_gen=gen-two/' "$MATE/state/child.meta" > "$MATE/state/child.meta.next" \
-    && mv "$MATE/state/child.meta.next" "$MATE/state/child.meta" \
+    || fail "could not prepare the relaunch generation"
+  mv "$MATE/state/child.meta.next" "$MATE/state/child.meta" \
     || fail "could not record the relaunch generation"
   sweep "$MATE" 3010 >/dev/null || fail "incarnation change sweep failed"
   sweep "$MATE" 3060 >/dev/null || fail "incarnation old-threshold sweep failed"

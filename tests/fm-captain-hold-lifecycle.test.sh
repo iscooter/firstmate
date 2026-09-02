@@ -290,7 +290,7 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "could not create the legacy resolution fixture"
   tasks_in "$home" hold mate-legacy-retry --reason "legacy retry pending" --kind captain >/dev/null \
     || fail "could not mark the legacy resolution fixture captain-held"
-  tasks_in "$home" done mate-legacy-retry >/dev/null || fail "could not close the legacy resolution fixture"
+  tasks_in "$home" 'done' mate-legacy-retry >/dev/null || fail "could not close the legacy resolution fixture"
   printf 'needs-decision [key=captain-hold-mate-legacy-retry-1]: legacy opening\n' >> "$channel"
   run_captain "$home" answer mate-legacy-retry --decision-file "$home/legacy-answer.txt" >/dev/null \
     || fail "legacy resolution retry was not recognized"
