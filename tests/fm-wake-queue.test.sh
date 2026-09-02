@@ -19,7 +19,7 @@ TMP_ROOT=$(fm_test_tmproot fm-wake-tests)
 
 
 test_bounded_wake_queue_operations() {
-  local dir state holder i started elapsed rc keys
+  local dir state holder i started elapsed rc keys pids='' pid failures=0 count
   dir=$(make_case bounded-queue)
   state="$dir/state"
   FM_STATE_OVERRIDE="$state" bash -c '
@@ -50,7 +50,22 @@ test_bounded_wake_queue_operations() {
   keys=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_queued_keys_bounded check 2' \
     _ "$ROOT/bin/fm-wake-lib.sh") || fail "bounded queued-keys failed after release"
   [ "$keys" = key ] || fail "bounded queue read lost the appended key"
-  pass "bounded wake queue operations refuse live contention"
+  i=0
+  while [ "$i" -lt 12 ]; do
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"; fm_wake_append_if_key_absent_bounded check atomic-key "one diagnostic" 3
+    ' _ "$ROOT/bin/fm-wake-lib.sh" >/dev/null 2>&1 &
+    pid=$!
+    pids="$pids $pid"
+    i=$((i + 1))
+  done
+  for pid in $pids; do
+    wait "$pid" || { [ "$?" -eq 3 ] || failures=$((failures + 1)); }
+  done
+  [ "$failures" -eq 0 ] || fail "atomic append-if-absent had an unexpected failure"
+  count=$(awk -F '\t' '$3 == "check" && $4 == "atomic-key" { count++ } END { print count + 0 }' "$state/.wake-queue")
+  [ "$count" -eq 1 ] || fail "atomic append-if-absent queued $count duplicate rows"
+  pass "bounded wake queue operations refuse contention and append keys atomically"
 }
 
 test_concurrent_append_and_drain() {

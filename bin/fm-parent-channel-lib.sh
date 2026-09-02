@@ -18,8 +18,9 @@
 # line it already delivered.
 #
 # Lines follow the charter's "<state> [key=<slug>]: <note>" shape and are
-# appended at most once by exact content, so a retried publication after a
-# crash or a replayed sweep never duplicates a delivered event.
+# appended at most once by exact newline-terminated content; an incomplete
+# destination tail is delimited before deduplication or append, so a retried
+# publication after a crash never concatenates or duplicates channel events.
 #
 # Return codes (shared by every entry point that resolves the channel):
 #   0  resolved, or appended / already present
@@ -127,7 +128,7 @@ _fm_parent_channel_destination_hash() {
 
 # Append <line> to <path> unless that exact line is already there.
 fm_parent_channel_append_once() {  # <writing-state> <path> <line>
-  local STATE=$1 path=$2 line=$3 hash lock status=0
+  local STATE=$1 path=$2 line=$3 hash lock last_byte status=0
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
   _fm_parent_channel_require_lock || return 1
   hash=$(_fm_parent_channel_destination_hash "$path") || return 1
@@ -136,7 +137,14 @@ fm_parent_channel_append_once() {  # <writing-state> <path> <line>
   fm_lock_acquire_wait_bounded "$lock" "$FM_PARENT_CHANNEL_LOCK_WAIT_SECS" || return 1
   if [ -L "$path" ] || ! mkdir -p "$(dirname "$path")"; then
     status=1
-  elif ! grep -Fqx -- "$line" "$path" 2>/dev/null \
+  elif [ -s "$path" ]; then
+    last_byte=$(tail -c 1 "$path" 2>/dev/null | od -An -tu1 | tr -d '[:space:]') || status=1
+    if [ "$status" -eq 0 ] && [ "$last_byte" != 10 ] \
+      && ! printf '\n' >> "$path"; then
+      status=1
+    fi
+  fi
+  if [ "$status" -eq 0 ] && ! grep -Fqx -- "$line" "$path" 2>/dev/null \
     && ! printf '%s\n' "$line" >> "$path"; then
     status=1
   fi

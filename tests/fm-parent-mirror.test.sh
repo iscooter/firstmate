@@ -385,6 +385,30 @@ test_injective_keys_and_concurrent_append() {
   pass "mirrored keys are injective and concurrent appends stay idempotent"
 }
 
+test_parent_channel_repairs_unterminated_tail() {
+  make_world channel-tail; bind_secondmate local
+  printf 'done [key=tail]: intended outcome' > "$(parent_channel)"
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" bash -c '
+    . "$1"; fm_parent_channel_report "$2" "$3" "done [key=tail]: intended outcome"
+  ' _ "$ROOT/bin/fm-parent-channel-lib.sh" "$MATE" "$MATE/state" \
+    || fail "retrying an unterminated intended line failed"
+  [ "$(channel_lines)" = 1 ] || fail "unterminated intended text was duplicated"
+  grep -Fx 'done [key=tail]: intended outcome' "$(parent_channel)" >/dev/null \
+    || fail "unterminated intended text was not repaired as a complete record"
+
+  printf 'partial fragment' > "$(parent_channel)"
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" bash -c '
+    . "$1"; fm_parent_channel_report "$2" "$3" "done [key=next]: next outcome"
+  ' _ "$ROOT/bin/fm-parent-channel-lib.sh" "$MATE" "$MATE/state" \
+    || fail "appending after an unterminated fragment failed"
+  [ "$(channel_lines)" = 2 ] || fail "the repaired fragment and next outcome were concatenated"
+  grep -Fx 'partial fragment' "$(parent_channel)" >/dev/null \
+    || fail "the unterminated fragment was not delimited"
+  grep -Fx 'done [key=next]: next outcome' "$(parent_channel)" >/dev/null \
+    || fail "the next outcome was malformed after tail repair"
+  pass "parent appends repair and delimit unterminated tails"
+}
+
 test_remote_route_writes_parent_replies() {
   make_world remote; bind_secondmate remote
   write_child "$MATE" child
@@ -607,7 +631,7 @@ test_main_home_is_inert() {
 # A mate whose parent binding is unreadable is loud once per episode: one
 # durable wake naming the binding, printed only when newly queued.
 test_unreadable_binding_is_loud_once() {
-  local out rc=0 holder i started elapsed
+  local out rc=0 holder i started elapsed pids='' pid rows actions
   make_world unbound
   printf 'mate\n' > "$MATE/.fm-secondmate-home"
   write_child "$MATE" child
@@ -621,7 +645,26 @@ test_unreadable_binding_is_loud_once() {
   [ "$rc" -eq 3 ] || fail "second sweep did not keep returning 3"
   [ -z "$out" ] || fail "a still-queued diagnostic was printed again: $out"
   [ "$(wake_count "$MATE" 'parent-mirror-diagnostic:channel')" = 1 ] || fail "the diagnostic was queued twice"
+
+  make_world diagnostic-concurrent
+  printf 'mate\n' > "$MATE/.fm-secondmate-home"
+  write_child "$MATE" child
+  ledger "$MATE" child "done: PR $PR_URL checks green"
+  i=0
+  while [ "$i" -lt 8 ]; do
+    sweep "$MATE" 1000 > "$WORLD/diag-$i.out" 2> "$WORLD/diag-$i.err" &
+    pid=$!
+    pids="$pids $pid"
+    i=$((i + 1))
+  done
+  for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+  rows=$(grep -c 'parent-mirror-diagnostic:channel' "$MATE/state/.wake-queue" 2>/dev/null || true)
+  actions=$(grep -h -c 'actionable: parent channel unavailable' "$WORLD"/diag-*.out | awk '{ total += $1 } END { print total + 0 }')
+  [ "$rows" -eq 1 ] || fail "concurrent diagnostics queued $rows rows"
+  [ "$actions" -eq 1 ] || fail "concurrent diagnostics emitted $actions actionable wakes"
+
   make_world diagnostic-lock
+  pids=''
   printf 'mate\n' > "$MATE/.fm-secondmate-home"
   write_child "$MATE" child
   ledger "$MATE" child "done: PR $PR_URL checks green"
@@ -690,6 +733,7 @@ test_decision_handled_inside_threshold_is_silent
 test_failed_line_thresholded_and_superseded
 test_untracked_decision_line_is_delivered_as_done
 test_injective_keys_and_concurrent_append
+test_parent_channel_repairs_unterminated_tail
 test_remote_route_writes_parent_replies
 test_pr_check_registration_delivers_now
 test_retire_delivers_then_orphan_retries

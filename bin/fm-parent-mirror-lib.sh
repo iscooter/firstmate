@@ -213,7 +213,7 @@ EOF
 # newly queued: stdout is what the watcher turns into a wake, so a standing
 # problem is loud exactly once per unhandled episode rather than every poll.
 _fm_parent_mirror_diagnostic() {  # <rc>
-  local rc=$1 key payload queued
+  local rc=$1 key payload append_rc=0
   case "$rc" in
     2) key='parent-mirror-diagnostic:channel'
        payload='parent channel unavailable: invalid .fm-secondmate-home marker; child outcomes are not reaching the parent' ;;
@@ -223,19 +223,13 @@ _fm_parent_mirror_diagnostic() {  # <rc>
        payload='parent channel delivery failed; a child outcome is retained for retry but has not reached the parent' ;;
     *) return 0 ;;
   esac
-  if ! queued=$(fm_wake_queued_keys_bounded check "$FM_PARENT_MIRROR_LOCK_WAIT_SECS" 2>/dev/null); then
+  fm_wake_append_if_key_absent_bounded check "$key" "check: $payload" \
+    "$FM_PARENT_MIRROR_LOCK_WAIT_SECS" >/dev/null 2>&1 || append_rc=$?
+  if [ "$append_rc" -eq 0 ]; then
+    printf 'actionable: %s\n' "$payload"
+  else
     printf '%s\n' "$payload" >&2
-    return 0
   fi
-  if printf '%s\n' "$queued" | grep -Fx -- "$key" >/dev/null 2>&1; then
-    printf '%s\n' "$payload" >&2
-    return 0
-  fi
-  if ! fm_wake_append_bounded check "$key" "check: $payload" "$FM_PARENT_MIRROR_LOCK_WAIT_SECS" >/dev/null 2>&1; then
-    printf '%s\n' "$payload" >&2
-    return 0
-  fi
-  printf 'actionable: %s\n' "$payload"
 }
 
 # Rewrite <record> atomically from the fields the caller assembled.

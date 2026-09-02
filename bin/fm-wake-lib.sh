@@ -1515,6 +1515,22 @@ fm_wake_append_bounded() {
   return "$status"
 }
 
+fm_wake_append_if_key_absent_bounded() {
+  local kind=$1 key=$2 seconds=$4 clean_key status
+  _fm_wake_kind_valid "$kind" \
+    || { printf 'fm_wake_append_if_key_absent_bounded: invalid wake kind: %s\n' "$kind" >&2; return 2; }
+  clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
+  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" "$seconds" || return $?
+  if fm_wake_queued_keys_locked "$kind" | grep -Fx -- "$clean_key" >/dev/null 2>&1; then
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    return 3
+  fi
+  _fm_wake_append_locked "$kind" "$clean_key" "$3"
+  status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  return "$status"
+}
+
 # fm_wake_queued_keys <kind>
 # Print the distinct keys currently queued for <kind>, oldest first. Read under
 # the append lock so a concurrent append is never observed half-written. The
