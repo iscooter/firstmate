@@ -159,6 +159,40 @@ test_partial_line_waits_for_newline() {
   pass "an unterminated ledger line waits for its newline"
 }
 
+# Unterminated thresholded outcomes do not become standing state and do not
+# begin aging until their terminating newline is captured.
+test_partial_thresholded_outcomes_do_not_age() {
+  make_world partial-failed; bind_secondmate local
+  write_child "$MATE" child
+  printf 'failed: build still writing' > "$MATE/state/child.status"
+  sweep "$MATE" 1000 >/dev/null || fail "partial failure first sweep failed"
+  sweep "$MATE" 1060 >/dev/null || fail "partial failure second sweep failed"
+  [ -z "$(record_field child terminal_line)" ] || fail "an unterminated failure became standing state"
+  [ ! -e "$(parent_channel)" ] || fail "an unterminated failure was delivered"
+  printf '\n' >> "$MATE/state/child.status"
+  sweep "$MATE" 1061 >/dev/null || fail "completed failure first sweep failed"
+  [ "$(record_field child terminal_first_seen)" = 1061 ] || fail "failure aged before its newline"
+  [ ! -e "$(parent_channel)" ] || fail "a newly completed failure skipped the threshold"
+  sweep "$MATE" 1121 >/dev/null || fail "completed failure threshold sweep failed"
+  grep -F 'failed [key=mirror-child-l0]: mirror: child=child build still writing (unhandled past 60s)' "$(parent_channel)" >/dev/null \
+    || fail "the completed failure was not delivered after its full threshold"
+
+  make_world partial-decision; bind_secondmate local
+  write_child "$MATE" child
+  printf 'needs-decision [key=api]: choose one' > "$MATE/state/child.status"
+  sweep "$MATE" 2000 >/dev/null || fail "partial decision first sweep failed"
+  sweep "$MATE" 2060 >/dev/null || fail "partial decision second sweep failed"
+  [ -z "$(record_field child open)" ] || fail "an unterminated decision became open state"
+  [ ! -e "$(parent_channel)" ] || fail "an unterminated decision was delivered"
+  printf '\n' >> "$MATE/state/child.status"
+  sweep "$MATE" 2061 >/dev/null || fail "completed decision first sweep failed"
+  [ ! -e "$(parent_channel)" ] || fail "a newly completed decision skipped the threshold"
+  sweep "$MATE" 2121 >/dev/null || fail "completed decision threshold sweep failed"
+  grep -F 'needs-decision [key=mirror-child-api]' "$(parent_channel)" >/dev/null \
+    || fail "the completed decision was not delivered after its full threshold"
+  pass "unterminated failures and decisions neither stand nor age"
+}
+
 # An open decision is raised only after it stands past the threshold, is
 # keyed so the parent's own fold opens it, and is closed on the parent when
 # the child's fold closes it.
@@ -335,6 +369,53 @@ test_retire_delivers_then_orphan_retries() {
   pass "retire delivers the final line, and an undelivered final line is retried as an orphan"
 }
 
+# Retirement ends first-responder authority, so thresholded outcomes are due
+# immediately and their record survives until delivery succeeds.
+test_retired_and_orphaned_outcomes_deliver_immediately() {
+  make_world retire-failed; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'failed: build broke before teardown'
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" \
+    FM_PARENT_MIRROR_NOW=1000 FM_PARENT_MIRROR_OPEN_SECS=60 bash -c '
+      . "$1"; fm_parent_mirror_retire_locked child
+    ' _ "$ROOT/bin/fm-parent-mirror-lib.sh" || fail "failed-child retire failed"
+  grep -F 'failed [key=mirror-child-l0]: mirror: child=child build broke before teardown (unhandled when child retired)' "$(parent_channel)" >/dev/null \
+    || fail "retire did not immediately deliver the standing failure"
+  [ ! -e "$MATE/state/parent-mirror/child.record" ] || fail "retire kept a delivered failure record"
+
+  make_world retire-decision; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'needs-decision [key=ship]: choose release train'
+  FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" \
+    FM_PARENT_MIRROR_NOW=1000 FM_PARENT_MIRROR_OPEN_SECS=60 bash -c '
+      . "$1"; fm_parent_mirror_retire_locked child
+    ' _ "$ROOT/bin/fm-parent-mirror-lib.sh" || fail "decision-child retire failed"
+  grep -F 'needs-decision [key=mirror-child-ship]: mirror: child=child decision ship (opened at line 1) open when child retired' "$(parent_channel)" >/dev/null \
+    || fail "retire did not immediately deliver the open decision"
+  [ ! -e "$MATE/state/parent-mirror/child.record" ] || fail "retire kept a delivered decision record"
+
+  make_world orphan-failed; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'failed: orphan build broke'
+  sweep "$MATE" 2000 >/dev/null || fail "orphan failure priming sweep failed"
+  rm -f "$MATE/state/child.meta"
+  sweep "$MATE" 2001 >/dev/null || fail "orphan failure sweep failed"
+  grep -F 'orphan build broke (unhandled when child retired)' "$(parent_channel)" >/dev/null \
+    || fail "orphan sweep did not immediately deliver the standing failure"
+  [ ! -e "$MATE/state/parent-mirror/child.record" ] || fail "orphan failure record was removed too late"
+
+  make_world orphan-decision; bind_secondmate local
+  write_child "$MATE" child
+  ledger "$MATE" child 'blocked [key=token]: need deploy token'
+  sweep "$MATE" 3000 >/dev/null || fail "orphan decision priming sweep failed"
+  rm -f "$MATE/state/child.meta"
+  sweep "$MATE" 3001 >/dev/null || fail "orphan decision sweep failed"
+  grep -F 'blocked [key=mirror-child-token]: mirror: child=child decision token (opened at line 1) open when child retired' "$(parent_channel)" >/dev/null \
+    || fail "orphan sweep did not immediately deliver the open decision"
+  [ ! -e "$MATE/state/parent-mirror/child.record" ] || fail "orphan decision record was removed too late"
+  pass "retired and orphaned outcomes bypass the grace threshold"
+}
+
 # Lock discipline: a child whose record is held (a teardown or relaunch in
 # progress) is skipped within the bounded wait rather than waited on, so the
 # watcher's beacon is never held hostage, and a retire under a held meta lock
@@ -452,6 +533,7 @@ test_watcher_poll_delivers_terminal_child() {
 test_done_line_delivered_once
 test_scout_report_pointer
 test_partial_line_waits_for_newline
+test_partial_thresholded_outcomes_do_not_age
 test_open_decision_thresholded_then_closed
 test_reopened_decision_is_raised_again
 test_decision_handled_inside_threshold_is_silent
@@ -460,6 +542,7 @@ test_untracked_decision_line_is_delivered_as_done
 test_remote_route_writes_parent_replies
 test_pr_check_registration_delivers_now
 test_retire_delivers_then_orphan_retries
+test_retired_and_orphaned_outcomes_deliver_immediately
 test_busy_locks_are_skipped_not_waited
 test_main_home_is_inert
 test_unreadable_binding_is_loud_once
