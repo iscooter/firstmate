@@ -19,6 +19,12 @@
 # home with a backlog but no compatible tasks-axi refuses before cleanup.
 # None of this loosens the landed-work gates below: the transition runs only on
 # the paths that already proceed to remove the record.
+# The close - and only the close - DEFERS while the backlog item is still an
+# open captain call (bin/fm-captain-hold.sh owns that predicate). Cleanup runs
+# as usual, the deliverable is recorded on the row that stays open and held, and
+# no pending-close record is staged, so nothing here or at the next session
+# start closes a question the captain has not answered; --force does not lift
+# that, and bin/fm-captain-hold.sh answer stays the only act that closes it.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch (a fork counts as a remote, so
@@ -303,6 +309,34 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     exit 1
   fi
   TEARDOWN_META_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
+fi
+# Cleanup never closes a captain call. The policy prefers holding the very work
+# item a question gates, so the row about to be closed here is routinely the
+# captain's own question; closing it would retire that question with no recorded
+# answer. Only the close defers - every other cleanup step runs as usual, the
+# deliverable is recorded on the row that stays open, and
+# bin/fm-captain-hold.sh answer remains the one act that closes it. --force does
+# not change this: it authorizes discarding unlanded WORK, never the captain's
+# question. "Cannot tell" is not permission to close, so it refuses here, before
+# any destructive step.
+TEARDOWN_BACKLOG_CAPTAIN_HELD=0
+if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
+  TEARDOWN_CAPTAIN_OPEN_STATUS=0
+  TEARDOWN_CAPTAIN_OPEN_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" open "$ID" 2>&1) || TEARDOWN_CAPTAIN_OPEN_STATUS=$?
+  case "$TEARDOWN_CAPTAIN_OPEN_STATUS" in
+    0)
+      TEARDOWN_BACKLOG_APPLIES=0
+      TEARDOWN_BACKLOG_CAPTAIN_HELD=1
+      ;;
+    1) ;;
+    *)
+      echo "error: task $ID cannot be torn down because whether its backlog item is still held for the captain could not be read; fix that read and retry rather than risk closing a captain call with no recorded answer" >&2
+      [ -z "$TEARDOWN_CAPTAIN_OPEN_OUT" ] || printf '%s\n' "$TEARDOWN_CAPTAIN_OPEN_OUT" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 REMOTE_HANDOFF_DIR_PRESENT=0
@@ -1192,6 +1226,8 @@ backlog_refresh_reminder() {
   fi
   if [ "$BACKLOG_CLOSED" = 1 ]; then
     printf '%s\n' "Backlog: $ID is closed in $backlog_display. Run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
+  elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
+    printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   else
     printf '%s\n' "Backlog: $ID just finished ($BACKLOG_SKIP_REASON). Update $backlog_display - move $ID to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
   fi
@@ -2695,6 +2731,7 @@ if [ "$BACKEND" = herdr ]; then
 fi
 
 BACKLOG_CLOSED=0
+BACKLOG_CAPTAIN_HELD=$TEARDOWN_BACKLOG_CAPTAIN_HELD
 BACKLOG_SKIP_REASON=
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   backlog_done_args || {
@@ -2706,6 +2743,21 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
     "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
     || { echo "error: the pending backlog close for $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); retaining every durable task record" >&2; exit 1; }
+elif [ "$BACKLOG_CAPTAIN_HELD" = 1 ]; then
+  # The row outlives this cleanup, so the completion links this record carries
+  # move onto it before the record goes. bin/fm-captain-hold.sh owns what that
+  # does to a captain call; teardown only hands it the same links it would have
+  # closed with. No pending-close record is staged on purpose: replaying one
+  # would close the captain call at the next session start, which is the very
+  # loss this branch exists to prevent.
+  backlog_done_args || {
+    echo "error: the completion links for captain-held $ID could not be resolved; refusing destructive teardown" >&2
+    exit 1
+  }
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" retain "$ID" \
+    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" >/dev/null \
+    || { echo "error: captain-held $ID could not be retained across the removal of its record; retaining every durable task record" >&2; exit 1; }
 else
   if [ "$CLEANUP_RECOVERY" = orca ]; then
     BACKLOG_SKIP_REASON="Orca cleanup recovery is not a launched backlog worker"

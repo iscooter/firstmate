@@ -28,6 +28,8 @@
 #   fm-captain-hold.sh binding <source-id>
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify <origin-id>
+#   fm-captain-hold.sh open <task-id>
+#   fm-captain-hold.sh retain <task-id> [--report <path>] [--pr <url>] [--note <text>]
 #   fm-captain-hold.sh diverged
 #
 # `hold` places an existing task under an active captain hold, or creates the
@@ -115,6 +117,27 @@
 # identity, so pre-collapse metadata written by fm-decision-hold.sh verifies
 # unchanged. An entry that exists as a task id is always that task.
 #
+# `open` is the read-only predicate a MECHANICAL closer asks before it may
+# retire a task's row: is this task still an open captain call? It exits 0 when
+# it is, 1 when it is not, and 2 when the answer cannot be established, so a
+# caller that must never close a live call can treat "cannot tell" as its own
+# case instead of as a no. It prints nothing on 0 or 1 and mutates nothing. The
+# policy prefers holding the very work item a question gates, so the row a
+# cleanup is about to close is routinely the captain's own call; this predicate
+# is how that cleanup finds out. It is not a second closing rule: `answer`
+# remains the only act that closes a captain call.
+#
+# `retain` is what that cleanup does instead of closing. The work record that
+# discovered the call is going away, so `retain` records the finished work's
+# deliverable in the task body and returns the row to Queued - nothing is
+# working on it any more, and a captain call reads as the captain's own only
+# while it is queued and held. The hold, and the requirement that only `answer`
+# closes it, are untouched. It refuses any task that is not an open captain
+# call, so no closer can use it to keep an ordinary finished task alive, and
+# re-recording the same deliverable is a no-op. Every refusal here is loud and
+# leaves the call intact, because a caller reaches this command only on the path
+# where its alternative would have been to close the captain's own question.
+#
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
 #
@@ -159,9 +182,13 @@ usage() {
   ' "$0"
 }
 
+# `open` must be able to report "cannot tell" separately from "no", so it sets
+# this to 2 and every refusal inside it exits 2 rather than the ordinary 1.
+CAPTAIN_HOLD_FAIL_STATUS=1
+
 fail() {
   printf 'fm-captain-hold: %s\n' "$*" >&2
-  exit 1
+  exit "$CAPTAIN_HOLD_FAIL_STATUS"
 }
 
 validate_slug() {  # <label> <value>
@@ -867,6 +894,87 @@ EOF
   printf 'verified: %s captain-call inventory\n' "$origin"
 }
 
+# Still an open captain call? Exit 0 yes, 1 no, 2 cannot tell (see the header).
+# A row this home does not carry holds no captain call, so an absent task is a
+# plain no. Every other uncertainty - an unusable tasks-axi, a listing that
+# cannot be read - is a 2, because a closer must never read "cannot tell" as
+# permission to close.
+command_open() {  # <task-id>
+  local id=${1:-} show state hold_kind
+  CAPTAIN_HOLD_FAIL_STATUS=2
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  validate_slug "task id" "$id"
+  require_tasks_axi
+  show=$(task_show "$id") || return 1
+  state=$(show_field "$show" state)
+  [ -n "$state" ] || fail "tasks-axi show $id returned no state"
+  hold_kind=$(show_field_value "$show" hold_kind)
+  [ "$state" != "done" ] && [ "$hold_kind" = captain ]
+}
+
+# See `retain` in the header. Every guard that makes this safe is here: the task
+# must still be an open captain call, the deliverable must be one line, and the
+# body already carrying that exact line is left alone.
+command_retain() {  # <task-id> [--report <path>] [--pr <url>] [--note <text>]
+  local id=${1:-} report='' pr='' note='' show state hold_kind body deliverable='' line new_body tmp
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --report) shift; report=${1:-} ;;
+      --pr) shift; pr=${1:-} ;;
+      --note) shift; note=${1:-} ;;
+      *) fail "unknown retain argument: $1" ;;
+    esac
+    shift
+  done
+  validate_slug "task id" "$id"
+  require_tasks_axi
+  show=$(task_show "$id") || fail "task $id is absent from $FM_HOME/data/backlog.md"
+  state=$(show_field "$show" state)
+  hold_kind=$(show_field_value "$show" hold_kind)
+  { [ "$state" != "done" ] && [ "$hold_kind" = captain ]; } \
+    || fail "task $id is not an open captain call, so there is nothing to retain"
+  if [ -n "$report" ]; then
+    validate_one_line "--report" "$report"
+    deliverable="report $report"
+  fi
+  if [ -n "$pr" ]; then
+    validate_one_line "--pr" "$pr"
+    deliverable="${deliverable:+$deliverable; }PR $pr"
+  fi
+  if [ -n "$note" ]; then
+    validate_one_line "--note" "$note"
+    deliverable="${deliverable:+$deliverable; }$note"
+  fi
+  if [ -n "$deliverable" ]; then
+    line="Deliverable of the finished work: $deliverable"
+    body=$(decode_shown_value "$(show_field "$show" body)") \
+      || fail "could not decode the existing body for $id"
+    case $'\n'"$body"$'\n' in
+      *$'\n'"$line"$'\n'*) ;;
+      *)
+        new_body=$line
+        [ -z "$body" ] || new_body=$(printf '%s\n\n%s' "$body" "$line")
+        tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-body.XXXXXX") \
+          || fail "cannot stage the retained deliverable"
+        if ! printf '%s\n' "$new_body" > "$tmp"; then
+          rm -f -- "$tmp"
+          fail "cannot stage the retained deliverable for $id"
+        fi
+        if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+          rm -f -- "$tmp"
+          fail "could not record the deliverable on captain-held $id"
+        fi
+        rm -f -- "$tmp"
+        ;;
+    esac
+  fi
+  tasks_axi reopen "$id" >/dev/null \
+    || fail "could not return captain-held $id to Queued through tasks-axi reopen; the call itself is intact, so fix that and retry rather than closing it"
+  printf 'retained: %s\n' "$id"
+}
+
 # --- record divergence ------------------------------------------------------
 #
 # A captain call can be written down twice, and until now nothing said when
@@ -995,6 +1103,8 @@ case "${1:-}" in
   binding) shift; command_binding "$@" ;;
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
+  open) shift; command_open "$@" ;;
+  retain) shift; command_retain "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;

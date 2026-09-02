@@ -1168,6 +1168,100 @@ EOF
   pass "a captain call with no routed work, a verified transfer, an open decision, and an answered call all stay silent"
 }
 
+# The originating work item is itself the captain call, which is what the policy
+# prefers ("hold the work item the question gates"). Cleanup of that finished
+# work must never be the act that closes the captain's own row: the deliverable
+# is recorded on the still-held row, the call keeps reading as open on the board,
+# and only a recorded answer closes it. An ordinary finished task in the same
+# home must still close exactly as before.
+test_teardown_never_closes_a_captain_held_task() {
+  local home id plain forced json show
+  home=$(make_home teardown-held)
+  id=sample-attach-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample attachment evidence" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  cat > "$home/data/$id/report.md" <<'EOF'
+# Sample attachment evidence
+
+The evidence is complete.
+The captain must choose whether attachments ship inline or by reference.
+EOF
+
+  run_captain "$home" hold "$id" \
+    --reason "captain must choose inline or by-reference attachments" >/dev/null \
+    || fail "could not hold the originating work item for the captain"
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "completion gate failed with the origin as its own captain call"
+
+  run_teardown "$home" "$id" > "$home/teardown.out" 2> "$home/teardown.err" \
+    || fail "cleanup of a captain-held investigation failed: $(cat "$home/teardown.err")"
+
+  show=$(tasks_in "$home" show "$id" --full) || fail "the captain-held row is gone after cleanup"
+  assert_contains "$show" "hold_kind: captain" "cleanup dropped the captain hold"
+  case "$show" in
+    *"state: done"*) fail "cleanup closed the captain call with no recorded answer: $show" ;;
+  esac
+  assert_contains "$show" "state: queued" "the finished work's row is still shown as worked on"
+  assert_contains "$show" "Deliverable of the finished work: report data/$id/report.md" \
+    "the deliverable was not recorded on the still-open row"
+  assert_absent "$home/state/$id.meta" "cleanup did not release the finished worker record"
+  assert_absent "$home/state/$id.backlog-close" \
+    "a pending close would let the next session start close the captain call anyway"
+  json=$(run_bearings "$home") || fail "Bearings failed after cleanup of a captain-held task"
+  printf '%s' "$json" | jq -e --arg id "$id" '
+    (.decisions_open | any(.id == $id and .verb == "captain-hold"))
+  ' >/dev/null || fail "the board no longer surfaces the captain call: $json"
+
+  # The ordinary path is untouched: a finished task with no captain call closes.
+  plain=sample-plain-review
+  mkdir -p "$home/data/$plain"
+  tasks_in "$home" add "$plain" "Investigate the sample cache" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the ordinary fixture"
+  write_origin_meta "$home" "$plain"
+  printf 'done: report complete\n' > "$home/state/$plain.status"
+  printf '# Sample cache\n\nNothing waits on the captain.\n' > "$home/data/$plain/report.md"
+  run_captain "$home" complete "$plain" --none >/dev/null \
+    || fail "completion gate failed for the ordinary investigation"
+  run_teardown "$home" "$plain" > "$home/plain.out" 2> "$home/plain.err" \
+    || fail "ordinary cleanup failed: $(cat "$home/plain.err")"
+  show=$(tasks_in "$home" show "$plain" --full) || fail "the ordinary row vanished"
+  assert_contains "$show" "state: done" "ordinary cleanup no longer closes its backlog item"
+  assert_contains "$show" "data/$plain/report.md" "ordinary cleanup lost the report link"
+
+  # Discard authority covers unlanded work, never the captain's question.
+  forced=sample-forced-review
+  mkdir -p "$home/data/$forced"
+  tasks_in "$home" add "$forced" "Investigate the sample forced path" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the forced fixture"
+  write_origin_meta "$home" "$forced"
+  printf 'done: report complete\n' > "$home/state/$forced.status"
+  printf '# Sample forced path\n\nOne captain choice remains.\n' > "$home/data/$forced/report.md"
+  run_captain "$home" hold "$forced" --reason "captain must choose the sample forced path" >/dev/null \
+    || fail "could not hold the forced fixture for the captain"
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$forced" --force \
+    > "$home/forced.out" 2> "$home/forced.err" \
+    || fail "forced cleanup failed: $(cat "$home/forced.err")"
+  show=$(tasks_in "$home" show "$forced" --full) || fail "forced cleanup erased the captain-held row"
+  case "$show" in
+    *"state: done"*) fail "discard authority closed a captain call with no recorded answer: $show" ;;
+  esac
+  assert_contains "$show" "hold_kind: captain" "forced cleanup dropped the captain hold"
+
+  # Only a recorded answer closes the captain call.
+  printf 'Ship attachments by reference.\n' > "$home/answer.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/answer.txt" >/dev/null \
+    || fail "the surviving captain call could not be answered"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the answered row is gone"
+  assert_contains "$show" "state: done" "the recorded answer did not close the captain call"
+  assert_contains "$show" "Ship attachments by reference." "the captain's words were not recorded"
+  pass "cleanup leaves a captain-held work item open with its deliverable, and only an answer closes it"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -1185,3 +1279,4 @@ test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
+test_teardown_never_closes_a_captain_held_task
