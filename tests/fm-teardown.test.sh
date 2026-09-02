@@ -545,7 +545,7 @@ seed_backlog_in_flight() {
 }
 
 test_parent_mirror_requires_durable_orphan_before_record_removal() {
-  local case_dir rc target
+  local case_dir rc target mirror
   case_dir=$(make_case mirror-orphan-refuse)
   write_meta "$case_dir" local-only ship
   seed_backlog_in_flight "$case_dir"
@@ -568,13 +568,49 @@ test_parent_mirror_requires_durable_orphan_before_record_removal() {
   printf 'mate\n' > "$case_dir/.fm-secondmate-home"
   printf 'invalid binding\n' > "$case_dir/.fm-secondmate-parent"
   printf 'done: outcome awaiting parent\n' > "$case_dir/state/task-x1.status"
+  printf 'task-x1\tfixture-ident\t0\t0\n' > "$case_dir/state/.status-presentation-cursor"
   rc=0
   FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
   expect_code 0 "$rc" "teardown should proceed after confirming a durable orphan"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "verified orphan did not permit child-record removal"
   [ -f "$case_dir/state/parent-mirror/task-x1.record" ] \
     || fail "teardown did not preserve its verified orphan record"
-  pass "teardown removes child records only behind durable mirror evidence"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "teardown removed an orphan's undelivered ledger"
+  grep -q '^task-x1' "$case_dir/state/.status-presentation-cursor" \
+    || fail "teardown retired an orphan's presentation row before delivery"
+  printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$case_dir/.fm-secondmate-parent"
+  mirror="$ROOT/bin/fm-parent-mirror.sh"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" "$mirror" sweep >/dev/null \
+    || fail "restored parent channel did not sweep the orphan"
+  assert_grep 'mirror: child=task-x1 outcome awaiting parent' "$case_dir/state/parent-replies.status" \
+    "orphan sweep did not deliver the retained ledger"
+  [ ! -e "$case_dir/state/task-x1.status" ] || fail "delivered orphan retained its ledger"
+  [ ! -e "$case_dir/state/parent-mirror/task-x1.record" ] || fail "delivered orphan retained its mirror record"
+  if grep -q '^task-x1' "$case_dir/state/.status-presentation-cursor"; then
+    fail "delivered orphan retained its presentation row"
+  fi
+
+  case_dir=$(make_case mirror-orphan-tail)
+  write_meta "$case_dir" local-only ship
+  seed_backlog_in_flight "$case_dir"
+  printf 'mate\n' > "$case_dir/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$case_dir/.fm-secondmate-parent"
+  printf 'done: tail awaiting completion' > "$case_dir/state/task-x1.status"
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "teardown should retain an orphan with an incomplete tail"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "teardown removed an incomplete orphan ledger"
+  [ -f "$case_dir/state/parent-mirror/task-x1.record" ] || fail "teardown lost its incomplete orphan record"
+  printf '\n' >> "$case_dir/state/task-x1.status"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" "$mirror" sweep >/dev/null \
+    || fail "completed orphan tail did not sweep"
+  assert_grep 'mirror: child=task-x1 tail awaiting completion' "$case_dir/state/parent-replies.status" \
+    "completed orphan tail was not delivered"
+  [ ! -e "$case_dir/state/task-x1.status" ] || fail "delivered tail retained its ledger"
+  [ ! -e "$case_dir/state/parent-mirror/task-x1.record" ] || fail "delivered tail retained its mirror record"
+  pass "teardown preserves orphan ledgers through final delivery"
 }
 
 backlog_row_state() {

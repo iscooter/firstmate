@@ -2878,18 +2878,23 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # (docs/secondmate-parent-channel.md). The ledger itself survives teardown, so
 # an undelivered final sweep leaves an orphan record that later sweeps retry;
 # a main home has no channel and this is a silent no-op there.
+MIRROR_RETAINED=0
 if [ "$KIND" != secondmate ]; then
   MIRROR_RC=0
   fm_parent_mirror_retire_locked "$ID" || MIRROR_RC=$?
+  if fm_parent_mirror_orphan_durable "$ID"; then
+    MIRROR_RETAINED=1
+  elif [ "$MIRROR_RC" -ne 0 ]; then
+    echo "error: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC), and no durable orphan record exists; retaining the child record for retry" >&2
+    exit 1
+  fi
   if [ "$MIRROR_RC" -ne 0 ]; then
-    if ! fm_parent_mirror_orphan_durable "$ID"; then
-      echo "error: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC), and no durable orphan record exists; retaining the child record for retry" >&2
-      exit 1
-    fi
-    echo "actionable: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC); its durable orphan record is retained for the next supervision poll" >&2
+    echo "actionable: $ID's final outcome did not reach the parent channel (rc=$MIRROR_RC); its durable orphan record and ledger are retained for the next supervision poll" >&2
   fi
 fi
-status_retire_presentation_task "$STATE" "$ID" || exit 1
+if [ "$MIRROR_RETAINED" -ne 1 ]; then
+  status_retire_presentation_task "$STATE" "$ID" || exit 1
+fi
 rm -f "$STATE/$ID.turn-ended" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \

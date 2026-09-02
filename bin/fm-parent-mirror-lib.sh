@@ -314,8 +314,7 @@ _fm_parent_mirror_child() {  # <child> <meta-or-empty> <orphan 0|1> [<deliver-no
     return 4
   }
   if [ ! -e "$status" ]; then
-    # Nothing to deliver. An orphan whose ledger is gone owes nothing either.
-    [ "$orphan" -eq 1 ] && rm -f "$record"
+    [ "$orphan" -ne 1 ] || return 4
     return 0
   fi
   [ -f "$status" ] && [ ! -L "$status" ] || return 4
@@ -581,7 +580,11 @@ fm_parent_mirror_sweep_child() {  # <child> [<report-contention 0|1>]
   [ -f "$record" ] && [ ! -L "$record" ] || return 0
   ( set +e; _fm_parent_mirror_child "$child" '' 1 1 ) || rc=$?
   if [ "$rc" -eq 0 ] && [ "$(_fm_parent_mirror_record_field "$record" tail)" != 1 ]; then
-    rm -f "$record"
+    if status_retire_presentation_task "$STATE" "$child" "$FM_PARENT_MIRROR_LOCK_WAIT_SECS"; then
+      rm -f "$record"
+    else
+      rc=4
+    fi
   fi
   return "$rc"
 }

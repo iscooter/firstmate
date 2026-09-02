@@ -119,8 +119,8 @@
 # one captain call. See "record divergence" beside command_diverged below.
 #
 # Resolution records: each hold stores its durable generation in the body, and
-# the answer block names this script, the decision digest, that generation, and
-# a `Resolution mode:` of answered, released, or repaired.
+# the length-framed answer block names this script, the decision digest, that
+# generation, and a `Resolution mode:` of answered, released, or repaired.
 # Records written by the retired fm-decision-hold.sh (routed, declined,
 # answered, repaired) are recognized everywhere a record is read, so nothing
 # already closed needs rewriting.
@@ -387,17 +387,21 @@ recorded_resolution_generation() {  # <task-body>
   local body
   body=$(decode_shown_value "$1") || return 1
   printf '%s\n' "$body" | awk '
-    $0 == "Resolution recorded by fm-captain-hold." || $0 == "Resolution recorded by fm-decision-hold." {
-      if (!seen) { seen = 1; position = 0; next }
-    }
-    seen {
-      position++
-      if (position == 1 && $0 !~ /^Decision digest: /) exit 1
-      if (position == 2 && $0 !~ /^Resolution mode: /) exit 1
-      if (position == 3 && $0 ~ /^Hold generation: [0-9]+$/) {
-        sub(/^Hold generation: /, ""); print; exit
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (line[i] != "Captain resolution record begins (fm-captain-hold).") continue
+        if (line[i + 1] != "Resolution recorded by fm-captain-hold.") continue
+        if (line[i + 2] !~ /^Decision digest: / || line[i + 3] !~ /^Resolution mode: /) continue
+        if (line[i + 4] !~ /^Hold generation: [0-9]+$/ || line[i + 5] !~ /^Decision lines: [0-9]+$/) continue
+        generation = line[i + 4]; sub(/^Hold generation: /, "", generation)
+        lines = line[i + 5]; sub(/^Decision lines: /, "", lines)
+        if (line[i + 6] != "" || line[i + 7] != "Captain decision:") continue
+        if (line[i + 8 + lines] != "Captain resolution record ends (fm-captain-hold).") continue
+        print generation
+        exit
       }
-      if (position >= 3) exit 1
+      exit 1
     }
   '
 }
@@ -409,16 +413,15 @@ resolution_record_count() {  # <task-body>
     { line[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
-        if (line[i] != "Resolution recorded by fm-captain-hold." && line[i] != "Resolution recorded by fm-decision-hold.") continue
-        j = i + 1
-        if (line[j] !~ /^Decision digest: /) continue
-        j++
-        if (line[j] ~ /^Routed identities: /) j++
-        if (line[j] !~ /^Resolution mode: /) continue
-        j++
-        if (line[j] ~ /^Hold generation: [0-9]+$/) j++
-        if (line[j] != "" || line[j + 1] != "Captain decision:") continue
+        if (line[i] != "Captain resolution record begins (fm-captain-hold).") continue
+        if (line[i + 1] != "Resolution recorded by fm-captain-hold.") continue
+        if (line[i + 2] !~ /^Decision digest: / || line[i + 3] !~ /^Resolution mode: /) continue
+        if (line[i + 4] !~ /^Hold generation: [0-9]+$/ || line[i + 5] !~ /^Decision lines: [0-9]+$/) continue
+        lines = line[i + 5]; sub(/^Decision lines: /, "", lines)
+        if (line[i + 6] != "" || line[i + 7] != "Captain decision:") continue
+        if (line[i + 8 + lines] != "Captain resolution record ends (fm-captain-hold).") continue
         count++
+        i += 8 + lines
       }
       print count + 0
     }
@@ -426,8 +429,10 @@ resolution_record_count() {  # <task-body>
 }
 
 resolution_block() {  # <mode> <hold-generation>
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nHold generation: %s\n\nCaptain decision:\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$2" "$DECISION_TEXT"
+  local decision_lines
+  decision_lines=$(printf '%s\n' "$DECISION_TEXT" | awk 'END { print NR }')
+  printf 'Captain resolution record begins (fm-captain-hold).\nResolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nHold generation: %s\nDecision lines: %s\n\nCaptain decision:\n%s\nCaptain resolution record ends (fm-captain-hold).\n' \
+    "$DECISION_DIGEST" "$1" "$2" "$decision_lines" "$DECISION_TEXT"
 }
 
 write_hold_generation() {  # <task-id> <generation> <shown-body>

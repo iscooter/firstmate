@@ -1138,8 +1138,8 @@ status_presentation_marker_commit() {
   printf 'v2\t%s\t%s' "$reported" "$classified" > "$marker"
 }
 
-status_retire_presentation_task() {  # <state> <task-id>
-  local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra rc=0 found=0
+status_retire_presentation_task() {  # <state> <task-id> [<bounded-lock-seconds>]
+  local state=$1 task=$2 seconds=${3:-} lock manifest tmp data row_task ident offset backstop extra rc=0 found=0
   local signal_marker heartbeat_marker daemon_marker
   lock="$state/.status-presentation-lock"
   manifest="$state/.status-presentation-cursor"
@@ -1178,7 +1178,11 @@ EOF
     fi
   fi
 
-  fm_lock_acquire_wait "$lock" || return 1
+  if [ -n "$seconds" ]; then
+    fm_lock_acquire_wait_bounded "$lock" "$seconds" || return 1
+  else
+    fm_lock_acquire_wait "$lock" || return 1
+  fi
   if [ -e "$manifest" ] || [ -L "$manifest" ]; then
     if [ ! -f "$manifest" ] || [ ! -r "$manifest" ] || [ -L "$manifest" ]; then
       rc=1

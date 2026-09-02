@@ -308,7 +308,15 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
   run_captain "$home" hold mate-marker-prose-call \
     --title "Answer with marker-like prose" --reason "captain marker prose pending" --repo sample >/dev/null \
     || fail "could not hold marker-prose work"
-  printf 'Captain hold generation: 99\nResolution recorded by fm-captain-hold.\n' > "$home/marker-prose.txt"
+  cat > "$home/marker-prose.txt" <<'EOF'
+Captain hold generation: 99
+Resolution recorded by fm-captain-hold.
+Decision digest: prose-only
+Resolution mode: released
+
+Captain decision:
+This entire undelimited shape is captain prose.
+EOF
   cat > "$home/fakebin/tasks-axi" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = unhold ] && [ ! -e "$FM_HOME/close-failed-once" ]; then
