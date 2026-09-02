@@ -523,7 +523,7 @@ command_answer() {
 
   if [ "$state" = "done" ]; then
     if body_has_resolution_record "$body"; then
-      # An exact compatible retry is an idempotent no-op; drift is rejected.
+      # An exact compatible retry is idempotent; drift is rejected.
       [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
         || fail "captain-held task $id records a different captain decision"
       recorded_mode=$(recorded_resolution_mode "$body" || true)
@@ -531,6 +531,11 @@ command_answer() {
         || fail "task $id records this answer with mode released; a closed task cannot replay that release"
       [ "$release" = 0 ] \
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
+      if [ "$recorded_mode" = repaired ]; then
+        publish_parent_hold "$id" resolved "answered (repaired)"
+      else
+        publish_parent_hold "$id" resolved answered
+      fi
       printf 'answered: %s\n' "$id"
       return 0
     fi
@@ -586,6 +591,7 @@ command_answer() {
       || fail "task $id records a different captain decision with mode ${recorded_mode:-unknown}"
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
+    publish_parent_hold "$id" resolved released
     printf 'released: %s\n' "$id"
     return 0
   fi

@@ -258,16 +258,39 @@ test_secondmate_home_publishes_holds_and_final_outcomes() {
     || fail "an idempotent hold retry duplicated the parent line"
 
   printf 'north\n' > "$home/answer.txt"
+  mv "$home/.fm-secondmate-parent" "$home/.fm-secondmate-parent.saved"
+  run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" \
+    > "$home/answer.out" 2> "$home/answer.err" \
+    || fail "could not durably record the captain's answer while parent delivery was unavailable"
+  grep -F 'actionable:' "$home/answer.err" >/dev/null \
+    || fail "the unavailable parent close was not reported as actionable"
+  [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call\]' "$channel" || true)" = 0 ] \
+    || fail "the unavailable answer unexpectedly reached the parent"
+  mv "$home/.fm-secondmate-parent.saved" "$home/.fm-secondmate-parent"
   run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" >/dev/null \
-    || fail "could not record the captain's answer in the mate home"
+    || fail "idempotent answer retry failed in the mate home"
   grep -Fx 'resolved [key=captain-hold-mate-route-call]: captain hold mate-route-call: answered' "$channel" >/dev/null \
-    || fail "the answer did not close the hold on the parent channel: $(cat "$channel")"
+    || fail "the answer retry did not close the hold on the parent channel: $(cat "$channel")"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
   [ -z "$open" ] || fail "the parent's fold still holds the answered hold: $open"
   run_captain "$home" answer mate-route-call --decision-file "$home/answer.txt" >/dev/null \
-    || fail "idempotent answer retry failed in the mate home"
+    || fail "second idempotent answer retry failed in the mate home"
   [ "$(grep -c 'resolved \[key=captain-hold-mate-route-call\]' "$channel")" = 1 ] \
     || fail "an idempotent answer retry duplicated the parent close"
+
+  run_captain "$home" hold mate-release-call \
+    --title "Release held work" --reason "captain release pending" --repo sample >/dev/null \
+    || fail "could not hold releasable work in the mate home"
+  printf 'release\n' > "$home/release.txt"
+  mv "$home/.fm-secondmate-parent" "$home/.fm-secondmate-parent.saved"
+  run_captain "$home" answer mate-release-call --decision-file "$home/release.txt" --release \
+    > "$home/release.out" 2> "$home/release.err" \
+    || fail "could not durably release work while parent delivery was unavailable"
+  mv "$home/.fm-secondmate-parent.saved" "$home/.fm-secondmate-parent"
+  run_captain "$home" answer mate-release-call --decision-file "$home/release.txt" --release >/dev/null \
+    || fail "idempotent release retry failed in the mate home"
+  [ "$(grep -c 'resolved \[key=captain-hold-mate-release-call\].*: released' "$channel")" = 1 ] \
+    || fail "the release retry did not close its parent hold exactly once"
 
   id='mate-scout'
   tasks_in "$home" add "$id" "Investigate mate systems" --kind scout --repo sample --start >/dev/null \
