@@ -253,6 +253,7 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
 
   for bare_github in \
     'www.github.com/karpathy/backpass/pull/108' \
+    'github.com:443/karpathy/backpass/pull/108' \
     'GitHub.com/karpathy/backpass/pull/108' \
     '//github.com/karpathy/backpass/pull/108' \
     '[PR](//github.com/karpathy/backpass/pull/108)'; do

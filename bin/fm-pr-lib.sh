@@ -280,13 +280,11 @@ _fm_pr_ref_unwrap() { # <token>
 }
 
 _fm_pr_ref_shaped() { # <token>
-  local token=${1-} scheme_location bare_location route
+  local token=${1-} authority route
   local LC_ALL=C
-  scheme_location='(^|[^A-Za-z0-9.+-])([A-Za-z][A-Za-z0-9+.-]*:)?//[^/[:space:]]+/'
-  bare_location='(^|[^A-Za-z0-9.-])[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/'
+  authority='(^|[^A-Za-z0-9.+-])([A-Za-z][A-Za-z0-9+.-]*:)?(//)?([^/@[:space:]]+@)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:[^/[:space:]]+)?/'
   route='[^[:space:]]*(/[Pp][Uu][Ll][Ll]/|/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/)[^/[:space:]]+'
-  [[ "$token" =~ $scheme_location$route ]] && return 0
-  [[ "$token" =~ $bare_location$route ]]
+  [[ "$token" =~ $authority$route ]]
 }
 
 # Print every canonical forge URL this home has durably recorded for the task,
