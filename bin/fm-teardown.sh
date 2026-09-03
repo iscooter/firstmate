@@ -231,6 +231,8 @@ META_LOCK=
 META_LOCK_HELD=0
 OUTCOME_LOCK=
 OUTCOME_LOCK_HELD=0
+OUTCOME_LOCK_TIMEOUT=${FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT:-10}
+case "$OUTCOME_LOCK_TIMEOUT" in ''|*[!0-9]*|0) OUTCOME_LOCK_TIMEOUT=10 ;; esac
 DESCENDANT_LOCK_PATHS=()
 DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
@@ -2921,7 +2923,10 @@ remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 if [ -d "$STATE" ]; then
   OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
-  fm_lock_acquire_wait "$OUTCOME_LOCK" || exit 1
+  if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
+    exit 1
+  fi
   OUTCOME_LOCK_HELD=1
 fi
 status_retire_presentation_task "$STATE" "$ID" || exit 1

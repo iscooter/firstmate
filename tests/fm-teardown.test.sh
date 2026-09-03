@@ -2207,6 +2207,48 @@ land_shippable_commit() {
   git -C "$case_dir/project" fetch -q origin
 }
 
+test_live_outcome_lock_refuses_after_deadline() {
+  local case_dir rc holder elapsed
+  case_dir=$(make_case live-outcome-lock)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  printf 'fm-branch-outcome-index-v1\t5\t0\t-\n' \
+    > "$case_dir/state/.task-x1.branch-outcome-index"
+
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    bash -c '. "$1"; fm_lock_acquire_wait "$2"; : > "$3"; sleep 30' \
+      _ "$ROOT/bin/fm-wake-lib.sh" "$case_dir/state/.branch-outcomes.lock" \
+      "$case_dir/outcome-lock-ready" &
+  holder=$!
+  for _ in $(seq 1 100); do
+    [ -e "$case_dir/outcome-lock-ready" ] && break
+    sleep 0.02
+  done
+  [ -e "$case_dir/outcome-lock-ready" ] || {
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "live-outcome-lock: holder did not acquire the outcome lock"
+  }
+
+  SECONDS=0
+  rc=0
+  FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT=1 \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  elapsed=$SECONDS
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  expect_code 1 "$rc" "live-outcome-lock: teardown should refuse a stalled live holder"
+  [ "$elapsed" -lt 8 ] || fail "live-outcome-lock: teardown exceeded its lock deadline (${elapsed}s)"
+  assert_grep "outcome store for task-x1 remained locked" "$case_dir/stderr" \
+    "live-outcome-lock: teardown did not explain the bounded lock refusal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "live-outcome-lock: teardown removed the durable task record without the outcome lock"
+  assert_present "$case_dir/state/.task-x1.branch-outcome-index" \
+    "live-outcome-lock: teardown retired the task outcome index without the outcome lock"
+  pass "teardown refuses a stalled live outcome-lock holder after a deadline"
+}
+
 test_parked_own_run_is_aborted_before_teardown() {
   local case_dir rc head
   case_dir=$(make_case parked-run-abort)
@@ -2793,6 +2835,7 @@ test_transient_index_lock_clears_after_first_attempt_and_retry_succeeds
 test_persistent_index_lock_exhausts_retries_and_refuses_loudly
 test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
+test_live_outcome_lock_refuses_after_deadline
 test_parked_own_run_is_aborted_before_teardown
 test_parked_own_run_refuses_when_abort_is_unconfirmed
 test_mismatched_run_after_abort_refuses_unconfirmed

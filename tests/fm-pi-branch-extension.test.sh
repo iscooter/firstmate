@@ -1637,7 +1637,7 @@ import { pathToFileURL } from "node:url";
 
 // A second live task the wake does not name, plus the memory of a task whose
 // records are already gone.
-writeFileSync(`${home}/state/other-task.meta`, `project=${approvedProject}\nwindow=default:wX:p1\n`);
+writeFileSync(`${home}/state/other-task.meta`, `project=${approvedProject}\nwindow=default:wX:p1\nterminal=orca-term-1\n`);
 fire("session_start", {}, defaultSessionCtx);
 
 let finish;
@@ -1687,6 +1687,7 @@ writeFileSync(`${home}/state/.wake-queue`, [
   "1\t1\tsignal\tbranch-driver.status\tsignal: done",
   "2\t2\tstale\tdefault:wX:p1\tstale: default:wX:p1 (idle 378s)",
   "3\t3\tcheck\tmerge-poll\tcheck: merged",
+  "4\t4\tstale\torca-term-1\tstale: orca-term-1 (idle 378s)",
 ].join("\n") + "\n");
 const scope = lib.scopeForUnreadWake(`${home}/state`, false);
 if (JSON.stringify([...scope.eligibleTasks].sort()) !== JSON.stringify(["branch-driver", "other-task"])) {
@@ -1695,8 +1696,8 @@ if (JSON.stringify([...scope.eligibleTasks].sort()) !== JSON.stringify(["branch-
 if (JSON.stringify([...scope.liveTasks].sort()) !== JSON.stringify(["branch-driver", "other-task"])) {
   throw new Error(`live tasks were not listed from the task records: ${JSON.stringify(scope)}`);
 }
-if (JSON.stringify(scope.eligibleSeqs) !== JSON.stringify(["1", "2"])) {
-  throw new Error(`the main-owned check row leaked into the branch claim: ${JSON.stringify(scope)}`);
+if (JSON.stringify(scope.eligibleSeqs) !== JSON.stringify(["1", "2", "4"])) {
+  throw new Error(`the main-owned check row leaked into the branch claim or an endpoint alias was missed: ${JSON.stringify(scope)}`);
 }
 process.exit(0);
 EOF

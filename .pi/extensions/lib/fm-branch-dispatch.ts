@@ -133,13 +133,15 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
       const fields = readFileSync(`${state}/${name}`, "utf8").split(/\r?\n/);
       const project = fields.find((line) => line.startsWith("project="))?.slice(8) ?? "";
       const window = fields.find((line) => line.startsWith("window="))?.slice(7) ?? "";
+      const terminal = fields.find((line) => line.startsWith("terminal="))?.slice(9) ?? "";
       liveTasks.push(task);
       if (project) {
         metadata.set(task, project);
         taskByKey.set(task, task);
-        if (window) {
-          metadata.set(window, project);
-          taskByKey.set(window, task);
+        for (const endpoint of [window, terminal]) {
+          if (!endpoint) continue;
+          metadata.set(endpoint, project);
+          taskByKey.set(endpoint, task);
         }
       }
     }
