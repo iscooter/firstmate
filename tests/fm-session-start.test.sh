@@ -1387,6 +1387,8 @@ EOF
   # A crash window the locked start must preserve: the supervision branch
   # stored a leading routine row and a captain row that never reached Pi, plus one lease whose
   # supervising process died and one still held by a live process.
+  : > "$home/state/task-a.status"
+  : > "$home/state/task-b.status"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-a --verdict routine --summary 'worker recovered automatically' >/dev/null \
     || fail "could not seed the unread routine branch outcome"
@@ -1428,6 +1430,7 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
 
+  : > "$home/state/task-b.status"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-b --verdict captain --summary 'unread Pi branch outcome' >/dev/null \
     || fail "could not seed the non-Pi unread branch outcome"

@@ -14,6 +14,14 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-branch-supervision)
 fm_git_identity fmtest fmtest@example.invalid
 
+seed_live_outcome_tasks() {
+  local home=$1 task
+  shift
+  for task in "$@"; do
+    : > "$home/state/$task.status"
+  done
+}
+
 # --- byte-stable branch prompt ------------------------------------------------
 
 test_branch_prompt_is_byte_stable_and_above_cache_floor() {
@@ -63,6 +71,7 @@ test_outcome_store_is_append_only_with_cursor_reads() {
   home="$TMP_ROOT/store-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
+  seed_live_outcome_tasks "$home" task-1 task-2 task-3 task-5
 
   seq1=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-1 --verdict routine --summary 'worker healthy, "quoted" text kept' --wake 'signal: working') \
@@ -128,6 +137,7 @@ test_outcome_startup_replay_preserves_silence() {
   home="$TMP_ROOT/store-silent-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
+  seed_live_outcome_tasks "$home" task-1
 
   out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-a --verdict captain --summary 'blocked' --silent true 2>&1)
@@ -173,6 +183,7 @@ test_outcome_startup_replay_stops_at_captain_barrier() {
   local home replay unread
   home="$TMP_ROOT/store-captain-barrier-home"
   mkdir -p "$home/state"
+  seed_live_outcome_tasks "$home" task-1 task-2 task-3
 
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-1 --verdict routine --summary 'leading routine' >/dev/null || fail "leading append failed"
@@ -197,6 +208,7 @@ test_outcome_cursor_corruption_fails_closed() {
   home="$TMP_ROOT/store-corrupt-cursor-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
+  seed_live_outcome_tasks "$home" task-1 task-2
 
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-1 --verdict captain --summary 'captain outcome must remain unread' >/dev/null \
@@ -246,6 +258,7 @@ test_cursor_advancement_refuses_ahead_processed_marker() {
   mkdir -p "$home/state"
   cursor="$home/state/.branch-outcomes-cursor"
   marker="$home/state/.branch-outcomes-processed"
+  seed_live_outcome_tasks "$home" task-1 task-2 task-3
 
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-1 --verdict routine --summary 'already read' >/dev/null || fail "first routine append failed"
@@ -277,6 +290,7 @@ test_outcome_sequence_conflicts_fail_closed() {
   home="$TMP_ROOT/store-sequence-conflict-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
+  seed_live_outcome_tasks "$home" task-4
   printf '%s\n' \
     '{"seq":1,"epoch":1,"task":"task-1","wake":"","verdict":"routine","summary":"first","silent":false}' \
     '{"seq":1,"epoch":2,"task":"task-conflict","wake":"","verdict":"captain","summary":"conflict","silent":false}' \
@@ -306,6 +320,7 @@ test_outcome_non_jsonl_layout_fails_closed() {
   home="$TMP_ROOT/store-physical-layout-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
+  seed_live_outcome_tasks "$home" task-2
   printf '%s\n' \
     '{' \
     '  "seq": 1, "epoch": 1, "task": "task-1", "wake": "",' \
@@ -349,6 +364,7 @@ test_outcome_processed_marker_is_sequence_bound() {
   home="$TMP_ROOT/store-processed-home"
   mkdir -p "$home/state"
   marker="$home/state/.branch-outcomes-processed"
+  seed_live_outcome_tasks "$home" task-1 task-2 task-3
 
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-1 --verdict routine --summary 'routine first' >/dev/null || fail "routine append failed"
@@ -429,6 +445,7 @@ test_outcome_processed_marker_is_sequence_bound() {
   # otherwise reads as zero, the safe direction.
   home="$TMP_ROOT/store-processed-migration-home"
   mkdir -p "$home/state"
+  seed_live_outcome_tasks "$home" task-old
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-old --verdict captain --summary 'delivered before the marker existed' >/dev/null || fail "migration append failed"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-read --through 1 || fail "migration mark-read failed"

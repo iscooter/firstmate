@@ -681,12 +681,12 @@ if (sentToMain[0].message.customType !== "fm-branch-merge") throw new Error("mer
 if (sentToMain[0].options.triggerTurn) throw new Error("routine idle merge must not trigger a turn");
 if (sentToMain[0].options.deliverAs) throw new Error("routine idle merge must append immediately");
 fire("agent_start", {});
-await report.execute("call-2", { task: "task-9", verdict: "routine", summary: "still healthy" }, undefined, undefined, {});
+await report.execute("call-2", { task: "branch-driver", verdict: "routine", summary: "still healthy" }, undefined, undefined, {});
 if (sentToMain[1].options.deliverAs !== "nextTurn" || sentToMain[1].options.triggerTurn) {
   throw new Error(`routine busy merge must defer to nextTurn without a turn: ${JSON.stringify(sentToMain[1].options)}`);
 }
 fire("agent_end", {});
-await report.execute("call-3", { task: "task-9", verdict: "captain", summary: "PR https://example.com/pr/9 checks green, ready for review" }, undefined, undefined, {});
+await report.execute("call-3", { task: "branch-driver", verdict: "captain", summary: "PR https://example.com/pr/9 checks green, ready for review" }, undefined, undefined, {});
 // A captain outcome opens exactly ONE sequence-keyed processing turn: a
 // hidden, typed request that names the sequence and carries the exact stored
 // summary. No unkeyed turn ever opens, and routine delivery is untouched.
@@ -697,7 +697,7 @@ if (processingRequest.options.triggerTurn !== true || processingRequest.options.
   throw new Error(`the processing request must open one follow-up turn: ${JSON.stringify(processingRequest.options)}`);
 }
 if (processingRequest.message.display !== false) throw new Error("the processing request must stay hidden: the visible entry is the display");
-if (!processingRequest.message.content.includes("[seq 3] task-9: PR https://example.com/pr/9 checks green, ready for review")) {
+if (!processingRequest.message.content.includes("[seq 3] branch-driver: PR https://example.com/pr/9 checks green, ready for review")) {
   throw new Error(`the processing request lost its sequence key or exact summary: ${processingRequest.message.content}`);
 }
 if (sentToMain.some((sent) => sent.options.triggerTurn && sent.message.customType !== "fm-branch-process")) {
@@ -720,7 +720,7 @@ writeFileSync(`${home}/state/delivered-routine-note`, sentToMain[0].message.cont
 const captainEntries = mainEntries.filter((entry) => entry.customType === "fm-branch-visible-outcome");
 if (captainEntries.length !== 1) throw new Error(`captain delivery count was ${captainEntries.length}, not 1`);
 const captainRecord = captainEntries[0].data;
-if (captainRecord.version !== 1 || captainRecord.seq !== 3 || captainRecord.task !== "task-9" || captainRecord.verdict !== "captain") {
+if (captainRecord.version !== 1 || captainRecord.seq !== 3 || captainRecord.task !== "branch-driver" || captainRecord.verdict !== "captain") {
   throw new Error(`captain entry lost its identity: ${JSON.stringify(captainRecord)}`);
 }
 if (captainRecord.summary !== "PR https://example.com/pr/9 checks green, ready for review") {
@@ -841,7 +841,7 @@ const captainRendered = entryRenderers.get("fm-branch-visible-outcome")(
   { expanded: false },
   renderTheme,
 );
-if (captainRendered.text !== "⚓ [seq 3] task-9: PR https://example.com/pr/9 checks green, ready for review") {
+if (captainRendered.text !== "⚓ [seq 3] branch-driver: PR https://example.com/pr/9 checks green, ready for review") {
   throw new Error(`captain renderer changed the exact visible outcome: ${captainRendered.text}`);
 }
 process.exit(0);
@@ -867,7 +867,7 @@ EOF
   body=$(./bin/fm-operational-input.sh body < "$home/state/delivered-processing-request") \
     || fail "the processing request envelope carries no readable body"
   case "$body" in
-    *"delivered automatically by the supervision branch."*"It was not typed by the captain."*"[seq 3] task-9: PR https://example.com/pr/9 checks green, ready for review"*) ;;
+    *"delivered automatically by the supervision branch."*"It was not typed by the captain."*"[seq 3] branch-driver: PR https://example.com/pr/9 checks green, ready for review"*) ;;
     *) fail "the processing request body lost its self-description or the outcome itself: $body" ;;
   esac
   case "$body" in
@@ -1101,6 +1101,9 @@ test_captain_outcome_is_exactly_once_across_crash_reload_and_unrelated_response(
   repo="$TMP_ROOT/visible-outcome-recovery-root"
   home="$TMP_ROOT/visible-outcome-recovery-home"
   mkdir -p "$home/state" "$home/config"
+  : > "$home/state/email-intake.status"
+  : > "$home/state/task-busy.status"
+  : > "$home/state/task-conflict.status"
   install_pi_branch_extension_fixture "$repo"
   PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
@@ -1191,6 +1194,9 @@ test_captain_outcome_processing_turn_is_sequence_keyed_and_re_presented() {
   repo="$TMP_ROOT/processing-turn-root"
   home="$TMP_ROOT/processing-turn-home"
   mkdir -p "$home/state" "$home/config"
+  : > "$home/state/legacy.status"
+  : > "$home/state/task-d.status"
+  : > "$home/state/task-f.status"
   install_pi_branch_extension_fixture "$repo"
   PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
@@ -1492,14 +1498,14 @@ if (!fleetRoutineMerge.message.content.startsWith("⛵ fleet: reconciled the bac
 }
 await heartbeatReport.execute(
   "task-routine",
-  { task: "task-9", verdict: "routine", summary: "worker healthy, no action needed" },
+  { task: "branch-driver", verdict: "routine", summary: "worker healthy, no action needed" },
   undefined,
   undefined,
   {},
 );
 const taskRoutineMerge = sentToMain[sentToMain.length - 1];
 if (taskRoutineMerge.message.display !== true) throw new Error("a task-scoped routine outcome must render");
-if (!taskRoutineMerge.message.content.startsWith("⛵ task-9: worker healthy, no action needed")) {
+if (!taskRoutineMerge.message.content.startsWith("⛵ branch-driver: worker healthy, no action needed")) {
   throw new Error(`task-scoped routine note changed: ${taskRoutineMerge.message.content}`);
 }
 await heartbeatReport.execute(
@@ -3330,6 +3336,7 @@ test_cold_start_activates_after_lock_acquisition() {
   repo="$TMP_ROOT/coldstart-root"
   home="$TMP_ROOT/coldstart-home"
   mkdir -p "$home/state" "$home/config"
+  : > "$home/state/cold-result.status"
   install_pi_branch_extension_fixture "$repo"
   PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_TEST_SKIP_LOCK=1 DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
