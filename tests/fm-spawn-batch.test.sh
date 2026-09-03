@@ -111,6 +111,22 @@ ROWS
 # A ship batch carries one shared delivery contract. Missing flags must stop the
 # whole batch before any pair is dispatched, so a batch can never launch workers
 # whose delivery posture was never decided.
+test_fleet_task_id_is_reserved() {
+  local out status
+  out=$(run_ship_spawn fleet projects/none)
+  status=$?
+  expect_code 2 "$status" "single-task spawn should reserve fleet"
+  printf '%s\n' "$out" | grep -F 'error: invalid task id' >/dev/null \
+    || fail "single-task fleet refusal did not identify the invalid task id"
+
+  out=$(run_ship_spawn fleet=projects/none)
+  status=$?
+  [ "$status" -ne 0 ] || fail "batch spawn accepted the reserved fleet task id"
+  printf '%s\n' "$out" | grep -F 'error: invalid task id' >/dev/null \
+    || fail "batch fleet refusal did not identify the invalid task id"
+  pass "fleet remains reserved for supervision outcomes"
+}
+
 test_batch_requires_the_shared_delivery_contract() {
   local out status
   out=$(run_spawn nope-batch-nomode-z9=projects/none-a nope-batch-nomode-z10=projects/none-b)
@@ -143,6 +159,7 @@ test_scout_batch_refuses_delivery_flags() {
 
 test_batch_dispatches_every_pair
 test_batch_mode_boundaries
+test_fleet_task_id_is_reserved
 test_batch_requires_the_shared_delivery_contract
 test_scout_batch_refuses_delivery_flags
 test_projects_path_scoping

@@ -1707,6 +1707,12 @@ if (JSON.stringify(scope.eligibleSeqs) !== JSON.stringify(["1", "2", "4"])) {
 if (scope.taskGenerations["branch-driver"] !== "replacement-generation" || scope.taskGenerations["other-task"] !== "other-task-generation") {
   throw new Error(`task generations were not captured with wake scope: ${JSON.stringify(scope)}`);
 }
+writeFileSync(`${home}/state/__proto__.meta`, `project=${approvedProject}\nwindow=default:proto:p1\nspawn_gen=proto-generation\n`);
+writeFileSync(`${home}/state/.wake-queue`, "5\t5\tsignal\t__proto__.status\tsignal: done\n");
+const prototypeScope = lib.scopeForUnreadWake(`${home}/state`, false);
+if (prototypeScope.taskGenerations["__proto__"] !== "proto-generation") {
+  throw new Error(`prototype-named task lost its spawn generation: ${JSON.stringify(prototypeScope)}`);
+}
 process.exit(0);
 EOF
   status=$?

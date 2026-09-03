@@ -69,7 +69,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleSeqs: [],
   eligibleTasks: [],
   liveTasks: [],
-  taskGenerations: {},
+  taskGenerations: Object.create(null) as Record<string, string>,
   corrupted: false,
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
@@ -79,6 +79,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleSeqs: [],
   eligibleTasks: [],
   liveTasks: [],
+  taskGenerations: Object.create(null) as Record<string, string>,
   corrupted: true,
 };
 
@@ -128,7 +129,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
   // itself, or the endpoint its metadata records.
   const taskByKey = new Map<string, string>();
   const liveTasks: string[] = [];
-  const taskGenerations: Record<string, string> = {};
+  const taskGenerations = Object.create(null) as Record<string, string>;
   try {
     for (const name of readdirSync(state)) {
       if (!name.endsWith(".meta")) continue;

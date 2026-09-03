@@ -248,6 +248,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 
+fm_spawn_task_id_valid() {
+  [ "${1-}" != fleet ] && fm_task_id_creation_valid "${1-}"
+}
+
 resolve_directory_input() {
   local name=$1 path=$2 resolved raw_bytes
   raw_bytes=$(fm_backlog_bytes_of_string "$path") || return 1
@@ -455,7 +459,7 @@ spawn_remote_secondmate() {
   local remote_traceparent remote_recorded_traceparent sm_primary_head sync_out sync_rc
   local -a launch_args
   id=${POS[0]:-}
-  fm_task_id_creation_valid "$id" || { echo "error: invalid task id" >&2; return 2; }
+  fm_spawn_task_id_valid "$id" || { echo "error: invalid task id" >&2; return 2; }
   mkdir -p "$STATE" || { echo "error: could not create parent state directory" >&2; return 1; }
   SPAWN_TASK_LOCK="$STATE/.spawn-$id.lock"
   if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
@@ -992,7 +996,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   exit "$rc"
 fi
 ID=${POS[0]}
-fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+fm_spawn_task_id_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
 if [ -e "$STATE" ] || [ -L "$STATE" ]; then
   fm_backlog_directory_present "$STATE" "state directory" || {
     echo "error: spawn refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
