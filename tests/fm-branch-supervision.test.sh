@@ -217,6 +217,12 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task backpass-clean-slate --verdict routine --summary 'worker is still running tests' >/dev/null \
     || fail "an outcome with no PR reference was refused"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict routine \
+    --summary 'the /pull/request endpoint is failing' >/dev/null \
+    || fail "host-less route prose was mistaken for a forge reference"
+  assert_contains "$(cat "$store")" 'the /pull/request endpoint is failing' \
+    "accepted host-less route prose did not reach the store"
 
   # A decorated reference cannot smuggle a repository past the canonical test.
   before=$(cat "$store")

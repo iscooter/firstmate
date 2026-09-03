@@ -280,11 +280,13 @@ _fm_pr_ref_unwrap() { # <token>
 }
 
 _fm_pr_ref_shaped() { # <token>
-  case "${1-}" in
-    */[Pp][Uu][Ll][Ll]/?*|\
-    */-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/?*) return 0 ;;
-  esac
-  return 1
+  local token=${1-} scheme_location bare_location route
+  local LC_ALL=C
+  scheme_location='(^|[^A-Za-z0-9.+-])([A-Za-z][A-Za-z0-9+.-]*:)?//[^/[:space:]]+/'
+  bare_location='(^|[^A-Za-z0-9.-])[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/'
+  route='[^[:space:]]*(/[Pp][Uu][Ll][Ll]/|/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/)[^/[:space:]]+'
+  [[ "$token" =~ $scheme_location$route ]] && return 0
+  [[ "$token" =~ $bare_location$route ]]
 }
 
 # Print every canonical forge URL this home has durably recorded for the task,
