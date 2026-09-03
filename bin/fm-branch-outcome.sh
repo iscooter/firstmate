@@ -44,6 +44,9 @@
 #     before append and published only after the cache update; processed-init
 #     rebuilds every cache before publishing it, so interruption or upgrade
 #     fails closed without making each drain scan lifetime history.
+#     bin/fm-teardown.sh removes a retired task's cache with its other records,
+#     and the rebuild skips a task that has neither a live meta nor a status
+#     log, so a task that is gone leaves no index behind.
 #     Main-actor drain calls processed-init under the outcome lock when that
 #     ready marker is absent or invalid, on every harness; only a genuine store
 #     fault keeps the lost-wake backstop skipped.
@@ -264,6 +267,11 @@ rebuild_outcome_indexes() {
   ' "$STORE") || return 1
   while IFS=$(printf '\t') read -r task seq epoch endpoint ident; do
     [ -n "$task" ] || continue
+    # A retired task (no live record, no status log) has no reader for its
+    # cache: the drain backstop compares an index against that task's status
+    # log, which is gone with the task. Rebuilding it would only resurrect the
+    # footprint teardown just removed.
+    [ -e "$STATE/$task.meta" ] || [ -e "$STATE/$task.status" ] || continue
     if [ -z "$endpoint" ] || [ -z "$ident" ]; then
       f="$STATE/$task.status"
       endpoint=0

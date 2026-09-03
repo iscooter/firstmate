@@ -569,6 +569,9 @@ test_local_only_fork_remote_allows() {
   write_meta "$case_dir" local-only ship
   wt_commit "$case_dir" "fix the thing"
   add_fork_with_pushed_branch "$case_dir"
+  # The supervision branch's bounded per-task outcome cache is a footprint of
+  # the retired task, not a record anything reads after it is gone.
+  printf 'fm-branch-outcome-index-v1\t5\t0\t-\n' > "$case_dir/state/.task-x1.branch-outcome-index"
 
   set +e
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
@@ -577,6 +580,8 @@ test_local_only_fork_remote_allows() {
 
   expect_code 0 "$rc" "fork-allow: teardown should succeed when HEAD is on a fork remote"
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
+  [ ! -e "$case_dir/state/.task-x1.branch-outcome-index" ] \
+    || fail "fork-allow: teardown left the task's branch outcome index behind"
   jq -e --arg id task-x1 '
     .schema == "fm-secondmate-home-summary.v1"
     and all(.endpoints[]; .id != $id)
