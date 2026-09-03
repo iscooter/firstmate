@@ -283,15 +283,16 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   for noncanonical_ref in \
     'https://github.com/karpathy/backpass/PULL/108' \
     'https://github.com/karpathy/backpass/pull/%31%30%38' \
-    'https://gitlab.example/group/backpass/-/MERGE_REQUESTS/108'; do
+    'https://gitlab.example/group/backpass/-/MERGE_REQUESTS/108' \
+    '[MR](//gitlab/group/repo/-/merge_requests/9)'; do
     out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
       --task backpass-clean-slate --verdict captain \
       --summary "review $noncanonical_ref" 2>&1)
     status=$?
-    [ "$status" -ne 0 ] || fail "a case-variant forge path bypassed the outcome gate: $noncanonical_ref"
-    assert_contains "$out" "$noncanonical_ref" \
-      "the case-variant path refusal did not name the rejected reference"
-    [ "$(cat "$store")" = "$before" ] || fail "a refused case-variant forge path changed the store"
+    [ "$status" -ne 0 ] || fail "a noncanonical forge path bypassed the outcome gate: $noncanonical_ref"
+    assert_contains "$out" "refusing to record an outcome carrying" \
+      "the noncanonical path refusal lost its diagnostic"
+    [ "$(cat "$store")" = "$before" ] || fail "a refused noncanonical forge path changed the store"
   done
 
   # A URL recorded for one task is not evidence for another task's outcome.

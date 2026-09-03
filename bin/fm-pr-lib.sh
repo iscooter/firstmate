@@ -280,15 +280,10 @@ _fm_pr_ref_unwrap() { # <token>
 }
 
 _fm_pr_ref_shaped() { # <token>
-  local token=${1-} pattern prefix
+  local token=${1-} pattern
   local LC_ALL=C
-  pattern='^(.*)(/[Pp][Uu][Ll][Ll]/|/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/)[^/[:space:]]+'
-  [[ "$token" =~ $pattern ]] || return 1
-  prefix=${BASH_REMATCH[1]}
-  case "$prefix" in
-    *://*|//*|*.*) return 0 ;;
-  esac
-  return 1
+  pattern='(/[Pp][Uu][Ll][Ll]/|/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/)([0-9]|%[0-9A-Fa-f]{2})[^/[:space:]]*'
+  [[ "$token" =~ $pattern ]]
 }
 
 # Print every canonical forge URL this home has durably recorded for the task,
