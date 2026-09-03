@@ -2529,7 +2529,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 descendant_outcome_boundary_acquire() {
-  local state=$1 task_id=$2 presentation_lock outcome_lock index
+  local state=$1 task_id=$2 presentation_lock outcome_lock
   presentation_lock="$state/.status-presentation-lock"
   if ! fm_lock_acquire_wait_bounded "$presentation_lock" "$OUTCOME_LOCK_TIMEOUT"; then
     echo "error: status presentation for descendant $task_id remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining descendant state for retry" >&2
@@ -2540,8 +2540,7 @@ descendant_outcome_boundary_acquire() {
   if ! fm_lock_acquire_wait_bounded "$outcome_lock" "$OUTCOME_LOCK_TIMEOUT"; then
     echo "error: outcome store for descendant $task_id remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining descendant state for retry" >&2
     fm_lock_release "$presentation_lock" || true
-    index=$((${#DESCENDANT_LOCK_PATHS[@]} - 1))
-    unset 'DESCENDANT_LOCK_PATHS[index]'
+    unset "DESCENDANT_LOCK_PATHS[$((${#DESCENDANT_LOCK_PATHS[@]} - 1))]"
     return 1
   fi
   DESCENDANT_LOCK_PATHS+=("$outcome_lock")
