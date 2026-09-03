@@ -1,7 +1,9 @@
 # Secondmate parent channel: live verification
 
 Maintainer-verification record for the guarantee in [`secondmate-parent-channel.md`](../secondmate-parent-channel.md): a captain-facing outcome recorded inside a secondmate home reaches the parent channel without the mate model writing it.
-Refresh it by rerunning the fixture below after changing any publisher named in `bin/fm-parent-channel-lib.sh`.
+The transcript remains current evidence for terminal-child and captain-hold publication, while its PR-registration step is retained as historical evidence because the placeholder PR no longer passes the live forge-resolution gate added to `bin/fm-pr-check.sh`.
+`tests/fm-pr-merge.test.sh` now owns the executable regression that a successfully live-resolved registration publishes its PR-ready line to the parent channel.
+Refresh the applicable evidence after changing any publisher named in `bin/fm-parent-channel-lib.sh`.
 
 ## What was run
 
@@ -40,6 +42,7 @@ $ parent watcher wakes so far
 signal: $P/state/mate.status
 
 $ # Step 2: the mate registers the PR with fm-pr-check; the ready line with the canonical URL reaches the parent from the script itself
+$ # Historical: pull/9999 is a placeholder, so current fm-pr-check refuses it unless the forge resolves it live
 
 $ FM_HOME=$M FM_STATE_OVERRIDE=$M/state bin/fm-pr-check.sh child https://github.com/kunchenguid/firstmate/pull/9999
 armed: state/child.check.sh
@@ -86,8 +89,8 @@ $ # Every line above beginning 'done [key=child-' or carrying 'captain-hold-' wa
 ## Why this proves the hole is closed
 
 - The observed defect was a mate model that handled its child's outcome and then addressed the captain in its own chat instead of appending to the parent channel.
-  In this run there is no model at all, and four captain-facing lines still appeared on `$P/state/mate.status`: the child's terminal done line with its note, canonical PR, mode, and posture; the PR-ready line at registration; the captain hold; and the hold's answer.
-- Each line was written by the script that recorded the underlying fact: `bin/fm-inactive-reconcile.sh` on the mate watcher's poll, `bin/fm-pr-check.sh`, and `bin/fm-captain-hold.sh`.
+  In this run there is no model at all, and four captain-facing lines appeared on `$P/state/mate.status`: the child's terminal done line with its note, canonical PR, mode, and posture; the historically accepted PR-ready line at registration; the captain hold; and the hold's answer.
+- The current terminal-child and captain-hold lines are written by `bin/fm-inactive-reconcile.sh` on the mate watcher's poll and by `bin/fm-captain-hold.sh`, while `tests/fm-pr-merge.test.sh` executes the current live-resolved `bin/fm-pr-check.sh` publication path.
 - Each line produced one `signal:` wake in the real parent watcher, which is the event that starts the parent firstmate's turn and therefore the captain-facing report.
 - The mate watcher's own `signal:` on `child.status` shows the mate was woken as before; whatever the mate model would have said in its chat afterward is irrelevant to delivery.
 - The trailing `stale:` line in the mate watcher log is the idle real pane after the child's final line, ordinary liveness escalation unrelated to delivery.

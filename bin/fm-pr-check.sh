@@ -3,7 +3,12 @@
 # validated canonical pr=<url> and the forge's exact pr_head=<sha> when
 # available, then atomically arm a static merge poll. A URL the forge does not
 # resolve is refused, never recorded, so no downstream reader can inherit an
-# invented pull request as this task's recorded truth.
+# invented pull request as this task's recorded truth. When the task status
+# already carries one or more canonical forge URLs, the requested URL must be
+# one of them; a task whose status carries none may rely on live resolution.
+# Each live lookup is bounded independently by FM_PR_FORGE_TIMEOUT (default 20
+# positive seconds). A resolution timeout refuses registration, while the
+# optional GitHub pr_head lookup merely records no head when it cannot answer.
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
