@@ -2764,6 +2764,14 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
+if [ -d "$STATE" ]; then
+  OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
+  if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
+    exit 1
+  fi
+  OUTCOME_LOCK_HELD=1
+fi
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
@@ -2921,14 +2929,6 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
-if [ -d "$STATE" ]; then
-  OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
-  if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
-    echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
-    exit 1
-  fi
-  OUTCOME_LOCK_HELD=1
-fi
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.turn-ended" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \

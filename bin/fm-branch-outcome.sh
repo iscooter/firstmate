@@ -451,6 +451,12 @@ case "$CMD" in
       exit 2
     fi
     fm_lock_acquire_wait "$LOCK"
+    if [ "$TASK" != fleet ] \
+        && [ ! -e "$STATE/$TASK.meta" ] && [ ! -e "$STATE/$TASK.status" ]; then
+      fm_lock_release "$LOCK"
+      echo "error: refusing outcome for retired task $TASK" >&2
+      exit 1
+    fi
     if ! LAST_SEQ=$(last_seq); then
       fm_lock_release "$LOCK"
       echo "error: refusing append because the outcome store is malformed or non-sequential" >&2

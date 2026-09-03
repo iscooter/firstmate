@@ -582,13 +582,17 @@ test_local_only_fork_remote_allows() {
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
   [ ! -e "$case_dir/state/.task-x1.branch-outcome-index" ] \
     || fail "fork-allow: teardown left the task's branch outcome index behind"
+  rc=0
   FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-branch-outcome.sh" append \
-    --task task-x1 --verdict routine --summary 'teardown completed' >/dev/null \
-    || fail "fork-allow: post-teardown branch report failed"
-  [ ! -e "$case_dir/state/.task-x1.branch-outcome-index" ] \
-    || fail "fork-allow: post-teardown branch report recreated the retired task index"
-  [ "$(cat "$case_dir/state/.branch-outcome-index-ready")" = 1 ] \
-    || fail "fork-allow: post-teardown branch report did not publish its ready sequence"
+    --task task-x1 --verdict routine --summary 'teardown completed' \
+    > "$case_dir/outcome.out" 2> "$case_dir/outcome.err" || rc=$?
+  expect_code 1 "$rc" "fork-allow: post-teardown branch report should refuse the retired task"
+  assert_grep 'refusing outcome for retired task task-x1' "$case_dir/outcome.err" \
+    "fork-allow: post-teardown branch report did not explain the retirement refusal"
+  assert_absent "$case_dir/state/branch-outcomes.jsonl" \
+    "fork-allow: post-teardown branch report stored a ghost outcome"
+  assert_absent "$case_dir/state/.branch-outcome-index-ready" \
+    "fork-allow: refused post-teardown report changed outcome readiness"
   jq -e --arg id task-x1 '
     .schema == "fm-secondmate-home-summary.v1"
     and all(.endpoints[]; .id != $id)
@@ -2214,6 +2218,8 @@ test_live_outcome_lock_refuses_after_deadline() {
   land_shippable_commit "$case_dir"
   printf 'fm-branch-outcome-index-v1\t5\t0\t-\n' \
     > "$case_dir/state/.task-x1.branch-outcome-index"
+  mkdir -p "$case_dir/wt/.claude"
+  printf 'preserve until outcome lock acquisition\n' > "$case_dir/wt/.claude/settings.local.json"
 
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
     bash -c '. "$1"; fm_lock_acquire_wait "$2"; : > "$3"; sleep 30' \
@@ -2246,7 +2252,9 @@ test_live_outcome_lock_refuses_after_deadline() {
     "live-outcome-lock: teardown removed the durable task record without the outcome lock"
   assert_present "$case_dir/state/.task-x1.branch-outcome-index" \
     "live-outcome-lock: teardown retired the task outcome index without the outcome lock"
-  pass "teardown refuses a stalled live outcome-lock holder after a deadline"
+  assert_present "$case_dir/wt/.claude/settings.local.json" \
+    "live-outcome-lock: teardown mutated the worktree before acquiring the outcome lock"
+  pass "teardown refuses a stalled live outcome-lock holder before destructive cleanup"
 }
 
 test_parked_own_run_is_aborted_before_teardown() {
