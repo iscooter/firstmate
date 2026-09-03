@@ -47,6 +47,7 @@ export interface UnreadWakeScope {
    * outcome.
    */
   liveTasks: string[];
+  taskGenerations: Record<string, string>;
   /**
    * True only when this scan itself is untrustworthy: the queue or its
    * metadata could not be read, a line fails the structural tab-field check,
@@ -68,6 +69,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleSeqs: [],
   eligibleTasks: [],
   liveTasks: [],
+  taskGenerations: {},
   corrupted: false,
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
@@ -126,6 +128,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
   // itself, or the endpoint its metadata records.
   const taskByKey = new Map<string, string>();
   const liveTasks: string[] = [];
+  const taskGenerations: Record<string, string> = {};
   try {
     for (const name of readdirSync(state)) {
       if (!name.endsWith(".meta")) continue;
@@ -134,6 +137,10 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
       const project = fields.find((line) => line.startsWith("project="))?.slice(8) ?? "";
       const window = fields.find((line) => line.startsWith("window="))?.slice(7) ?? "";
       const terminal = fields.find((line) => line.startsWith("terminal="))?.slice(9) ?? "";
+      const generations = fields.filter((line) => line.startsWith("spawn_gen=")).map((line) => line.slice(10));
+      taskGenerations[task] = generations.length === 1 && /^(?!\.)[A-Za-z0-9._-]+$/.test(generations[0])
+        ? generations[0]
+        : "";
       liveTasks.push(task);
       if (project) {
         metadata.set(task, project);
@@ -200,6 +207,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     eligibleSeqs,
     eligibleTasks: [...eligibleTasks],
     liveTasks,
+    taskGenerations,
     corrupted: false,
   };
 }

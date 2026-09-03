@@ -386,7 +386,7 @@ const approvedProject = `${home}/projects/approved`;
 mkdirSync(`${home}/state`, { recursive: true });
 mkdirSync(`${home}/config`, { recursive: true });
 mkdirSync(approvedProject, { recursive: true });
-writeFileSync(`${home}/state/branch-driver.meta`, `project=${approvedProject}\nwindow=fm-branch-driver\n`);
+writeFileSync(`${home}/state/branch-driver.meta`, `project=${approvedProject}\nwindow=fm-branch-driver\nspawn_gen=branch-driver-generation\n`);
 // Supervision is default-on for every task: no captain grant file gates it
 // any more.
 // The branch acts only for the session that owns the fleet lock; drivers own
@@ -1637,7 +1637,7 @@ import { pathToFileURL } from "node:url";
 
 // A second live task the wake does not name, plus the memory of a task whose
 // records are already gone.
-writeFileSync(`${home}/state/other-task.meta`, `project=${approvedProject}\nwindow=default:wX:p1\nterminal=orca-term-1\n`);
+writeFileSync(`${home}/state/other-task.meta`, `project=${approvedProject}\nwindow=default:wX:p1\nterminal=orca-term-1\nspawn_gen=other-task-generation\n`);
 fire("session_start", {}, defaultSessionCtx);
 
 let finish;
@@ -1656,6 +1656,11 @@ const fleet = await report.execute("fleet", { task: "fleet", verdict: "routine",
 if (fleet.isError) throw new Error(`a fleet report was refused during a task-local wake: ${JSON.stringify(fleet)}`);
 const named = await report.execute("named", { task: "branch-driver", verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
 if (named.isError) throw new Error(`the wake's own task was refused: ${JSON.stringify(named)}`);
+writeFileSync(`${home}/state/branch-driver.meta`, `project=${approvedProject}\nwindow=fm-branch-driver\nspawn_gen=replacement-generation\n`);
+const replaced = await report.execute("replaced", { task: "branch-driver", verdict: "captain", summary: "stale completion" }, undefined, undefined, {});
+if (!replaced.isError || !replaced.content[0].text.includes("different spawn generation")) {
+  throw new Error(`a stale report crossed into a replacement task incarnation: ${JSON.stringify(replaced)}`);
+}
 finish();
 await settle(() => !existsSync(`${home}/state/.branch-eligible-rows`), "task-local grant release");
 
@@ -1698,6 +1703,9 @@ if (JSON.stringify([...scope.liveTasks].sort()) !== JSON.stringify(["branch-driv
 }
 if (JSON.stringify(scope.eligibleSeqs) !== JSON.stringify(["1", "2", "4"])) {
   throw new Error(`the main-owned check row leaked into the branch claim or an endpoint alias was missed: ${JSON.stringify(scope)}`);
+}
+if (scope.taskGenerations["branch-driver"] !== "replacement-generation" || scope.taskGenerations["other-task"] !== "other-task-generation") {
+  throw new Error(`task generations were not captured with wake scope: ${JSON.stringify(scope)}`);
 }
 process.exit(0);
 EOF

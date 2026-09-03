@@ -58,7 +58,7 @@
 #
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
-#       --summary <text> [--wake <text>] [--silent true|false]
+#       --summary <text> [--wake <text>] [--silent true|false] [--spawn-gen <generation>]
 #     Append one outcome record; prints the assigned seq.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
@@ -106,7 +106,7 @@ OUTCOME_INDEX_MAX_BYTES=512
 OUTCOME_INDEX_READY="$STATE/.branch-outcome-index-ready"
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | processed-init [--held-lock] | list [--recent <n>] | startup-replay" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--spawn-gen <generation>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | processed-init [--held-lock] | list [--recent <n>] | startup-replay" >&2
   exit 2
 }
 
@@ -431,6 +431,8 @@ case "$CMD" in
     SUMMARY=''
     WAKE=''
     SILENT=false
+    EXPECTED_SPAWN_GEN=''
+    HAS_EXPECTED_SPAWN_GEN=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -438,6 +440,7 @@ case "$CMD" in
         --summary) SUMMARY=${2:-}; shift 2 || usage ;;
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
+        --spawn-gen) EXPECTED_SPAWN_GEN=${2:-}; HAS_EXPECTED_SPAWN_GEN=1; shift 2 || usage ;;
         *) usage ;;
       esac
     done
@@ -446,11 +449,30 @@ case "$CMD" in
     [ -n "$SUMMARY" ] || usage
     case "$VERDICT" in routine|captain) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
+    if [ "$HAS_EXPECTED_SPAWN_GEN" -eq 1 ]; then
+      case "$EXPECTED_SPAWN_GEN" in ''|.*|*[!A-Za-z0-9._-]*) usage ;; esac
+      [ "$TASK" != fleet ] || usage
+    fi
     if [ "$SILENT" = true ] && { [ "$TASK" != fleet ] || [ "$VERDICT" != routine ]; }; then
       echo "error: silent outcomes must be routine fleet outcomes" >&2
       exit 2
     fi
     fm_lock_acquire_wait "$LOCK"
+    if [ "$HAS_EXPECTED_SPAWN_GEN" -eq 1 ]; then
+      TASK_META="$STATE/$TASK.meta"
+      if [ ! -f "$TASK_META" ] || [ -L "$TASK_META" ] \
+          || [ "$(LC_ALL=C awk -F= '$1 == "spawn_gen" { count++ } END { print count + 0 }' "$TASK_META" 2>/dev/null)" -ne 1 ]; then
+        fm_lock_release "$LOCK"
+        echo "error: refusing outcome because task $TASK has no unambiguous live spawn generation" >&2
+        exit 1
+      fi
+      CURRENT_SPAWN_GEN=$(LC_ALL=C awk -F= '$1 == "spawn_gen" { sub(/^[^=]*=/, ""); print }' "$TASK_META" 2>/dev/null) || CURRENT_SPAWN_GEN=
+      if [ "$CURRENT_SPAWN_GEN" != "$EXPECTED_SPAWN_GEN" ]; then
+        fm_lock_release "$LOCK"
+        echo "error: refusing outcome because task $TASK is now a different spawn generation" >&2
+        exit 1
+      fi
+    fi
     if [ "$TASK" != fleet ] \
         && [ ! -e "$STATE/$TASK.meta" ] && [ ! -e "$STATE/$TASK.status" ]; then
       fm_lock_release "$LOCK"

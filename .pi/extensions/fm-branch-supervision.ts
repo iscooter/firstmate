@@ -521,7 +521,7 @@ export default function (pi: ExtensionAPI) {
   // the wake never named (or one whose record is already gone) is never
   // stored or delivered. Null only outside a wake prompt, where no model turn
   // can reach the tool.
-  let wakeTaskScope: { heartbeat: boolean; rows: string[]; tasks: Set<string> } | null = null;
+  let wakeTaskScope: { heartbeat: boolean; rows: string[]; tasks: Map<string, string> } | null = null;
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -932,8 +932,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function wakeScopeRefusal(task: string): string {
-    if (!wakeTaskScope || task === "fleet" || wakeTaskScope.tasks.has(task)) return "";
-    const allowed = [...wakeTaskScope.tasks].sort();
+    if (!wakeTaskScope || task === "fleet") return "";
+    if (wakeTaskScope.tasks.has(task)) {
+      if (wakeTaskScope.tasks.get(task)) return "";
+      return `report refused: ${task} has no stable spawn generation, so its current incarnation cannot be verified`;
+    }
+    const allowed = [...wakeTaskScope.tasks.keys()].sort();
     const named = allowed.length === 0 ? "no task" : allowed.join(", ");
     if (wakeTaskScope.heartbeat) {
       return `report refused: ${task} has no live task record, so this fleet review cannot report it; live tasks: ${named} (use fleet for a fleet-wide outcome)`;
@@ -982,6 +986,7 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
+        if (task !== "fleet") appendArgs.push("--spawn-gen", wakeTaskScope?.tasks.get(task) ?? "");
         if (wake) appendArgs.push("--wake", wake);
         if (!actingAsOwner(toolGeneration)) {
           return {
@@ -1243,7 +1248,10 @@ ${context.command}
         wakeTaskScope = {
           heartbeat,
           rows: [...scope.eligibleSeqs],
-          tasks: new Set(heartbeat ? scope.liveTasks : scope.eligibleTasks),
+          tasks: new Map(
+            (heartbeat ? scope.liveTasks : scope.eligibleTasks)
+              .map((task): [string, string] => [task, scope.taskGenerations[task] ?? ""]),
+          ),
         };
         try {
           await session.prompt(
