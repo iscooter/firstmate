@@ -267,12 +267,12 @@ _fm_pr_ref_unwrap() { # <token>
 
 _fm_pr_ref_shaped() { # <token>
   case "${1-}" in
-    *://*/pull/[0-9]*|\
-    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
-    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
-    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
-    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
-    */*/-/merge_requests/[0-9]*) return 0 ;;
+    *://*/[Pp][Uu][Ll][Ll]/[0-9]*|\
+    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
+    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
+    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
+    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
+    */*/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/[0-9]*) return 0 ;;
   esac
   return 1
 }
@@ -294,9 +294,15 @@ fm_pr_task_recorded_urls() { # <state> <task-id>
     done
     return 0
   fi
+  fm_pr_task_status_recorded_urls "$state" "$id" || return 1
+  _fm_pr_meta_recorded_urls "$state/$id.meta"
+}
+
+fm_pr_task_status_recorded_urls() { # <state> <task-id>
+  local state=${1-} id=${2-}
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
   fm_task_id_path_safe "$id" || return 1
   _fm_pr_status_recorded_urls "$state/$id.status"
-  _fm_pr_meta_recorded_urls "$state/$id.meta"
 }
 
 _fm_pr_status_recorded_urls() { # <status-file>

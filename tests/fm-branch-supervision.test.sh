@@ -175,7 +175,7 @@ test_outcome_startup_replay_preserves_silence() {
 # The owner had been assembled from world knowledge instead of copied, so the
 # store now refuses any forge URL that is not already in the task's records.
 test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
-  local home real invented out status store before bare_github
+  local home real invented out status store before bare_github noncanonical_ref
   home="$TMP_ROOT/store-pr-url-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
@@ -251,6 +251,19 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   assert_contains "$out" 'gitlab.example/group/backpass/-/merge_requests/108' \
     "the bare GitLab refusal did not name the rejected reference"
   [ "$(cat "$store")" = "$before" ] || fail "a refused bare GitLab reference changed the store"
+
+  for noncanonical_ref in \
+    'https://github.com/karpathy/backpass/PULL/108' \
+    'https://gitlab.example/group/backpass/-/MERGE_REQUESTS/108'; do
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+      --task backpass-clean-slate --verdict captain \
+      --summary "review $noncanonical_ref" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "a case-variant forge path bypassed the outcome gate: $noncanonical_ref"
+    assert_contains "$out" "$noncanonical_ref" \
+      "the case-variant path refusal did not name the rejected reference"
+    [ "$(cat "$store")" = "$before" ] || fail "a refused case-variant forge path changed the store"
+  done
 
   # A URL recorded for one task is not evidence for another task's outcome.
   printf 'working: unrelated\n' > "$home/state/other-task.status"

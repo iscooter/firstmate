@@ -146,6 +146,24 @@ resolve_or_refuse() {
 }
 resolve_or_refuse || exit 1
 
+STATUS_URLS=$(fm_pr_task_status_recorded_urls "$STATE" "$ID") || {
+  echo "error: task status is unavailable" >&2
+  exit 1
+}
+if [ -n "$STATUS_URLS" ]; then
+  case "
+$STATUS_URLS
+" in
+    *"
+$URL
+"*) ;;
+    *)
+      echo "error: refusing to record $URL because the task status reports another forge URL; use the URL the worker itself reported" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
 # head commit as a selectable field; plain glab exposes it only inside its JSON
 # output, which would need a JSON processor firstmate does not require, so a

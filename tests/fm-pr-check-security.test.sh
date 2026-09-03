@@ -509,6 +509,19 @@ test_recording_requires_a_live_forge_resolution() {
   printf 'done: PR %s checks green\n' "$real" > "$state/backpass-clean-slate.status"
   before=$(state_snapshot "$state")
 
+  set +e
+  run_check_entry "$dir" backpass-clean-slate "$invented" > "$dir/live.out" 2> "$dir/live.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a live PR URL absent from the worker status was accepted"
+  assert_contains "$(cat "$dir/live.err")" "$invented" \
+    "the provenance refusal did not name the URL it refused"
+  assert_contains "$(cat "$dir/live.err")" "use the URL the worker itself reported" \
+    "the provenance refusal did not direct supervision to the worker report"
+  ! grep -q '^pr=' "$state/backpass-clean-slate.meta" \
+    || fail "a live but unreported PR URL was recorded"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a provenance refusal changed state"
+
   # GitHub cannot resolve the invented owner, exactly as it 404ed in the field.
   set +e
   FM_TEST_FORGE_MISSING_REPO=karpathy/backpass run_check_entry "$dir" backpass-clean-slate "$invented" \
@@ -541,6 +554,15 @@ test_recording_requires_a_live_forge_resolution() {
   grep -qxF "pr=$real" "$state/backpass-clean-slate.meta" \
     || fail "the live-resolved PR URL was not recorded"
   grep -q '^armed:' "$dir/ok.out" || fail "the live-resolved PR URL did not arm a poll"
+
+  dir=$(make_case live-resolution-without-status-url)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-without-status-url
+  printf 'working: preparing review\n' > "$state/task-without-status-url.status"
+  run_check_entry "$dir" task-without-status-url "$real" >/dev/null 2> "$dir/no-status.err" \
+    || fail "a live PR URL was refused when status carried no forge URL: $(cat "$dir/no-status.err")"
+  grep -qxF "pr=$real" "$state/task-without-status-url.meta" \
+    || fail "a live PR URL was not recorded when status carried no forge URL"
 
   # A GitLab merge request the instance cannot answer is refused the same way.
   dir=$(make_case live-resolution-gitlab)
