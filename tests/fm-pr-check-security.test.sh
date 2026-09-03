@@ -585,6 +585,50 @@ test_recording_requires_a_live_forge_resolution() {
   pass "a PR URL is recorded only when its own forge resolves it live"
 }
 
+test_refused_registration_preserves_pending_retirement() {
+  local dir state real invented before rc mode suffix
+  real=https://github.com/kunchenguid/backpass/pull/108
+  invented=https://github.com/karpathy/backpass/pull/108
+
+  for mode in provenance unresolved; do
+    dir=$(make_case "pending-retirement-$mode")
+    state="$dir/home/state"
+    write_task_meta "$dir" backpass-clean-slate
+    printf 'pr=%s\n' "$real" >> "$state/backpass-clean-slate.meta"
+    printf 'done: [PR](%s) checks green\n' "$real" > "$state/backpass-clean-slate.status"
+    seed_canonical_poll "$dir" backpass-clean-slate "$real"
+    fm_pr_poll_snapshot_capture "$state" backpass-clean-slate "$POLL" \
+      || fail "could not snapshot pending retirement refusal fixture"
+    fm_pr_poll_retirement_publish "$state" backpass-clean-slate "$POLL" merged \
+      || fail "could not publish pending retirement refusal fixture"
+    before=$(state_snapshot "$state")
+
+    set +e
+    if [ "$mode" = provenance ]; then
+      run_check_entry "$dir" backpass-clean-slate "$invented" >/dev/null 2> "$dir/refused.err"
+    else
+      FM_TEST_FORGE_MISSING_REPO=karpathy/backpass \
+        run_check_entry "$dir" backpass-clean-slate "$invented" >/dev/null 2> "$dir/refused.err"
+    fi
+    rc=$?
+    set -e
+
+    [ "$rc" -ne 0 ] || fail "$mode refusal accepted a replacement registration"
+    [ "$(state_snapshot "$state")" = "$before" ] \
+      || fail "$mode refusal changed pending retirement state"
+    [ ! -s "$dir/guard.log" ] || fail "$mode refusal called the mutating guard"
+    for suffix in check.sh pr-poll pr-poll-registration pr-poll-retirement; do
+      [ -f "$state/backpass-clean-slate.$suffix" ] \
+        || fail "$mode refusal removed pending retirement artifact $suffix"
+    done
+    if [ "$mode" = provenance ]; then
+      assert_contains "$(cat "$dir/refused.err")" "use the URL the worker itself reported" \
+        "a Markdown-wrapped worker URL did not enforce provenance"
+    fi
+  done
+  pass "registration refusals preserve pending retirement state"
+}
+
 test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
@@ -2241,6 +2285,7 @@ test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_recording_requires_a_live_forge_resolution
+test_refused_registration_preserves_pending_retirement
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_atomic_interruption_leaves_no_partial_artifact

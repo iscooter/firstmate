@@ -222,6 +222,15 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
 
   out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task backpass-clean-slate --verdict captain \
+    --summary 'review [PR](https://github.com/karpathy/backpass/pull/108/files)' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a Markdown-wrapped noncanonical URL was recorded"
+  assert_contains "$out" 'https://github.com/karpathy/backpass/pull/108/files' \
+    "the wrapped noncanonical refusal did not name the rejected reference"
+  [ "$(cat "$store")" = "$before" ] || fail "a refused wrapped noncanonical URL changed the store"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
     --summary 'review github.com/karpathy/backpass/pull/108' 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "a bare GitHub PR reference bypassed the outcome gate"

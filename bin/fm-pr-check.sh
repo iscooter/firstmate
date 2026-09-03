@@ -46,14 +46,6 @@ if [ ! -f "$META" ] || [ -L "$META" ] || [ "$(fm_pr_file_link_count "$META")" !=
   exit 1
 fi
 
-# A prior exact merged result may have queued its durable wake immediately
-# before interruption.
-# Finish only its identity-bound receipt before publishing a replacement poll.
-fm_pr_poll_retirement_recover_one "$STATE" "$ID" "$SCRIPT_DIR/fm-pr-poll.sh" || {
-  echo "error: pending PR poll retirement could not be validated" >&2
-  exit 1
-}
-
 # Refuse to arm a GitLab watch with no glab on PATH. The poll is silent on
 # every error by design, so a missing CLI would be indistinguishable from a
 # merge request that is never merged. Arming is the one point where that can be
@@ -62,8 +54,6 @@ if [ "$PROVIDER" = gitlab ] && ! command -v glab >/dev/null 2>&1; then
   echo "error: watching a GitLab merge request requires glab on PATH" >&2
   exit 1
 fi
-
-"$FM_ROOT/bin/fm-guard.sh" || true
 
 # The forge is the only authority on whether this pull request exists, and
 # nothing downstream can tell an invented URL from a real one once pr= is
@@ -163,6 +153,16 @@ $URL
       ;;
   esac
 fi
+
+# A prior exact merged result may have queued its durable wake immediately
+# before interruption.
+# Finish only its identity-bound receipt before publishing a replacement poll.
+fm_pr_poll_retirement_recover_one "$STATE" "$ID" "$SCRIPT_DIR/fm-pr-poll.sh" || {
+  echo "error: pending PR poll retirement could not be validated" >&2
+  exit 1
+}
+
+"$FM_ROOT/bin/fm-guard.sh" || true
 
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
 # head commit as a selectable field; plain glab exposes it only inside its JSON
