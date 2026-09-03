@@ -206,6 +206,13 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   assert_contains "$(cat "$store")" "$real" "the copied URL did not reach the store"
   assert_not_contains "$(cat "$store")" karpathy "the invented owner survived anywhere in the store"
 
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary "backpass clean slate is ready for review: [PR]($real)" >/dev/null \
+    || fail "a Markdown-wrapped copied URL was refused"
+  assert_contains "$(cat "$store")" "[PR]($real)" \
+    "the Markdown-wrapped copied URL did not reach the store"
+
   # A summary carrying no forge reference at all is untouched by the gate.
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task backpass-clean-slate --verdict routine --summary 'worker is still running tests' >/dev/null \
@@ -263,6 +270,7 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
 
   for noncanonical_ref in \
     'https://github.com/karpathy/backpass/PULL/108' \
+    'https://github.com/karpathy/backpass/pull/%31%30%38' \
     'https://gitlab.example/group/backpass/-/MERGE_REQUESTS/108'; do
     out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
       --task backpass-clean-slate --verdict captain \

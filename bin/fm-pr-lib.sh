@@ -229,7 +229,7 @@ fm_pr_head_valid() {
 # canonical grammar: a decorated form such as a "/files" suffix must surface as
 # an unparseable reference rather than slip past as ordinary prose.
 fm_pr_text_forge_refs() { # <text>
-  local text=${1-} token embedded noglob=0 words
+  local text=${1-} token candidate prefix noglob=0 words
   case "$-" in *f*) noglob=1 ;; esac
   set -f
   # shellcheck disable=SC2206 # Deliberate whitespace split of free-form text.
@@ -237,29 +237,27 @@ fm_pr_text_forge_refs() { # <text>
   [ "$noglob" = 1 ] || set +f
   for token in ${words+"${words[@]}"}; do
     token=$(_fm_pr_ref_unwrap "$token")
-    if _fm_pr_ref_shaped "$token"; then
-      _fm_pr_ref_print "$token"
-    fi
+    candidate=$token
+    prefix=
     case "$token" in
       https://*) ;;
       *https://*)
-        embedded="https://${token#*https://}"
-        embedded=$(_fm_pr_ref_unwrap "$embedded")
-        if _fm_pr_ref_shaped "$embedded"; then
-          _fm_pr_ref_print "$embedded"
-        fi
+        prefix=${token%%https://*}
+        candidate="https://${token#*https://}"
+        candidate=$(_fm_pr_ref_unwrap "$candidate")
         ;;
     esac
+    if fm_pr_url_parse "$candidate"; then
+      if [ -n "$prefix" ] && _fm_pr_ref_shaped "$prefix"; then
+        printf '!%s\n' "$token"
+      fi
+      printf '%s\n' "$FM_PR_URL"
+    elif _fm_pr_ref_shaped "$token"; then
+      printf '!%s\n' "$token"
+    elif [ "$candidate" != "$token" ] && _fm_pr_ref_shaped "$candidate"; then
+      printf '!%s\n' "$candidate"
+    fi
   done
-}
-
-_fm_pr_ref_print() { # <reference>
-  local ref=$1
-  if fm_pr_url_parse "$ref"; then
-    printf '%s\n' "$FM_PR_URL"
-  else
-    printf '!%s\n' "$ref"
-  fi
 }
 
 # Strip the brackets, quotes, and sentence punctuation prose wraps a URL in. A
@@ -283,12 +281,12 @@ _fm_pr_ref_unwrap() { # <token>
 
 _fm_pr_ref_shaped() { # <token>
   case "${1-}" in
-    *://*/[Pp][Uu][Ll][Ll]/[0-9]*|\
-    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
-    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
-    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
-    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/[0-9]*|\
-    */*/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/[0-9]*) return 0 ;;
+    *://*/[Pp][Uu][Ll][Ll]/?*|\
+    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
+    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
+    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
+    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
+    */*/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/?*) return 0 ;;
   esac
   return 1
 }
