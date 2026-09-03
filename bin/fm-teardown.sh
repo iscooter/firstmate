@@ -229,6 +229,8 @@ CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
 META_LOCK=
 META_LOCK_HELD=0
+OUTCOME_LOCK=
+OUTCOME_LOCK_HELD=0
 DESCENDANT_LOCK_PATHS=()
 DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
@@ -254,6 +256,10 @@ teardown_release_locks() {
   if [ -n "${LOCAL_REGISTRY_LOCK:-}" ]; then
     fm_lock_release "$LOCAL_REGISTRY_LOCK" || true
     LOCAL_REGISTRY_LOCK=
+  fi
+  if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$OUTCOME_LOCK" || true
+    OUTCOME_LOCK_HELD=0
   fi
   if [ "$META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$META_LOCK" || true
@@ -2913,6 +2919,11 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
+if [ -d "$STATE" ]; then
+  OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
+  fm_lock_acquire_wait "$OUTCOME_LOCK" || exit 1
+  OUTCOME_LOCK_HELD=1
+fi
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.turn-ended" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
@@ -2934,6 +2945,10 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
   BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
   if ! fm_backlog_atomic_transition "$BACKLOG_TRANSITION" "$STATE/$ID.meta" "$BACKLOG_CLOSE_MARKER" \
       "$DATA" "$ID" "$STATE" "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}"; then
+    if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
+      fm_lock_release "$OUTCOME_LOCK"
+      OUTCOME_LOCK_HELD=0
+    fi
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     if [ "$BACKLOG_TRANSITION" = retain ]; then
@@ -2950,11 +2965,19 @@ elif [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
   :
 else
   if ! fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE"; then
+    if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
+      fm_lock_release "$OUTCOME_LOCK"
+      OUTCOME_LOCK_HELD=0
+    fi
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
   fi
+fi
+if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
+  fm_lock_release "$OUTCOME_LOCK"
+  OUTCOME_LOCK_HELD=0
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0

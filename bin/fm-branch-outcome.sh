@@ -468,7 +468,13 @@ case "$CMD" in
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
       "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
-    if ! write_outcome_index "$TASK" "$SEQ" || ! publish_outcome_index_ready "$SEQ"; then
+    if { [ -e "$STATE/$TASK.meta" ] || [ -e "$STATE/$TASK.status" ]; } \
+        && ! write_outcome_index "$TASK" "$SEQ"; then
+      fm_lock_release "$LOCK"
+      echo "error: outcome was stored but its bounded task index could not be updated" >&2
+      exit 1
+    fi
+    if ! publish_outcome_index_ready "$SEQ"; then
       fm_lock_release "$LOCK"
       echo "error: outcome was stored but its bounded task index could not be updated" >&2
       exit 1

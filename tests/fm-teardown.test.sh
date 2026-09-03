@@ -582,6 +582,13 @@ test_local_only_fork_remote_allows() {
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
   [ ! -e "$case_dir/state/.task-x1.branch-outcome-index" ] \
     || fail "fork-allow: teardown left the task's branch outcome index behind"
+  FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-x1 --verdict routine --summary 'teardown completed' >/dev/null \
+    || fail "fork-allow: post-teardown branch report failed"
+  [ ! -e "$case_dir/state/.task-x1.branch-outcome-index" ] \
+    || fail "fork-allow: post-teardown branch report recreated the retired task index"
+  [ "$(cat "$case_dir/state/.branch-outcome-index-ready")" = 1 ] \
+    || fail "fork-allow: post-teardown branch report did not publish its ready sequence"
   jq -e --arg id task-x1 '
     .schema == "fm-secondmate-home-summary.v1"
     and all(.endpoints[]; .id != $id)
