@@ -270,6 +270,8 @@ _fm_pr_ref_shaped() { # <token>
     *://*/pull/[0-9]*|\
     [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
     [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
+    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
+    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
     */*/-/merge_requests/[0-9]*) return 0 ;;
   esac
   return 1

@@ -231,7 +231,8 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
 
   for bare_github in \
     'www.github.com/karpathy/backpass/pull/108' \
-    'GitHub.com/karpathy/backpass/pull/108'; do
+    'GitHub.com/karpathy/backpass/pull/108' \
+    '//github.com/karpathy/backpass/pull/108'; do
     out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
       --task backpass-clean-slate --verdict captain \
       --summary "review $bare_github" 2>&1)
