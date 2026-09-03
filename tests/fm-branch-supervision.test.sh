@@ -220,6 +220,24 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   [ "$status" -ne 0 ] || fail "a decorated invented URL was recorded"
   [ "$(cat "$store")" = "$before" ] || fail "a refused decorated URL changed the store"
 
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary 'review github.com/karpathy/backpass/pull/108' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a bare GitHub PR reference bypassed the outcome gate"
+  assert_contains "$out" 'github.com/karpathy/backpass/pull/108' \
+    "the bare GitHub refusal did not name the rejected reference"
+  [ "$(cat "$store")" = "$before" ] || fail "a refused bare GitHub reference changed the store"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary 'review gitlab.example/group/backpass/-/merge_requests/108' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a bare GitLab MR reference bypassed the outcome gate"
+  assert_contains "$out" 'gitlab.example/group/backpass/-/merge_requests/108' \
+    "the bare GitLab refusal did not name the rejected reference"
+  [ "$(cat "$store")" = "$before" ] || fail "a refused bare GitLab reference changed the store"
+
   # A URL recorded for one task is not evidence for another task's outcome.
   printf 'working: unrelated\n' > "$home/state/other-task.status"
   out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \

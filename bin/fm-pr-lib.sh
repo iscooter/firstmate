@@ -267,7 +267,7 @@ _fm_pr_ref_unwrap() { # <token>
 
 _fm_pr_ref_shaped() { # <token>
   case "${1-}" in
-    *://*/pull/[0-9]*|*://*/-/merge_requests/[0-9]*) return 0 ;;
+    *://*/pull/[0-9]*|github.com/*/pull/[0-9]*|*/*/-/merge_requests/[0-9]*) return 0 ;;
   esac
   return 1
 }
@@ -330,9 +330,6 @@ fm_pr_outcome_text_copied() { # <state> <task-id> <text>...
   FM_PR_OUTCOME_REJECTED=
   for text in "$@"; do
     [ -n "$text" ] || continue
-    # Text with no URL at all cannot carry a forge reference, and the durable
-    # records are only read once a reference actually needs checking.
-    case "$text" in *://*) ;; *) continue ;; esac
     while IFS= read -r ref; do
       [ -n "$ref" ] || continue
       case "$ref" in
