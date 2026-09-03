@@ -282,6 +282,7 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
 
   for noncanonical_ref in \
     'https://github.com/karpathy/backpass/PULL/108' \
+    'https://github.com/karpathy/backpass/%70ull/108' \
     'https://github.com/karpathy/backpass/pull/%31%30%38' \
     'https://gitlab.example/group/backpass/-/MERGE_REQUESTS/108' \
     '[MR](//gitlab/group/repo/-/merge_requests/9)'; do

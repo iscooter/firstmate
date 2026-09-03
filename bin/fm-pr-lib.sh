@@ -280,10 +280,42 @@ _fm_pr_ref_unwrap() { # <token>
 }
 
 _fm_pr_ref_shaped() { # <token>
+  local token=${1-} decoded
+  _fm_pr_ref_route_shaped "$token" && return 0
+  decoded=$(_fm_pr_percent_decode_once "$token")
+  [ "$decoded" != "$token" ] && _fm_pr_ref_route_shaped "$decoded"
+}
+
+_fm_pr_ref_route_shaped() { # <token>
   local token=${1-} pattern
   local LC_ALL=C
   pattern='(/[Pp][Uu][Ll][Ll]/|/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/)([0-9]|%[0-9A-Fa-f]{2})[^/[:space:]]*'
   [[ "$token" =~ $pattern ]]
+}
+
+_fm_pr_percent_decode_once() { # <token>
+  local input=${1-} output= prefix rest hex char
+  while case "$input" in *%??*) true ;; *) false ;; esac; do
+    prefix=${input%%\%*}
+    rest=${input#*%}
+    hex=${rest:0:2}
+    case "$hex" in
+      [0-9A-Fa-f][0-9A-Fa-f])
+        if [ "$hex" = 00 ]; then
+          char=
+        else
+          printf -v char '%b' "\\x$hex"
+        fi
+        output=$output$prefix$char
+        input=${rest:2}
+        ;;
+      *)
+        output=$output$prefix%
+        input=$rest
+        ;;
+    esac
+  done
+  printf '%s' "$output$input"
 }
 
 # Print every canonical forge URL this home has durably recorded for the task,
