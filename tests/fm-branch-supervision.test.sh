@@ -248,13 +248,14 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   for bare_github in \
     'www.github.com/karpathy/backpass/pull/108' \
     'GitHub.com/karpathy/backpass/pull/108' \
-    '//github.com/karpathy/backpass/pull/108'; do
+    '//github.com/karpathy/backpass/pull/108' \
+    '[PR](//github.com/karpathy/backpass/pull/108)'; do
     out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
       --task backpass-clean-slate --verdict captain \
       --summary "review $bare_github" 2>&1)
     status=$?
     [ "$status" -ne 0 ] || fail "noncanonical bare GitHub reference bypassed the outcome gate: $bare_github"
-    assert_contains "$out" "$bare_github" \
+    assert_contains "$out" 'karpathy/backpass/pull/108' \
       "the noncanonical GitHub refusal did not name the rejected reference"
     [ "$(cat "$store")" = "$before" ] || fail "a refused noncanonical GitHub reference changed the store"
   done

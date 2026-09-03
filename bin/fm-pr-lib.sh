@@ -281,12 +281,8 @@ _fm_pr_ref_unwrap() { # <token>
 
 _fm_pr_ref_shaped() { # <token>
   case "${1-}" in
-    *://*/[Pp][Uu][Ll][Ll]/?*|\
-    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
-    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
-    //[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
-    //[Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/[Pp][Uu][Ll][Ll]/?*|\
-    */*/-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/?*) return 0 ;;
+    */[Pp][Uu][Ll][Ll]/?*|\
+    */-/[Mm][Ee][Rr][Gg][Ee]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/?*) return 0 ;;
   esac
   return 1
 }
