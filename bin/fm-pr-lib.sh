@@ -294,7 +294,7 @@ _fm_pr_ref_route_shaped() { # <token>
 }
 
 _fm_pr_percent_decode_once() { # <token>
-  local input=${1-} output= prefix rest hex char
+  local input=${1-} output='' prefix rest hex char
   while case "$input" in *%??*) true ;; *) false ;; esac; do
     prefix=${input%%\%*}
     rest=${input#*%}
