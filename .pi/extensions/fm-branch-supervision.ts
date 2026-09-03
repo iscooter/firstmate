@@ -516,11 +516,12 @@ export default function (pi: ExtensionAPI) {
   // deterministically from the eligible rows before the prompt opens and
   // cleared when it settles: a signal or stale wake names exactly the tasks
   // its rows resolve to, a heartbeat review may name any task with a live
-  // record at that moment, and `fleet` is always allowed. fm_branch_report
-  // refuses every other task id, so a report typed from memory about a task
-  // the wake never named (or one whose record is already gone) is never
-  // stored or delivered. Null only outside a wake prompt, where no model turn
-  // can reach the tool.
+  // record at that moment, and `fleet` is always allowed. Each task is paired
+  // with the spawn generation captured then; fm_branch_report passes that
+  // generation into the locked append, which refuses a missing, retired, or
+  // replacement incarnation. It also refuses every task the wake never named,
+  // so a report typed from memory is never stored or delivered. Null only
+  // outside a wake prompt, where no model turn can reach the tool.
   let wakeTaskScope: { heartbeat: boolean; rows: string[]; tasks: Map<string, string> } | null = null;
   let mainStreaming = false;
   let shuttingDown = false;

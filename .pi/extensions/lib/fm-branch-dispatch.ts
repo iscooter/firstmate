@@ -47,6 +47,11 @@ export interface UnreadWakeScope {
    * outcome.
    */
   liveTasks: string[];
+  /**
+   * The unambiguous spawn generation captured for each live task above, keyed
+   * in a null-prototype object so every syntactically valid task id is inert.
+   * An empty value means the metadata cannot safely identify an incarnation.
+   */
   taskGenerations: Record<string, string>;
   /**
    * True only when this scan itself is untrustworthy: the queue or its

@@ -44,9 +44,11 @@
 #     before append and published only after the cache update; processed-init
 #     rebuilds every cache before publishing it, so interruption or upgrade
 #     fails closed without making each drain scan lifetime history.
-#     bin/fm-teardown.sh removes a retired task's cache with its other records,
-#     and the rebuild skips a task that has neither a live meta nor a status
-#     log, so a task that is gone leaves no index behind.
+#     bin/fm-teardown.sh removes a retired task's cache with its other records
+#     while holding the status-presentation lock and then this store's lock;
+#     append verifies any supplied spawn generation inside that same outcome
+#     boundary, and the rebuild skips a task that has neither a live meta nor a
+#     status log, so retirement cannot race a ghost or replacement-task index.
 #     Main-actor drain calls processed-init under the outcome lock when that
 #     ready marker is absent or invalid, on every harness; only a genuine store
 #     fault keeps the lost-wake backstop skipped.

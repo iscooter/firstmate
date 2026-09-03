@@ -88,6 +88,16 @@
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
 #
+# Before its first destructive step, every ordinary, local-secondmate, or remote-
+# secondmate retirement acquires the home's status-presentation lock and then its
+# outcome-store lock. Forced descendant cleanup applies the same ordered boundary
+# to each descendant home before changing that child. The locks remain held
+# through removal of status, metadata, and the per-task outcome index, so neither
+# presentation nor an outcome append can publish state for a retired incarnation.
+# FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT is the positive whole-second bound for each
+# acquire (default 10); contention refuses and retains the durable records for a
+# retry instead of wedging teardown.
+#
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
 # non-linked worktree, .git/index.lock) that makes `treehouse return --force` fail
