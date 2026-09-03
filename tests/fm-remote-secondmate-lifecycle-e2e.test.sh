@@ -1231,6 +1231,8 @@ while [ ! -f "$TMP_ROOT/launch.entered" ]; do
   [ "$launch_wait" -le 1500 ] || fail "remote respawn never reached its blocked launch"
   sleep 0.02
 done
+printf 'fm-branch-outcome-index-v1\t5\t0\t-\n' \
+  > "$PARENT/state/.ios.branch-outcome-index"
 remote_env "$ROOT/bin/fm-teardown.sh" ios > "$TMP_ROOT/teardown-serialized.out" 2>&1 &
 teardown_pid=$!
 sleep 0.2
@@ -1251,6 +1253,8 @@ if ! wait "$teardown_pid"; then
 fi
 assert_absent "$REMOTE_HOME" "remote retirement did not remove the remote home"
 assert_absent "$PARENT/state/ios.meta" "remote retirement did not remove parent metadata"
+assert_absent "$PARENT/state/.ios.branch-outcome-index" \
+  "remote retirement did not remove the task outcome index"
 assert_absent "$PARENT/state/.backlog-handoff-ios.wake-pending" \
   "remote retirement left receiver wake state that could poison a replacement route"
 assert_absent "$retired_wake_rec" "remote retirement left the retired receiver wake correlation"

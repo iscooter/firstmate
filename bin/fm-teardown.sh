@@ -240,6 +240,36 @@ DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
+teardown_acquire_outcome_boundary() {
+  [ "$PRESENTATION_LOCK_HELD" = 0 ] && [ "$OUTCOME_LOCK_HELD" = 0 ] || return 1
+  [ -d "$STATE" ] || return 0
+  PRESENTATION_LOCK="$STATE/.status-presentation-lock"
+  if ! fm_lock_acquire_wait_bounded "$PRESENTATION_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: status presentation for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
+    return 1
+  fi
+  PRESENTATION_LOCK_HELD=1
+  OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
+  if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
+    fm_lock_release "$PRESENTATION_LOCK" || true
+    PRESENTATION_LOCK_HELD=0
+    return 1
+  fi
+  OUTCOME_LOCK_HELD=1
+}
+
+teardown_release_outcome_boundary() {
+  if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$OUTCOME_LOCK" || true
+    OUTCOME_LOCK_HELD=0
+  fi
+  if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$PRESENTATION_LOCK" || true
+    PRESENTATION_LOCK_HELD=0
+  fi
+}
+
 teardown_release_locks() {
   local status=$? i
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
@@ -261,14 +291,7 @@ teardown_release_locks() {
     fm_lock_release "$LOCAL_REGISTRY_LOCK" || true
     LOCAL_REGISTRY_LOCK=
   fi
-  if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
-    fm_lock_release "$OUTCOME_LOCK" || true
-    OUTCOME_LOCK_HELD=0
-  fi
-  if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
-    fm_lock_release "$PRESENTATION_LOCK" || true
-    PRESENTATION_LOCK_HELD=0
-  fi
+  teardown_release_outcome_boundary
   if [ "$META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$META_LOCK" || true
     META_LOCK_HELD=0
@@ -687,6 +710,7 @@ remote_secondmate_teardown() {
       }
     done
   fi
+  teardown_acquire_outcome_boundary || return 1
   "$SCRIPT_DIR/fm-procevent-remote-reply.sh" retire-quiesce-locked "$ID" "$FORCE" >/dev/null 2>&1 || {
     echo "REFUSED: remote secondmate $ID still has an unhandled captured reply" >&2
     return 1
@@ -724,9 +748,9 @@ remote_secondmate_teardown() {
   tmp="$SECONDMATE_REG.tmp.$$"
   grep -vE "^- $ID( |$)" "$SECONDMATE_REG" > "$tmp" || true
   mv -f -- "$tmp" "$SECONDMATE_REG"
-  status_retire_presentation_task "$STATE" "$ID" || return 1
+  status_retire_presentation_task "$STATE" "$ID" "$PRESENTATION_LOCK_HELD" || return 1
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
-  rm -f -- "$STATE/$ID.turn-ended"
+  rm -f -- "$STATE/$ID.turn-ended" "$STATE/.$ID.branch-outcome-index"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
   return 0
 }
@@ -2770,20 +2794,7 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-if [ -d "$STATE" ]; then
-  PRESENTATION_LOCK="$STATE/.status-presentation-lock"
-  if ! fm_lock_acquire_wait_bounded "$PRESENTATION_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
-    echo "error: status presentation for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
-    exit 1
-  fi
-  PRESENTATION_LOCK_HELD=1
-  OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
-  if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
-    echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
-    exit 1
-  fi
-  OUTCOME_LOCK_HELD=1
-fi
+teardown_acquire_outcome_boundary || exit 1
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
@@ -2962,14 +2973,7 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
   BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
   if ! fm_backlog_atomic_transition "$BACKLOG_TRANSITION" "$STATE/$ID.meta" "$BACKLOG_CLOSE_MARKER" \
       "$DATA" "$ID" "$STATE" "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}"; then
-    if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
-      fm_lock_release "$OUTCOME_LOCK"
-      OUTCOME_LOCK_HELD=0
-    fi
-    if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
-      fm_lock_release "$PRESENTATION_LOCK"
-      PRESENTATION_LOCK_HELD=0
-    fi
+    teardown_release_outcome_boundary
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     if [ "$BACKLOG_TRANSITION" = retain ]; then
@@ -2986,28 +2990,14 @@ elif [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
   :
 else
   if ! fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE"; then
-    if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
-      fm_lock_release "$OUTCOME_LOCK"
-      OUTCOME_LOCK_HELD=0
-    fi
-    if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
-      fm_lock_release "$PRESENTATION_LOCK"
-      PRESENTATION_LOCK_HELD=0
-    fi
+    teardown_release_outcome_boundary
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
   fi
 fi
-if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
-  fm_lock_release "$OUTCOME_LOCK"
-  OUTCOME_LOCK_HELD=0
-fi
-if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
-  fm_lock_release "$PRESENTATION_LOCK"
-  PRESENTATION_LOCK_HELD=0
-fi
+teardown_release_outcome_boundary
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
