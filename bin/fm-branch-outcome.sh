@@ -54,8 +54,10 @@
 #     and the live-verified pr= identity in the task metadata (a "fleet"
 #     outcome reads the union across every task). An append carrying any other
 #     forge reference is refused, so an owner/repository assembled from memory
-#     can neither reach the store nor be published from it. bin/fm-pr-lib.sh
-#     owns the extraction and membership test.
+#     can neither reach the store nor be published from it. Pre-gate rows with
+#     an unverified URL are quarantined individually during reads: they are
+#     omitted without blocking later verified rows. bin/fm-pr-lib.sh owns the
+#     extraction and membership test.
 #   - The store is written BEFORE the outcome is delivered to main
 #     (store-first durability): nothing about a handled event depends on
 #     conversation memory.
@@ -301,7 +303,7 @@ EOF
   publish_outcome_index_ready "$(last_seq)"
 }
 
-validate_outcome_records() { # <jsonl-records>
+filter_outcome_records() { # <jsonl-records>
   local records=$1 line task summary wake rc
   [ -n "$records" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -311,13 +313,12 @@ validate_outcome_records() { # <jsonl-records>
     rc=0
     fm_pr_outcome_text_copied "$STATE" "$task" "$summary" "$wake" || rc=$?
     case "$rc" in
-      0) ;;
-      1)
-        echo "error: refusing to present stored outcome carrying the unverified pull request URL $FM_PR_OUTCOME_REJECTED" >&2
-        return 1
-        ;;
+      0) printf '%s\n' "$line" ;;
+      # An invalid legacy row is quarantined in place. It must never be
+      # printed, but it also must not hide later valid rows forever.
+      1) ;;
       *)
-        echo "error: refusing to present stored outcome because this home's durable task records could not be read" >&2
+        echo "error: refusing to present stored outcomes because this home's durable task records could not be read" >&2
         return 1
         ;;
     esac
@@ -339,8 +340,7 @@ print_unread() {
   fi
   [ -s "$STORE" ] || return 0
   records=$(jq -c --argjson cursor "$cursor" 'select(.seq > $cursor)' "$STORE") || return 1
-  validate_outcome_records "$records" || return 1
-  [ -z "$records" ] || printf '%s\n' "$records"
+  filter_outcome_records "$records"
 }
 
 advance_cursor() { # <seq>
@@ -384,8 +384,7 @@ print_unprocessed() {
   [ -s "$STORE" ] || return 0
   records=$(jq -c --argjson processed "$processed" --argjson cursor "$cursor" \
     'select(.verdict == "captain" and .seq > $processed and .seq <= $cursor)' "$STORE") || return 1
-  validate_outcome_records "$records" || return 1
-  [ -z "$records" ] || printf '%s\n' "$records"
+  filter_outcome_records "$records"
 }
 
 # Assumes $LOCK is already held. Callers that do not already hold it use the
@@ -650,11 +649,11 @@ case "$CMD" in
     fi
     if [ -s "$STORE" ]; then
       RECORDS=$(tail -n "$RECENT" "$STORE")
-      if ! validate_outcome_records "$RECORDS"; then
+      if ! FILTERED_RECORDS=$(filter_outcome_records "$RECORDS"); then
         fm_lock_release "$LOCK"
         exit 1
       fi
-      [ -z "$RECORDS" ] || printf '%s\n' "$RECORDS"
+      [ -z "$FILTERED_RECORDS" ] || printf '%s\n' "$FILTERED_RECORDS"
     fi
     fm_lock_release "$LOCK"
     ;;

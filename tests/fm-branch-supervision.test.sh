@@ -338,31 +338,43 @@ test_legacy_forge_records_cannot_reintroduce_an_invented_url() {
     --task backpass-clean-slate --verdict captain --summary "ready: $real" >/dev/null \
     || fail "forge-versioned metadata was not accepted as outcome provenance"
 
-  # An unread row may predate the append gate. Every executable interface that
-  # can publish stored outcome text must reject it rather than replaying it.
+  # Unread rows may predate the append gate. Publication interfaces quarantine
+  # each invalid row independently, so it is never shown and cannot starve a
+  # later valid outcome on every recovery attempt.
   rm -f "$state/.branch-outcomes-cursor" "$state/.branch-outcomes-processed"
   printf '{"seq":1,"epoch":1,"task":"backpass-clean-slate","wake":"","verdict":"routine","summary":"legacy ready: %s"}\n' \
     "$invented" > "$state/branch-outcomes.jsonl"
+  printf '{"seq":2,"epoch":2,"task":"backpass-clean-slate","wake":"","verdict":"routine","summary":"verified ready: %s"}\n' \
+    "$real" >> "$state/branch-outcomes.jsonl"
+  printf 'done: PR %s checks green\n' "$real" > "$state/backpass-clean-slate.status"
   printf 'kind=ship\npr=%s\n' "$invented" > "$state/backpass-clean-slate.meta"
-  for command in unread startup-replay list; do
-    out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" "$command" 2>&1)
+
+  for command in unread list; do
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" "$command")
     status=$?
-    [ "$status" -ne 0 ] || fail "$command presented an unverified legacy outcome"
-    assert_contains "$out" "refusing to present stored outcome" \
-      "$command lost the legacy outcome refusal"
-    [ ! -e "$state/.branch-outcomes-cursor" ] \
-      || fail "$command advanced the cursor across a refused legacy outcome"
+    [ "$status" -eq 0 ] || fail "$command could not pass the valid outcome behind a legacy row"
+    assert_not_contains "$out" "$invented" "$command presented an unverified legacy outcome"
+    assert_contains "$out" "$real" "$command hid the valid outcome behind a legacy row"
   done
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" startup-replay)
+  status=$?
+  [ "$status" -eq 0 ] || fail "startup-replay could not pass the valid outcome behind a legacy row"
+  assert_not_contains "$out" "$invented" "startup-replay presented an unverified legacy outcome"
+  assert_contains "$out" "$real" "startup-replay hid the valid outcome behind a legacy row"
+  [ "$(cat "$state/.branch-outcomes-cursor")" = 2 ] \
+    || fail "startup-replay did not advance through the valid row after quarantining the legacy row"
 
   printf '{"seq":1,"epoch":1,"task":"backpass-clean-slate","wake":"","verdict":"captain","summary":"legacy ready: %s"}\n' \
     "$invented" > "$state/branch-outcomes.jsonl"
-  printf '1\n' > "$state/.branch-outcomes-cursor"
-  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unprocessed 2>&1)
+  printf '{"seq":2,"epoch":2,"task":"backpass-clean-slate","wake":"","verdict":"captain","summary":"verified ready: %s"}\n' \
+    "$real" >> "$state/branch-outcomes.jsonl"
+  printf '2\n' > "$state/.branch-outcomes-cursor"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unprocessed)
   status=$?
-  [ "$status" -ne 0 ] || fail "unprocessed presented an unverified legacy outcome"
-  assert_contains "$out" "refusing to present stored outcome" \
-    "unprocessed lost the legacy outcome refusal"
-  pass "legacy metadata and unread outcomes cannot publish invented forge URLs"
+  [ "$status" -eq 0 ] || fail "unprocessed could not pass the valid captain outcome behind a legacy row"
+  assert_not_contains "$out" "$invented" "unprocessed presented an unverified legacy outcome"
+  assert_contains "$out" "$real" "unprocessed hid the valid captain outcome behind a legacy row"
+  pass "legacy URLs are quarantined without blocking later verified outcomes"
 }
 
 test_outcome_startup_replay_stops_at_captain_barrier() {
