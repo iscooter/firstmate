@@ -34,6 +34,7 @@ FM_PR_META_URL=
 FM_PR_META_HOST=
 FM_PR_META_PATH=
 FM_PR_META_NUMBER=
+FM_PR_META_VERIFIED=0
 FM_PR_REG_ID=
 FM_PR_REG_PROVIDER=
 FM_PR_REG_URL=
@@ -319,10 +320,12 @@ _fm_pr_percent_decode_once() { # <token>
 }
 
 # Print every canonical forge URL this home has durably recorded for the task,
-# one per line: the URLs in the worker's own status log, and the live-verified
-# pr= identity in the task metadata. The task id "fleet" reads the union across
-# every task in the home, because a fleet-wide outcome belongs to no single
-# task. Returns 1 when the state directory itself cannot be read.
+# one per line: the URLs in the worker's own status log, and a pr= identity whose
+# metadata carries the forge-verification version written by fm-pr-check. An
+# unversioned legacy pr= is not provenance: older releases could record one
+# without resolving it. The task id "fleet" reads the union across every task
+# in the home, because a fleet-wide outcome belongs to no single task. Returns
+# 1 when the state directory itself cannot be read.
 fm_pr_task_recorded_urls() { # <state> <task-id>
   local state=${1-} id=${2-} file
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
@@ -362,12 +365,11 @@ REFS
 }
 
 _fm_pr_meta_recorded_urls() { # <meta-file>
-  local file=$1 line
+  local file=$1
   [ -f "$file" ] && [ ! -L "$file" ] && [ -r "$file" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in pr=*) ;; *) continue ;; esac
-    fm_pr_url_parse "${line#pr=}" && printf '%s\n' "$FM_PR_URL"
-  done < "$file"
+  fm_pr_metadata_identity_parse "$file" || return 0
+  [ "$FM_PR_META_VERIFIED" = 1 ] || return 0
+  printf '%s\n' "$FM_PR_META_URL"
 }
 
 # Verify that every forge reference in the given captain-facing texts was
@@ -485,12 +487,13 @@ fm_pr_regular_destination_on_device_or_absent() {
 }
 
 fm_pr_metadata_identity_parse() {
-  local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
+  local file=$1 line value pr_count=0 verified_count=0 seen_pr=0 post_pr_invalid=0
   FM_PR_META_PROVIDER=
   FM_PR_META_URL=
   FM_PR_META_HOST=
   FM_PR_META_PATH=
   FM_PR_META_NUMBER=
+  FM_PR_META_VERIFIED=0
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
   [ "$(fm_pr_file_link_count "$file")" = 1 ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
@@ -508,6 +511,14 @@ fm_pr_metadata_identity_parse() {
         fi
         seen_pr=1
         ;;
+      pr_verified=*)
+        verified_count=$((verified_count + 1))
+        if [ "$seen_pr" -eq 1 ] && [ "$line" = pr_verified=forge-v1 ]; then
+          FM_PR_META_VERIFIED=1
+        else
+          post_pr_invalid=1
+        fi
+        ;;
       pr_head=*)
         if [ "$seen_pr" -eq 1 ]; then
           value=${line#pr_head=}
@@ -522,6 +533,7 @@ fm_pr_metadata_identity_parse() {
     esac
   done < "$file"
   [ "$pr_count" -eq 1 ] || return 1
+  [ "$verified_count" -le 1 ] || return 1
   [ "$post_pr_invalid" -eq 0 ] || return 1
   [ -n "$FM_PR_META_URL" ]
 }

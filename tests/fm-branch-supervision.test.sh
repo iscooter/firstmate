@@ -314,6 +314,57 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   pass "an outcome may carry only a PR URL copied from that task's durable records"
 }
 
+test_legacy_forge_records_cannot_reintroduce_an_invented_url() {
+  local home state invented real out status command
+  home="$TMP_ROOT/legacy-pr-provenance-home"
+  state="$home/state"
+  mkdir -p "$state"
+  invented=https://github.com/karpathy/backpass/pull/108
+  real=https://github.com/kunchenguid/backpass/pull/108
+
+  # Before forge-v1, pr= could be written without asking the forge. Upgrading
+  # must not turn that old assertion into provenance for a new outcome.
+  printf 'kind=ship\npr=%s\n' "$invented" > "$state/backpass-clean-slate.meta"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain --summary "ready: $invented" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unversioned legacy pr= authorized an invented outcome URL"
+  [ ! -e "$state/branch-outcomes.jsonl" ] || fail "legacy metadata bypass reached the outcome store"
+
+  # Metadata emitted by the live forge verifier remains valid provenance even
+  # when the worker status has no URL.
+  printf 'kind=ship\npr=%s\npr_verified=forge-v1\n' "$real" > "$state/backpass-clean-slate.meta"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain --summary "ready: $real" >/dev/null \
+    || fail "forge-versioned metadata was not accepted as outcome provenance"
+
+  # An unread row may predate the append gate. Every executable interface that
+  # can publish stored outcome text must reject it rather than replaying it.
+  rm -f "$state/.branch-outcomes-cursor" "$state/.branch-outcomes-processed"
+  printf '{"seq":1,"epoch":1,"task":"backpass-clean-slate","wake":"","verdict":"routine","summary":"legacy ready: %s"}\n' \
+    "$invented" > "$state/branch-outcomes.jsonl"
+  printf 'kind=ship\npr=%s\n' "$invented" > "$state/backpass-clean-slate.meta"
+  for command in unread startup-replay list; do
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" "$command" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "$command presented an unverified legacy outcome"
+    assert_contains "$out" "refusing to present stored outcome" \
+      "$command lost the legacy outcome refusal"
+    [ ! -e "$state/.branch-outcomes-cursor" ] \
+      || fail "$command advanced the cursor across a refused legacy outcome"
+  done
+
+  printf '{"seq":1,"epoch":1,"task":"backpass-clean-slate","wake":"","verdict":"captain","summary":"legacy ready: %s"}\n' \
+    "$invented" > "$state/branch-outcomes.jsonl"
+  printf '1\n' > "$state/.branch-outcomes-cursor"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unprocessed 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "unprocessed presented an unverified legacy outcome"
+  assert_contains "$out" "refusing to present stored outcome" \
+    "unprocessed lost the legacy outcome refusal"
+  pass "legacy metadata and unread outcomes cannot publish invented forge URLs"
+}
+
 test_outcome_startup_replay_stops_at_captain_barrier() {
   local home replay unread
   home="$TMP_ROOT/store-captain-barrier-home"
@@ -983,6 +1034,7 @@ test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_startup_replay_preserves_silence
 test_outcome_startup_replay_stops_at_captain_barrier
 test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records
+test_legacy_forge_records_cannot_reintroduce_an_invented_url
 test_outcome_cursor_corruption_fails_closed
 test_cursor_advancement_refuses_ahead_processed_marker
 test_outcome_sequence_conflicts_fail_closed

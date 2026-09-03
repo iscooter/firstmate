@@ -301,8 +301,33 @@ EOF
   publish_outcome_index_ready "$(last_seq)"
 }
 
+validate_outcome_records() { # <jsonl-records>
+  local records=$1 line task summary wake rc
+  [ -n "$records" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    task=$(printf '%s\n' "$line" | jq -er '.task') || return 1
+    summary=$(printf '%s\n' "$line" | jq -er '.summary') || return 1
+    wake=$(printf '%s\n' "$line" | jq -er '.wake') || return 1
+    rc=0
+    fm_pr_outcome_text_copied "$STATE" "$task" "$summary" "$wake" || rc=$?
+    case "$rc" in
+      0) ;;
+      1)
+        echo "error: refusing to present stored outcome carrying the unverified pull request URL $FM_PR_OUTCOME_REJECTED" >&2
+        return 1
+        ;;
+      *)
+        echo "error: refusing to present stored outcome because this home's durable task records could not be read" >&2
+        return 1
+        ;;
+    esac
+  done <<EOF
+$records
+EOF
+}
+
 print_unread() {
-  local cursor last
+  local cursor last records
   cursor=$(read_cursor)
   if ! last=$(last_seq); then
     echo "error: refusing read because the outcome store is malformed or non-sequential" >&2
@@ -313,7 +338,9 @@ print_unread() {
     return 1
   fi
   [ -s "$STORE" ] || return 0
-  jq -c --argjson cursor "$cursor" 'select(.seq > $cursor)' "$STORE"
+  records=$(jq -c --argjson cursor "$cursor" 'select(.seq > $cursor)' "$STORE") || return 1
+  validate_outcome_records "$records" || return 1
+  [ -z "$records" ] || printf '%s\n' "$records"
 }
 
 advance_cursor() { # <seq>
@@ -339,7 +366,7 @@ write_processed() { # <seq>
 
 # Captain rows above the processed marker and at or below the read cursor.
 print_unprocessed() {
-  local cursor processed last
+  local cursor processed last records
   cursor=$(read_cursor) || return 1
   processed=$(read_processed) || return 1
   if ! last=$(last_seq); then
@@ -355,8 +382,10 @@ print_unprocessed() {
     return 1
   fi
   [ -s "$STORE" ] || return 0
-  jq -c --argjson processed "$processed" --argjson cursor "$cursor" \
-    'select(.verdict == "captain" and .seq > $processed and .seq <= $cursor)' "$STORE"
+  records=$(jq -c --argjson processed "$processed" --argjson cursor "$cursor" \
+    'select(.verdict == "captain" and .seq > $processed and .seq <= $cursor)' "$STORE") || return 1
+  validate_outcome_records "$records" || return 1
+  [ -z "$records" ] || printf '%s\n' "$records"
 }
 
 # Assumes $LOCK is already held. Callers that do not already hold it use the
@@ -494,8 +523,10 @@ case "$CMD" in
   unread)
     [ "$#" -eq 0 ] || usage
     fm_lock_acquire_wait "$LOCK"
-    print_unread
+    STATUS=0
+    print_unread || STATUS=$?
     fm_lock_release "$LOCK"
+    exit "$STATUS"
     ;;
   mark-read)
     [ "${1:-}" = --through ] || usage
@@ -531,8 +562,8 @@ case "$CMD" in
   unprocessed)
     [ "$#" -eq 0 ] || usage
     fm_lock_acquire_wait "$LOCK"
-    print_unprocessed
-    STATUS=$?
+    STATUS=0
+    print_unprocessed || STATUS=$?
     fm_lock_release "$LOCK"
     exit "$STATUS"
     ;;
@@ -618,14 +649,22 @@ case "$CMD" in
       exit 1
     fi
     if [ -s "$STORE" ]; then
-      tail -n "$RECENT" "$STORE"
+      RECORDS=$(tail -n "$RECENT" "$STORE")
+      if ! validate_outcome_records "$RECORDS"; then
+        fm_lock_release "$LOCK"
+        exit 1
+      fi
+      [ -z "$RECORDS" ] || printf '%s\n' "$RECORDS"
     fi
     fm_lock_release "$LOCK"
     ;;
   startup-replay)
     [ "$#" -eq 0 ] || usage
     fm_lock_acquire_wait "$LOCK"
-    UNREAD=$(print_unread)
+    if ! UNREAD=$(print_unread); then
+      fm_lock_release "$LOCK"
+      exit 1
+    fi
     if [ -n "$UNREAD" ]; then
       REPLAYABLE=$(printf '%s\n' "$UNREAD" | jq -sc '
         map(.verdict) as $verdicts
