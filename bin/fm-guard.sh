@@ -27,11 +27,11 @@
 # bounded). Independent alarms (queued wakes, worktree tangle) are never
 # suppressed by that dedup. Normal wake handling (watcher briefly down between a
 # wake and the next supervision resume) stays inside the grace window and stays
-# silent. The queued-wakes warning is replaced, for the supervision branch
-# actor (FM_SUPERVISION_ACTOR=branch), by a note naming the rows its grant
-# covers, because that actor runs guarded commands while handling exactly those
-# rows and can drain nothing else. Always exits 0: the guard warns, it never
-# blocks.
+# silent. For a supervision branch actor (FM_SUPERVISION_ACTOR=branch) that
+# still holds verified fleet-lock ownership, the queued-wakes warning is
+# replaced by a note naming the rows its grant covers, because that actor runs
+# guarded commands while handling exactly those rows and can drain nothing
+# else. Always exits 0: the guard warns, it never blocks.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -252,13 +252,14 @@ fi
 # Queued wakes are an independent hazard; warn whenever they are pending, even if
 # a watcher is alive. Kept after the banner so the no-watcher alarm reads first.
 # Dedup of the watcher-down banner never suppresses this warning.
-# The supervision branch is the exception: it runs guarded commands (fm-peek,
-# fm-crew-state) in the middle of handling the very rows that are queued, and
-# "drain them before anything else" mid-handling reads as "an earlier wake is
-# still pending", which is what made it re-run a previous acknowledgement in a
-# loop. The branch can act on nothing outside its grant anyway, so for that
-# actor the guard names the granted rows it is handling and says nothing about
-# any other queued row.
+# A mutable supervision branch is the exception: it runs guarded commands
+# (fm-peek, fm-crew-state) in the middle of handling the very rows that are
+# queued, and "drain them before anything else" mid-handling reads as "an
+# earlier wake is still pending", which is what made it re-run a previous
+# acknowledgement in a loop. The branch can act on nothing outside its grant
+# anyway, so for that actor the guard names the granted rows it is handling and
+# says nothing about any other queued row. A read-only actor still gets the
+# ownership warning above because lock loss is the controlling safety fact.
 if "$queue_pending"; then
   if [ "$READ_ONLY" -eq 1 ]; then
     echo "WARNING: queued wakes pending - left untouched because this session lacks verified fleet-lock ownership." >&2
