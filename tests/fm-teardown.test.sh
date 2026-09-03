@@ -2212,7 +2212,7 @@ land_shippable_commit() {
 }
 
 test_live_outcome_lock_refuses_after_deadline() {
-  local case_dir rc holder elapsed
+  local case_dir rc holder teardown_pid elapsed
   case_dir=$(make_case live-outcome-lock)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
@@ -2239,7 +2239,16 @@ test_live_outcome_lock_refuses_after_deadline() {
   SECONDS=0
   rc=0
   FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT=1 \
-    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" &
+  teardown_pid=$!
+  for _ in $(seq 1 500); do
+    [ -e "$case_dir/state/.status-presentation-lock" ] && break
+    kill -0 "$teardown_pid" 2>/dev/null || break
+    sleep 0.02
+  done
+  assert_present "$case_dir/state/.status-presentation-lock" \
+    "live-outcome-lock: teardown waited for outcomes before locking status presentation"
+  wait "$teardown_pid" || rc=$?
   elapsed=$SECONDS
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
@@ -2254,7 +2263,9 @@ test_live_outcome_lock_refuses_after_deadline() {
     "live-outcome-lock: teardown retired the task outcome index without the outcome lock"
   assert_present "$case_dir/wt/.claude/settings.local.json" \
     "live-outcome-lock: teardown mutated the worktree before acquiring the outcome lock"
-  pass "teardown refuses a stalled live outcome-lock holder before destructive cleanup"
+  assert_absent "$case_dir/state/.status-presentation-lock" \
+    "live-outcome-lock: outcome-lock refusal leaked the status presentation lock"
+  pass "teardown follows presentation-before-outcome lock ordering"
 }
 
 test_parked_own_run_is_aborted_before_teardown() {

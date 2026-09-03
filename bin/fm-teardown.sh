@@ -231,6 +231,8 @@ META_LOCK=
 META_LOCK_HELD=0
 OUTCOME_LOCK=
 OUTCOME_LOCK_HELD=0
+PRESENTATION_LOCK=
+PRESENTATION_LOCK_HELD=0
 OUTCOME_LOCK_TIMEOUT=${FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT:-10}
 case "$OUTCOME_LOCK_TIMEOUT" in ''|*[!0-9]*|0) OUTCOME_LOCK_TIMEOUT=10 ;; esac
 DESCENDANT_LOCK_PATHS=()
@@ -262,6 +264,10 @@ teardown_release_locks() {
   if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
     fm_lock_release "$OUTCOME_LOCK" || true
     OUTCOME_LOCK_HELD=0
+  fi
+  if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$PRESENTATION_LOCK" || true
+    PRESENTATION_LOCK_HELD=0
   fi
   if [ "$META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$META_LOCK" || true
@@ -2765,6 +2771,12 @@ fi
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
 if [ -d "$STATE" ]; then
+  PRESENTATION_LOCK="$STATE/.status-presentation-lock"
+  if ! fm_lock_acquire_wait_bounded "$PRESENTATION_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: status presentation for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
+    exit 1
+  fi
+  PRESENTATION_LOCK_HELD=1
   OUTCOME_LOCK="$STATE/.branch-outcomes.lock"
   if ! fm_lock_acquire_wait_bounded "$OUTCOME_LOCK" "$OUTCOME_LOCK_TIMEOUT"; then
     echo "error: outcome store for $ID remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining the durable task record for retry" >&2
@@ -2929,7 +2941,7 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
-status_retire_presentation_task "$STATE" "$ID" || exit 1
+status_retire_presentation_task "$STATE" "$ID" "$PRESENTATION_LOCK_HELD" || exit 1
 rm -f "$STATE/$ID.turn-ended" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \
@@ -2954,6 +2966,10 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
       fm_lock_release "$OUTCOME_LOCK"
       OUTCOME_LOCK_HELD=0
     fi
+    if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
+      fm_lock_release "$PRESENTATION_LOCK"
+      PRESENTATION_LOCK_HELD=0
+    fi
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     if [ "$BACKLOG_TRANSITION" = retain ]; then
@@ -2974,6 +2990,10 @@ else
       fm_lock_release "$OUTCOME_LOCK"
       OUTCOME_LOCK_HELD=0
     fi
+    if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
+      fm_lock_release "$PRESENTATION_LOCK"
+      PRESENTATION_LOCK_HELD=0
+    fi
     fm_lock_release "$META_LOCK"
     META_LOCK_HELD=0
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
@@ -2983,6 +3003,10 @@ fi
 if [ "$OUTCOME_LOCK_HELD" = 1 ]; then
   fm_lock_release "$OUTCOME_LOCK"
   OUTCOME_LOCK_HELD=0
+fi
+if [ "$PRESENTATION_LOCK_HELD" = 1 ]; then
+  fm_lock_release "$PRESENTATION_LOCK"
+  PRESENTATION_LOCK_HELD=0
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
