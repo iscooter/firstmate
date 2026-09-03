@@ -2518,6 +2518,25 @@ preflight_firstmate_home_herdr_children() {  # <home>
   done
 }
 
+descendant_outcome_boundary_acquire() {
+  local state=$1 task_id=$2 presentation_lock outcome_lock index
+  presentation_lock="$state/.status-presentation-lock"
+  if ! fm_lock_acquire_wait_bounded "$presentation_lock" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: status presentation for descendant $task_id remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining descendant state for retry" >&2
+    return 1
+  fi
+  DESCENDANT_LOCK_PATHS+=("$presentation_lock")
+  outcome_lock="$state/.branch-outcomes.lock"
+  if ! fm_lock_acquire_wait_bounded "$outcome_lock" "$OUTCOME_LOCK_TIMEOUT"; then
+    echo "error: outcome store for descendant $task_id remained locked by pid ${FM_LOCK_HELD_PID:-unknown} for ${OUTCOME_LOCK_TIMEOUT}s; retaining descendant state for retry" >&2
+    fm_lock_release "$presentation_lock" || true
+    index=$((${#DESCENDANT_LOCK_PATHS[@]} - 1))
+    unset 'DESCENDANT_LOCK_PATHS[index]'
+    return 1
+  fi
+  DESCENDANT_LOCK_PATHS+=("$outcome_lock")
+}
+
 cleanup_firstmate_home_children() {
   local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
   sub_state="$home/state"
@@ -2541,6 +2560,7 @@ cleanup_firstmate_home_children() {
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       fi
     fi
+    descendant_outcome_boundary_acquire "$sub_state" "$child_id" || return 1
     if [ -n "$child_t" ]; then
       if [ "$child_backend" = herdr ]; then
         fm_backend_herdr_parse_target "$child_t" || return 1
@@ -2602,7 +2622,7 @@ cleanup_firstmate_home_children() {
       child_busy_gen=$(cat "$sub_state/$child_id.busy-gen" 2>/dev/null || true)
     fi
     retire_busy_state "$sub_state" "$child_id" "$child_busy_gen" || return 1
-    status_retire_presentation_task "$sub_state" "$child_id" || return 1
+    status_retire_presentation_task "$sub_state" "$child_id" true || return 1
     fm_backlog_atomic_transition remove "$sub_state/$child_id.meta" "task record" "$sub_state" || return 1
     rm -f "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.pi-ext.ts" \

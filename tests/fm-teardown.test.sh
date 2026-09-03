@@ -1857,6 +1857,8 @@ test_forced_secondmate_teardown_holds_descendant_lifecycle_locks() {
   home="$case_dir/secondmate-home"
   : > "$case_dir/kill.log"
   : > "$case_dir/treehouse.log"
+  printf 'fm-branch-outcome-index-v1\t5\t0\t-\n' \
+    > "$home/state/.child-a.branch-outcome-index"
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$case_dir/kill.log"
@@ -1913,6 +1915,43 @@ SH
 
   : > "$release"
   wait "$holder_pid" 2>/dev/null || true
+
+  lock="$home/state/.branch-outcomes.lock"
+  ready="$case_dir/outcome-lock-ready"
+  release="$case_dir/outcome-lock-release"
+  waited=0
+  ROOT="$ROOT" LOCK="$lock" READY="$ready" RELEASE="$release" \
+    HOME_STATE="$home/state" OWNER_PID="$$" bash -c '
+    export FM_STATE_OVERRIDE="$HOME_STATE"
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$LOCK" || exit 1
+    : > "$READY"
+    while [ ! -e "$RELEASE" ] && kill -0 "$OWNER_PID" 2>/dev/null; do sleep 0.1; done
+    fm_lock_release "$LOCK"
+  ' &
+  holder_pid=$!
+  while [ ! -e "$ready" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -e "$ready" ] || fail "descendant-locks: the contending outcome writer never acquired its lock"
+  rc=0
+  FM_TEARDOWN_OUTCOME_LOCK_TIMEOUT=1 \
+    run_teardown "$case_dir" --force > "$case_dir/outcome.stdout" 2> "$case_dir/outcome.stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "descendant-locks: forced teardown ignored a descendant outcome lock"
+  assert_grep "outcome store for descendant child-a remained locked" "$case_dir/outcome.stderr" \
+    "descendant-locks: outcome lock refusal did not name the contended child"
+  [ ! -s "$case_dir/kill.log" ] && [ ! -s "$case_dir/treehouse.log" ] \
+    || fail "descendant-locks: outcome lock refusal performed destructive child cleanup"
+  assert_present "$home/state/child-a.meta" \
+    "descendant-locks: outcome lock refusal removed child metadata"
+  assert_present "$home/state/.child-a.branch-outcome-index" \
+    "descendant-locks: outcome lock refusal removed the child outcome index"
+  assert_absent "$home/state/.status-presentation-lock" \
+    "descendant-locks: outcome lock refusal leaked the child presentation lock"
+  : > "$release"
+  wait "$holder_pid" 2>/dev/null || true
+
   rc=0
   run_teardown "$case_dir" --force > "$case_dir/retry.stdout" 2> "$case_dir/retry.stderr" || rc=$?
   expect_code 0 "$rc" "descendant-locks: uncontended retry should complete"
@@ -1920,7 +1959,7 @@ SH
     || fail "descendant-locks: uncontended retry retained retired task state"
   [ -s "$case_dir/kill.log" ] && [ -s "$case_dir/treehouse.log" ] \
     || fail "descendant-locks: uncontended retry did not perform endpoint and worktree cleanup"
-  pass "forced secondmate teardown holds every descendant lifecycle and metadata lock"
+  pass "forced secondmate teardown holds descendant lifecycle and outcome boundaries"
 }
 
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed() {
