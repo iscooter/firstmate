@@ -87,6 +87,10 @@ open
 
 ## End to end: arming and polling a real merge request
 
+Superseded in part on 2026-09-03: `bin/fm-pr-check.sh` now resolves a merge request live on its instance before recording it, and refuses a URL the instance does not resolve.
+The `e3` arming below, against the placeholder host `gitlab.example`, therefore no longer reproduces; the stored `e3` records it produced on 2026-07-21 are reproduced here as data, and every poll-side command that replays a stored record is unaffected, because a poll reads a record rather than arming one.
+`tests/fm-pr-check-security.test.sh` owns the portable regression for the refusal.
+
 Three tasks were armed, two against the fixture and one against the placeholder host:
 
 ```

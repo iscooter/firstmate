@@ -66,7 +66,7 @@ For anything it tells you to escalate, or any failure that survives the playbook
 Report verdict captain for the finished result of work the captain requested, even when that result is healthy.
 A start or still-working update on requested work that brings no new artifact, finding, or decision is verdict routine.
 Also report verdict captain for:
-- work ready for review - always include the full https:// PR URL in the summary;
+- work ready for review - always include the full https:// PR URL in the summary, copied from the worker's own status line or the recorded PR and never composed from memory; the outcome store refuses a URL those records do not carry;
 - a decision only the captain can make, including every ask-user finding from a validation gate;
 - a real blocker or failure after the playbook is exhausted;
 - a needed credential or login;

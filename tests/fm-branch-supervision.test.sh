@@ -169,6 +169,75 @@ test_outcome_startup_replay_preserves_silence() {
   pass "only routine fleet outcomes can be silent"
 }
 
+# 2026-09-03 incident: supervision reported the clean-slate backpass PR as
+# https://github.com/karpathy/backpass/pull/108 (a 404) while the worker's own
+# status line carried the real https://github.com/kunchenguid/backpass/pull/108.
+# The owner had been assembled from world knowledge instead of copied, so the
+# store now refuses any forge URL that is not already in the task's records.
+test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
+  local home real invented out status store before
+  home="$TMP_ROOT/store-pr-url-home"
+  mkdir -p "$home/state"
+  store="$home/state/branch-outcomes.jsonl"
+  real=https://github.com/kunchenguid/backpass/pull/108
+  invented=https://github.com/karpathy/backpass/pull/108
+  printf 'working: clean slate rebuild under way\n' > "$home/state/backpass-clean-slate.status"
+  printf 'done: PR %s checks green\n' "$real" >> "$home/state/backpass-clean-slate.status"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary "backpass clean slate is ready for review: $invented" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "the store recorded a PR URL the task never reported"
+  assert_contains "$out" "$invented" "the refusal did not name the invented URL"
+  [ ! -e "$store" ] || fail "a refused outcome still reached the append-only store"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary 'backpass clean slate is ready for review' --wake "check: merge landed: $invented" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an invented URL passed through the wake reason"
+  [ ! -e "$store" ] || fail "a refused wake reason still reached the append-only store"
+
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary "backpass clean slate is ready for review: $real" >/dev/null \
+    || fail "the URL the worker actually reported was refused"
+  assert_contains "$(cat "$store")" "$real" "the copied URL did not reach the store"
+  assert_not_contains "$(cat "$store")" karpathy "the invented owner survived anywhere in the store"
+
+  # A summary carrying no forge reference at all is untouched by the gate.
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict routine --summary 'worker is still running tests' >/dev/null \
+    || fail "an outcome with no PR reference was refused"
+
+  # A decorated reference cannot smuggle a repository past the canonical test.
+  before=$(cat "$store")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task backpass-clean-slate --verdict captain \
+    --summary "review the diff at $invented/files" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a decorated invented URL was recorded"
+  [ "$(cat "$store")" = "$before" ] || fail "a refused decorated URL changed the store"
+
+  # A URL recorded for one task is not evidence for another task's outcome.
+  printf 'working: unrelated\n' > "$home/state/other-task.status"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task other-task --verdict captain --summary "ready for review: $real" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "another task's PR URL was accepted as this task's outcome"
+
+  # A fleet-wide outcome has no single task, so it may copy any recorded URL.
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task fleet --verdict routine --summary "fleet review: $real is the only PR open" >/dev/null \
+    || fail "a fleet outcome could not copy a recorded URL"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task fleet --verdict routine --summary "fleet review: $invented is the only PR open" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a fleet outcome published an unrecorded URL"
+  pass "an outcome may carry only a PR URL copied from that task's durable records"
+}
+
 test_outcome_startup_replay_stops_at_captain_barrier() {
   local home replay unread
   home="$TMP_ROOT/store-captain-barrier-home"
@@ -837,6 +906,7 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_startup_replay_preserves_silence
 test_outcome_startup_replay_stops_at_captain_barrier
+test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records
 test_outcome_cursor_corruption_fails_closed
 test_cursor_advancement_refuses_ahead_processed_marker
 test_outcome_sequence_conflicts_fail_closed

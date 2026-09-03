@@ -935,7 +935,7 @@ export default function (pi: ExtensionAPI) {
         }),
         summary: Type.String({
           description:
-            "One or two sentences in captain outcome language; include the full https:// PR URL when a PR is involved",
+            "One or two sentences in captain outcome language; when a PR is involved include the full https:// PR URL COPIED from the task's own records (the worker's status line or the recorded PR) - a URL those records do not carry is refused, never published",
         }),
         wake: Type.Optional(Type.String({ description: "The wake reason line this outcome answers" })),
         silent: Type.Optional(Type.Boolean({

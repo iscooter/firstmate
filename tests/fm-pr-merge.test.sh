@@ -138,6 +138,7 @@ printf '%s\n' "\$*" >> "\$FM_TEST_GH_LOG"
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+      *" url "*) printf '%s\n' "\${3:-}" ; exit 0 ;;
       *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
     esac
     ;;
@@ -171,6 +172,11 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
+  "pr view")
+    case " $* " in
+      *" url "*) printf '%s\n' "${3:-}" ; exit 0 ;;
+    esac
+    ;;
   "api graphql")
     cat "$FM_TEST_GH_OUTCOME"
     exit 0
@@ -196,6 +202,7 @@ printf '%s\n' "\$*" >> "\$FM_TEST_GH_LOG"
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+      *" url "*) printf '%s\n' "\${3:-}" ; exit 0 ;;
       *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
     esac
     ;;
@@ -251,6 +258,13 @@ printf 'GITLAB_HOST=%s %s\n' "${GITLAB_HOST-<unset>}" "$*" >> "$FM_TEST_GLAB_LOG
 case_dir=$(dirname "$FM_TEST_GLAB_JSON")
 case "${1:-} ${2:-}" in
   "mr view")
+    # fm-pr-check.sh resolves a merge request live through glab's own field
+    # output; only the merge path asks for JSON. The view-fails marker is about
+    # that state read, so the merge request still resolves as one that exists.
+    case " $* " in
+      *" -F json "*|*" -F json") ;;
+      *) printf 'title:\tfixture merge request\nstate:\topened\n' ; exit 0 ;;
+    esac
     [ ! -e "$case_dir/glab-view-fails" ] || exit 1
     if [ -e "$case_dir/glab-merge-called" ] && [ ! -e "$case_dir/glab-stays-open" ]; then
       cat "$case_dir/mr-post.json"
@@ -809,6 +823,7 @@ printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "pr view")
     case " $* " in
+      *" url "*) printf '%s\n' "${3:-}" ; exit 0 ;;
       *headRefOid*) printf '%s\n' 8484848484848484848484848484848484848484 ; exit 0 ;;
     esac
     ;;
@@ -1032,12 +1047,21 @@ test_github_without_gh_failed_read_keeps_bookkeeping() {
   local case_dir ghless_path rc
   case_dir=$(make_case github-without-gh-read-fails)
   mkdir -p "$case_dir/wt"
+  # Registration resolves the pull request, then the post-merge outcome read
+  # fails: the same view call answers once and then stops, which is what a read
+  # that breaks after the merge landed looks like.
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+view_marker=$(dirname "$FM_TEST_GH_AXI_LOG")/gh-axi-view-answered
 case "${1:-} ${2:-}" in
   "pr merge") exit 0 ;;
-  "pr view") exit 1 ;;
+  "pr view")
+    [ ! -e "$view_marker" ] || exit 1
+    : > "$view_marker"
+    printf 'pull_request:\n  number: %s\n  state: open\n' "${3:-}"
+    exit 0
+    ;;
 esac
 exit 0
 SH

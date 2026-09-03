@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Record a PR-ready task: store one validated canonical pr=<url> and the forge's
-# exact pr_head=<sha> when available, then atomically arm a static merge poll.
+# Record a PR-ready task: resolve the pull request live on its forge, store the
+# validated canonical pr=<url> and the forge's exact pr_head=<sha> when
+# available, then atomically arm a static merge poll. A URL the forge does not
+# resolve is refused, never recorded, so no downstream reader can inherit an
+# invented pull request as this task's recorded truth.
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
@@ -61,6 +64,87 @@ if [ "$PROVIDER" = gitlab ] && ! command -v glab >/dev/null 2>&1; then
 fi
 
 "$FM_ROOT/bin/fm-guard.sh" || true
+
+# The forge is the only authority on whether this pull request exists, and
+# nothing downstream can tell an invented URL from a real one once pr= is
+# recorded: metadata is exactly what later reads as the task's PR truth. So the
+# URL is resolved LIVE here and a URL the forge does not resolve is refused
+# rather than recorded, which is what stops an owner/repository assembled from
+# memory - a plausible 404 - from becoming a recorded fact. Each provider is
+# resolved through the same CLI and the same addressing its merge poll uses
+# (bin/fm-pr-poll.sh), so registration and polling can never disagree about
+# which project they are watching.
+
+# gh addresses the pull request by the URL itself and reports back the
+# canonical URL it resolved. Returns 0 when that is this exact URL, 2 when gh
+# resolved a DIFFERENT canonical URL - a concrete contradiction, so a project
+# that merely redirects cannot be recorded under the name that was typed - and
+# 1 when gh is absent or its read failed, which is the only case a second
+# reader may still answer.
+FM_PR_CHECK_RESOLVED=
+github_resolves_url_with_gh() {
+  local resolved
+  FM_PR_CHECK_RESOLVED=
+  command -v gh >/dev/null 2>&1 || return 1
+  resolved=$(gh pr view "$URL" --json url -q .url 2>/dev/null) || return 1
+  [ -n "$resolved" ] || return 1
+  [ "$resolved" = "$URL" ] && return 0
+  FM_PR_CHECK_RESOLVED=$resolved
+  return 2
+}
+
+# The same fallback bin/fm-pr-merge.sh uses when gh cannot answer, reading the
+# one field that tool is already relied on for. It addresses the pull request by
+# the owner/repository and number the stored URL reconstructs from, so a
+# resolved view is a resolution of this exact URL.
+github_resolves_url_with_gh_axi() {
+  local output
+  command -v gh-axi >/dev/null 2>&1 || return 1
+  output=$(gh-axi pr view "$NUMBER" --repo "$PROJECT_PATH" 2>/dev/null) || return 1
+  printf '%s\n' "$output" | awk '
+    $1 == "state:" { count++; value=$2 }
+    END { exit !(count == 1 && value != "") }
+  '
+}
+
+resolve_or_refuse() {
+  local raw rc=0
+  case "$PROVIDER" in
+    github)
+      if ! command -v gh >/dev/null 2>&1 && ! command -v gh-axi >/dev/null 2>&1; then
+        echo "error: recording a GitHub pull request requires gh or gh-axi on PATH" >&2
+        return 1
+      fi
+      github_resolves_url_with_gh || rc=$?
+      case "$rc" in
+        0) return 0 ;;
+        2)
+          echo "error: refusing to record $URL because GitHub resolves it as $FM_PR_CHECK_RESOLVED; record the URL the forge itself reports" >&2
+          return 1
+          ;;
+      esac
+      github_resolves_url_with_gh_axi && return 0
+      echo "error: refusing to record $URL because GitHub did not resolve it; check the owner and repository against the worker's own report" >&2
+      return 1
+      ;;
+    gitlab)
+      # glab cannot take a merge request URL, so the merge request is addressed
+      # by the same validated components the stored URL reconstructs from, with
+      # the instance named explicitly rather than left to glab's own default.
+      raw=$(GITLAB_HOST="$HOST" glab mr view "$NUMBER" \
+        -R "https://$HOST/$PROJECT_PATH" 2>/dev/null) || {
+        echo "error: refusing to record $URL because GitLab did not resolve it; check the project path against the worker's own report" >&2
+        return 1
+      }
+      printf '%s\n' "$raw" | grep -q '^state:' || {
+        echo "error: refusing to record $URL because glab returned no merge request state for it" >&2
+        return 1
+      }
+      ;;
+    *) return 1 ;;
+  esac
+}
+resolve_or_refuse || exit 1
 
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
 # head commit as a selectable field; plain glab exposes it only inside its JSON

@@ -89,6 +89,7 @@ FM_PR_RETIRE_REG_IDENTITY=
 FM_PR_RETIRE_RECEIPT_HASH=
 FM_PR_RETIRE_RECEIPT_IDENTITY=
 FM_PR_POLL_RETIREMENT_REJECTED=
+FM_PR_OUTCOME_REJECTED=
 
 fm_task_id_path_safe() {
   local id=${1-}
@@ -211,6 +212,155 @@ fm_pr_head_valid() {
   local head=${1-}
   local LC_ALL=C
   [[ "$head" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]
+}
+
+# A captain-facing outcome may only carry a pull request or merge request URL
+# it COPIED from a durable record. Composing one from a remembered
+# owner/repository has produced a plausible-looking 404 that then read as
+# recorded truth, so these helpers give every publisher one mechanical test:
+# extract the references a piece of outcome text carries, list the URLs this
+# home actually recorded for the task, and refuse anything outside that set.
+
+# Print one line per pull request or merge request reference the text carries:
+# the canonical URL when the reference parses as one, or "!" followed by the
+# raw reference when it does not. A canonical URL always begins with "https://",
+# so the "!" marker is never ambiguous. A reference is anything shaped like a
+# forge pull or merge request path, which is deliberately looser than the
+# canonical grammar: a decorated form such as a "/files" suffix must surface as
+# an unparseable reference rather than slip past as ordinary prose.
+fm_pr_text_forge_refs() { # <text>
+  local text=${1-} token noglob=0 words
+  case "$-" in *f*) noglob=1 ;; esac
+  set -f
+  # shellcheck disable=SC2206 # Deliberate whitespace split of free-form text.
+  words=( $text )
+  [ "$noglob" = 1 ] || set +f
+  for token in ${words+"${words[@]}"}; do
+    token=$(_fm_pr_ref_unwrap "$token")
+    _fm_pr_ref_shaped "$token" || continue
+    if fm_pr_url_parse "$token"; then
+      printf '%s\n' "$FM_PR_URL"
+    else
+      printf '!%s\n' "$token"
+    fi
+  done
+}
+
+# Strip the brackets, quotes, and sentence punctuation prose wraps a URL in. A
+# canonical PR or MR URL ends in a digit, so nothing legitimate is trimmed.
+_fm_pr_ref_unwrap() { # <token>
+  local token=${1-}
+  while [ -n "$token" ]; do
+    case "$token" in
+      '('*|'['*|'<'*|'"'*|"'"*|'`'*) token=${token#?} ;;
+      *) break ;;
+    esac
+  done
+  while [ -n "$token" ]; do
+    case "$token" in
+      *')'|*']'|*'>'|*'"'|*"'"|*'`'|*','|*'.'|*';'|*':'|*'!'|*'?') token=${token%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$token"
+}
+
+_fm_pr_ref_shaped() { # <token>
+  case "${1-}" in
+    *://*/pull/[0-9]*|*://*/-/merge_requests/[0-9]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Print every canonical forge URL this home has durably recorded for the task,
+# one per line: the URLs in the worker's own status log, and the live-verified
+# pr= identity in the task metadata. The task id "fleet" reads the union across
+# every task in the home, because a fleet-wide outcome belongs to no single
+# task. Returns 1 when the state directory itself cannot be read.
+fm_pr_task_recorded_urls() { # <state> <task-id>
+  local state=${1-} id=${2-} file
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  if [ "$id" = fleet ]; then
+    for file in "$state"/*.status; do
+      _fm_pr_status_recorded_urls "$file"
+    done
+    for file in "$state"/*.meta; do
+      _fm_pr_meta_recorded_urls "$file"
+    done
+    return 0
+  fi
+  fm_task_id_path_safe "$id" || return 1
+  _fm_pr_status_recorded_urls "$state/$id.status"
+  _fm_pr_meta_recorded_urls "$state/$id.meta"
+}
+
+_fm_pr_status_recorded_urls() { # <status-file>
+  local file=$1 line ref
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Most status lines carry no URL at all; skip those before scanning.
+    case "$line" in *://*) ;; *) continue ;; esac
+    while IFS= read -r ref; do
+      case "$ref" in ''|'!'*) continue ;; esac
+      printf '%s\n' "$ref"
+    done <<REFS
+$(fm_pr_text_forge_refs "$line")
+REFS
+  done < "$file"
+}
+
+_fm_pr_meta_recorded_urls() { # <meta-file>
+  local file=$1 line
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in pr=*) ;; *) continue ;; esac
+    fm_pr_url_parse "${line#pr=}" && printf '%s\n' "$FM_PR_URL"
+  done < "$file"
+}
+
+# Verify that every forge reference in the given captain-facing texts was
+# copied from this home's durable records for the task. Returns 0 when the
+# texts carry only recorded URLs (including when they carry none), 1 when one
+# does not, with FM_PR_OUTCOME_REJECTED naming it, and 2 when the durable
+# records cannot be read at all.
+# shellcheck disable=SC2034 # FM_PR_OUTCOME_REJECTED is read by sourcing callers.
+fm_pr_outcome_text_copied() { # <state> <task-id> <text>...
+  local state=$1 id=$2 allowed='' resolved=0 text ref
+  shift 2
+  FM_PR_OUTCOME_REJECTED=
+  for text in "$@"; do
+    [ -n "$text" ] || continue
+    # Text with no URL at all cannot carry a forge reference, and the durable
+    # records are only read once a reference actually needs checking.
+    case "$text" in *://*) ;; *) continue ;; esac
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      case "$ref" in
+        '!'*)
+          FM_PR_OUTCOME_REJECTED=${ref#!}
+          return 1
+          ;;
+      esac
+      if [ "$resolved" -eq 0 ]; then
+        allowed=$(fm_pr_task_recorded_urls "$state" "$id") || return 2
+        resolved=1
+      fi
+      case "
+$allowed
+" in
+        *"
+$ref
+"*) ;;
+        *)
+          FM_PR_OUTCOME_REJECTED=$ref
+          return 1
+          ;;
+      esac
+    done <<REFS
+$(fm_pr_text_forge_refs "$text")
+REFS
+  done
+  return 0
 }
 
 fm_pr_file_mode() {

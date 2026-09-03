@@ -146,6 +146,14 @@ case "${1:-} ${2:-}" in
     ;;
 esac
 case " $* " in
+  *" url "*)
+    # fm-pr-check.sh's live resolution: the forge echoes back the canonical URL
+    # it resolved, and 404s for a repository it does not host.
+    if [ -n "${FM_TEST_FORGE_MISSING_REPO:-}" ]; then
+      case "${3:-}" in *"/$FM_TEST_FORGE_MISSING_REPO/"*) exit 1 ;; esac
+    fi
+    printf '%s\n' "${FM_TEST_GH_RESOLVED_URL:-${3:-}}"
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
@@ -160,6 +168,8 @@ printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
 case "${1:-} ${2:-}" in
   "pr view")
     [ "$#" -eq 5 ] && [ "${4:-}" = --repo ] || exit 2
+    # The same repository the gh mock cannot find is missing here too.
+    [ "${5:-}" != "${FM_TEST_FORGE_MISSING_REPO:-}" ] || exit 1
     printf 'pull_request:\n  number: %s\n  state: %s\n' "$3" "${FM_TEST_GH_MERGE_STATE:-merged}"
     ;;
 esac
@@ -480,6 +490,77 @@ test_invalid_entrypoints_have_zero_side_effects() {
   [ ! -s "$dir/guard.log" ] || fail "invalid direct or merge data called the guard"
   [ ! -e "$TMP_ROOT/escape.check.sh" ] || fail "task traversal wrote outside state"
   pass "PR and teardown entrypoints reject invalid arguments before every side effect"
+}
+
+# 2026-09-03 incident: supervision registered
+# https://github.com/karpathy/backpass/pull/108 for a task whose worker had
+# already reported the real https://github.com/kunchenguid/backpass/pull/108.
+# The owner came from world knowledge, GitHub 404ed on it, and the URL was
+# recorded anyway - so it then read as this task's PR truth everywhere
+# downstream. Registration now resolves the pull request live and refuses a URL
+# the forge does not return.
+test_recording_requires_a_live_forge_resolution() {
+  local dir state real invented rc before
+  dir=$(make_case live-resolution)
+  state="$dir/home/state"
+  write_task_meta "$dir" backpass-clean-slate
+  real=https://github.com/kunchenguid/backpass/pull/108
+  invented=https://github.com/karpathy/backpass/pull/108
+  printf 'done: PR %s checks green\n' "$real" > "$state/backpass-clean-slate.status"
+  before=$(state_snapshot "$state")
+
+  # GitHub cannot resolve the invented owner, exactly as it 404ed in the field.
+  set +e
+  FM_TEST_FORGE_MISSING_REPO=karpathy/backpass run_check_entry "$dir" backpass-clean-slate "$invented" \
+    > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unresolvable PR URL was accepted"
+  assert_contains "$(cat "$dir/stderr")" "$invented" "the refusal did not name the URL it refused"
+  assert_no_grep karpathy "$state/backpass-clean-slate.meta" "the invented URL was recorded in metadata"
+  ! grep -q '^pr=' "$state/backpass-clean-slate.meta" \
+    || fail "a refused registration still recorded a PR"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a refused registration changed state"
+
+  # A repository that resolves to a DIFFERENT canonical URL is refused too, so
+  # a redirect cannot record the name that was typed.
+  set +e
+  FM_TEST_GH_RESOLVED_URL="$real" run_check_entry "$dir" backpass-clean-slate "$invented" \
+    >/dev/null 2> "$dir/stderr2"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a URL the forge canonicalized elsewhere was accepted"
+  assert_contains "$(cat "$dir/stderr2")" "$real" "the refusal did not name the URL GitHub actually resolved"
+  ! grep -q '^pr=' "$state/backpass-clean-slate.meta" \
+    || fail "a redirected registration recorded a PR"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a redirected registration changed state"
+
+  # The URL the worker actually reported resolves, so it records and arms.
+  run_check_entry "$dir" backpass-clean-slate "$real" > "$dir/ok.out" 2> "$dir/ok.err" \
+    || fail "the live-resolved PR URL was refused: $(cat "$dir/ok.err")"
+  grep -qxF "pr=$real" "$state/backpass-clean-slate.meta" \
+    || fail "the live-resolved PR URL was not recorded"
+  grep -q '^armed:' "$dir/ok.out" || fail "the live-resolved PR URL did not arm a poll"
+
+  # A GitLab merge request the instance cannot answer is refused the same way.
+  dir=$(make_case live-resolution-gitlab)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  before=$(state_snapshot "$state")
+  set +e
+  FM_TEST_GLAB_FAIL=1 run_check_entry "$dir" task-a \
+    https://gitlab.example/group/project/-/merge_requests/9 >/dev/null 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unresolvable merge request URL was accepted"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "a refused merge request was recorded"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a refused merge request changed state"
+  run_check_entry "$dir" task-a https://gitlab.example/group/project/-/merge_requests/9 \
+    >/dev/null 2> "$dir/gl.err" \
+    || fail "a resolvable merge request was refused: $(cat "$dir/gl.err")"
+  grep -qxF 'pr=https://gitlab.example/group/project/-/merge_requests/9' "$state/task-a.meta" \
+    || fail "the resolved merge request was not recorded"
+  pass "a PR URL is recorded only when its own forge resolves it live"
 }
 
 test_valid_recording_and_merge_derivation() {
@@ -2137,6 +2218,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_recording_requires_a_live_forge_resolution
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_atomic_interruption_leaves_no_partial_artifact

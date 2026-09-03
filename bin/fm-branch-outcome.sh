@@ -49,6 +49,13 @@
 #     fault keeps the lost-wake backstop skipped.
 #   - Every mutation runs under $STATE/.branch-outcomes.lock so the branch
 #     extension and a concurrent session-start replay cannot interleave.
+#   - A pull request or merge request URL may only be RECORDED as a copy of one
+#     this home already holds for that task: the worker's own status log lines
+#     and the live-verified pr= identity in the task metadata (a "fleet"
+#     outcome reads the union across every task). An append carrying any other
+#     forge reference is refused, so an owner/repository assembled from memory
+#     can neither reach the store nor be published from it. bin/fm-pr-lib.sh
+#     owns the extraction and membership test.
 #   - The store is written BEFORE the outcome is delivered to main
 #     (store-first durability): nothing about a handled event depends on
 #     conversation memory.
@@ -92,6 +99,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 
 STORE="$STATE/branch-outcomes.jsonl"
 CURSOR="$STATE/.branch-outcomes-cursor"
@@ -442,6 +451,20 @@ case "$CMD" in
       echo "error: silent outcomes must be routine fleet outcomes" >&2
       exit 2
     fi
+    # A PR URL in an outcome is only ever a COPY of one this home recorded.
+    COPY_RC=0
+    fm_pr_outcome_text_copied "$STATE" "$TASK" "$SUMMARY" "$WAKE" || COPY_RC=$?
+    case "$COPY_RC" in
+      0) ;;
+      1)
+        echo "error: refusing to record an outcome carrying the pull request URL $FM_PR_OUTCOME_REJECTED, which is not in this task's durable records; copy the URL from the worker's own status line or the recorded PR instead of composing one" >&2
+        exit 1
+        ;;
+      *)
+        echo "error: refusing to record an outcome because this home's durable task records could not be read" >&2
+        exit 1
+        ;;
+    esac
     fm_lock_acquire_wait "$LOCK"
     if ! LAST_SEQ=$(last_seq); then
       fm_lock_release "$LOCK"
