@@ -175,7 +175,7 @@ test_outcome_startup_replay_preserves_silence() {
 # The owner had been assembled from world knowledge instead of copied, so the
 # store now refuses any forge URL that is not already in the task's records.
 test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
-  local home real invented out status store before
+  local home real invented out status store before bare_github
   home="$TMP_ROOT/store-pr-url-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
@@ -228,6 +228,19 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   assert_contains "$out" 'github.com/karpathy/backpass/pull/108' \
     "the bare GitHub refusal did not name the rejected reference"
   [ "$(cat "$store")" = "$before" ] || fail "a refused bare GitHub reference changed the store"
+
+  for bare_github in \
+    'www.github.com/karpathy/backpass/pull/108' \
+    'GitHub.com/karpathy/backpass/pull/108'; do
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+      --task backpass-clean-slate --verdict captain \
+      --summary "review $bare_github" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "noncanonical bare GitHub reference bypassed the outcome gate: $bare_github"
+    assert_contains "$out" "$bare_github" \
+      "the noncanonical GitHub refusal did not name the rejected reference"
+    [ "$(cat "$store")" = "$before" ] || fail "a refused noncanonical GitHub reference changed the store"
+  done
 
   out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task backpass-clean-slate --verdict captain \

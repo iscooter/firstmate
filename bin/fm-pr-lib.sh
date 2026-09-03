@@ -267,7 +267,10 @@ _fm_pr_ref_unwrap() { # <token>
 
 _fm_pr_ref_shaped() { # <token>
   case "${1-}" in
-    *://*/pull/[0-9]*|github.com/*/pull/[0-9]*|*/*/-/merge_requests/[0-9]*) return 0 ;;
+    *://*/pull/[0-9]*|\
+    [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
+    [Ww][Ww][Ww].[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]/*/pull/[0-9]*|\
+    */*/-/merge_requests/[0-9]*) return 0 ;;
   esac
   return 1
 }
