@@ -147,6 +147,7 @@ case "${1:-} ${2:-}" in
 esac
 case " $* " in
   *" url "*)
+    [ "${FM_TEST_GH_RESOLVE_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_RESOLVE_SLEEP"
     # fm-pr-check.sh's live resolution: the forge echoes back the canonical URL
     # it resolved, and 404s for a repository it does not host.
     if [ -n "${FM_TEST_FORGE_MISSING_REPO:-}" ]; then
@@ -583,6 +584,38 @@ test_recording_requires_a_live_forge_resolution() {
   grep -qxF 'pr=https://gitlab.example/group/project/-/merge_requests/9' "$state/task-a.meta" \
     || fail "the resolved merge request was not recorded"
   pass "a PR URL is recorded only when its own forge resolves it live"
+}
+
+test_live_resolution_timeout_refuses_without_state_changes() {
+  local dir state url before rc
+  dir=$(make_case live-resolution-timeout)
+  state="$dir/home/state"
+  url=https://github.com/kunchenguid/backpass/pull/108
+  write_task_meta "$dir" timeout-task
+  before=$(state_snapshot "$state")
+
+  set +e
+  FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_PR_FORGE_TIMEOUT=1 FM_TEST_GH_RESOLVE_SLEEP=3 \
+    run_check_entry "$dir" timeout-task "$url" >/dev/null 2> "$dir/timeout.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a timed-out forge resolution recorded a PR"
+  assert_contains "$(cat "$dir/timeout.err")" "resolution timed out" \
+    "the timeout refusal was indistinguishable from a missing PR"
+  ! grep -q '^pr=' "$state/timeout-task.meta" || fail "a timed-out resolution recorded pr metadata"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a timed-out resolution changed state"
+  [ ! -s "$dir/guard.log" ] || fail "a timed-out resolution called the mutating guard"
+
+  set +e
+  FM_PR_FORGE_TIMEOUT=0 run_check_entry "$dir" timeout-task "$url" \
+    >/dev/null 2> "$dir/invalid-timeout.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a non-positive forge timeout was accepted"
+  assert_contains "$(cat "$dir/invalid-timeout.err")" "must be a positive integer" \
+    "the non-positive timeout refusal lost its diagnostic"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "an invalid timeout changed state"
+  pass "live forge resolution is bounded and fails closed"
 }
 
 test_refused_registration_preserves_pending_retirement() {
@@ -2285,6 +2318,7 @@ test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_recording_requires_a_live_forge_resolution
+test_live_resolution_timeout_refuses_without_state_changes
 test_refused_registration_preserves_pending_retirement
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract

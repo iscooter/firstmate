@@ -175,7 +175,7 @@ test_outcome_startup_replay_preserves_silence() {
 # The owner had been assembled from world knowledge instead of copied, so the
 # store now refuses any forge URL that is not already in the task's records.
 test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
-  local home real invented out status store before bare_github noncanonical_ref
+  local home real invented out status store before bare_github noncanonical_ref non_forge_summary
   home="$TMP_ROOT/store-pr-url-home"
   mkdir -p "$home/state"
   store="$home/state/branch-outcomes.jsonl"
@@ -217,12 +217,15 @@ test_outcome_refuses_a_pr_url_that_was_not_copied_from_the_records() {
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task backpass-clean-slate --verdict routine --summary 'worker is still running tests' >/dev/null \
     || fail "an outcome with no PR reference was refused"
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
-    --task backpass-clean-slate --verdict routine \
-    --summary 'the /pull/request endpoint is failing' >/dev/null \
-    || fail "host-less route prose was mistaken for a forge reference"
-  assert_contains "$(cat "$store")" 'the /pull/request endpoint is failing' \
-    "accepted host-less route prose did not reach the store"
+  for non_forge_summary in \
+    'the /pull/request endpoint is failing' \
+    'the docs//api/pull/request endpoint is failing'; do
+    FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+      --task backpass-clean-slate --verdict routine --summary "$non_forge_summary" >/dev/null \
+      || fail "host-less route prose was mistaken for a forge reference: $non_forge_summary"
+    assert_contains "$(cat "$store")" "$non_forge_summary" \
+      "accepted host-less route prose did not reach the store"
+  done
 
   # A decorated reference cannot smuggle a repository past the canonical test.
   before=$(cat "$store")

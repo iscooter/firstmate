@@ -286,7 +286,7 @@ _fm_pr_ref_shaped() { # <token>
   [[ "$token" =~ $pattern ]] || return 1
   prefix=${BASH_REMATCH[1]}
   case "$prefix" in
-    *://*|*//*|*.*) return 0 ;;
+    *://*|//*|*.*) return 0 ;;
   esac
   return 1
 }

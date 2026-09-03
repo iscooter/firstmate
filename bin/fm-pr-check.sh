@@ -22,6 +22,13 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+FM_PR_FORGE_TIMEOUT=${FM_PR_FORGE_TIMEOUT:-20}
+case "$FM_PR_FORGE_TIMEOUT" in
+  ''|*[!0-9]*|0) echo "error: FM_PR_FORGE_TIMEOUT must be a positive integer" >&2; exit 2 ;;
+esac
 
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
@@ -73,10 +80,11 @@ fi
 # reader may still answer.
 FM_PR_CHECK_RESOLVED=
 github_resolves_url_with_gh() {
-  local resolved
+  local resolved rc
   FM_PR_CHECK_RESOLVED=
   command -v gh >/dev/null 2>&1 || return 1
-  resolved=$(gh pr view "$URL" --json url -q .url 2>/dev/null) || return 1
+  resolved=$(fm_run_timed "$FM_PR_FORGE_TIMEOUT" gh pr view "$URL" --json url -q .url 2>/dev/null) \
+    || { rc=$?; return "$rc"; }
   [ -n "$resolved" ] || return 1
   [ "$resolved" = "$URL" ] && return 0
   FM_PR_CHECK_RESOLVED=$resolved
@@ -88,9 +96,10 @@ github_resolves_url_with_gh() {
 # the owner/repository and number the stored URL reconstructs from, so a
 # resolved view is a resolution of this exact URL.
 github_resolves_url_with_gh_axi() {
-  local output
+  local output rc
   command -v gh-axi >/dev/null 2>&1 || return 1
-  output=$(gh-axi pr view "$NUMBER" --repo "$PROJECT_PATH" 2>/dev/null) || return 1
+  output=$(fm_run_timed "$FM_PR_FORGE_TIMEOUT" gh-axi pr view "$NUMBER" --repo "$PROJECT_PATH" 2>/dev/null) \
+    || { rc=$?; return "$rc"; }
   printf '%s\n' "$output" | awk '
     $1 == "state:" { count++; value=$2 }
     END { exit !(count == 1 && value != "") }
@@ -112,8 +121,20 @@ resolve_or_refuse() {
           echo "error: refusing to record $URL because GitHub resolves it as $FM_PR_CHECK_RESOLVED; record the URL the forge itself reports" >&2
           return 1
           ;;
+        124)
+          echo "error: refusing to record $URL because GitHub resolution timed out after ${FM_PR_FORGE_TIMEOUT}s" >&2
+          return 1
+          ;;
       esac
-      github_resolves_url_with_gh_axi && return 0
+      rc=0
+      github_resolves_url_with_gh_axi || rc=$?
+      case "$rc" in
+        0) return 0 ;;
+        124)
+          echo "error: refusing to record $URL because GitHub fallback resolution timed out after ${FM_PR_FORGE_TIMEOUT}s" >&2
+          return 1
+          ;;
+      esac
       echo "error: refusing to record $URL because GitHub did not resolve it; check the owner and repository against the worker's own report" >&2
       return 1
       ;;
@@ -121,11 +142,16 @@ resolve_or_refuse() {
       # glab cannot take a merge request URL, so the merge request is addressed
       # by the same validated components the stored URL reconstructs from, with
       # the instance named explicitly rather than left to glab's own default.
-      raw=$(GITLAB_HOST="$HOST" glab mr view "$NUMBER" \
-        -R "https://$HOST/$PROJECT_PATH" 2>/dev/null) || {
+      rc=0
+      raw=$(fm_run_timed "$FM_PR_FORGE_TIMEOUT" env GITLAB_HOST="$HOST" \
+        glab mr view "$NUMBER" -R "https://$HOST/$PROJECT_PATH" 2>/dev/null) || rc=$?
+      if [ "$rc" -eq 124 ]; then
+        echo "error: refusing to record $URL because GitLab resolution timed out after ${FM_PR_FORGE_TIMEOUT}s" >&2
+        return 1
+      elif [ "$rc" -ne 0 ]; then
         echo "error: refusing to record $URL because GitLab did not resolve it; check the project path against the worker's own report" >&2
         return 1
-      }
+      fi
       printf '%s\n' "$raw" | grep -q '^state:' || {
         echo "error: refusing to record $URL because glab returned no merge request state for it" >&2
         return 1
@@ -176,7 +202,8 @@ fm_pr_poll_retirement_recover_one "$STATE" "$ID" "$SCRIPT_DIR/fm-pr-poll.sh" || 
 WT=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2- || true)
 PR_HEAD=
 if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
-  if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
+  if REMOTE_HEAD=$(cd "$WT" && fm_run_timed "$FM_PR_FORGE_TIMEOUT" \
+    gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
     && fm_pr_head_valid "$REMOTE_HEAD"; then
     PR_HEAD=$REMOTE_HEAD
   fi
