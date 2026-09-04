@@ -91,7 +91,6 @@ fm_timeout_with_wedge_margin() {  # <preferred-seconds> <liveness-grace-seconds>
   case "$preferred" in ''|*[!0-9]*|0) preferred=30 ;; esac
   case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
   maximum=$((grace * 2 - 2))
-  [ "$maximum" -ge 1 ] || maximum=1
   [ "$preferred" -le "$maximum" ] || preferred=$maximum
   printf '%s\n' "$preferred"
 }

@@ -172,9 +172,12 @@ fm_watcher_wedge_bound() {  # [grace]
 }
 
 fm_watcher_phase_timeout() {  # <preferred-seconds> [grace]
-  local preferred=$1 grace=${2:-${FM_GUARD_GRACE:-300}}
+  local preferred=$1 grace=${2:-${FM_GUARD_GRACE:-300}} timeout
   case "$preferred" in ''|*[!0-9]*|0) return 2 ;; esac
-  fm_timeout_with_wedge_margin "$preferred" "$grace"
+  _fm_wake_require_timeout
+  timeout=$(fm_timeout_with_wedge_margin "$preferred" "$grace")
+  [ "$timeout" -ge 1 ] || timeout=1
+  printf '%s\n' "$timeout"
 }
 
 # The one lock state that is neither healthy nor free: a LIVE, identity-matched

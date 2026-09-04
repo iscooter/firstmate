@@ -1723,6 +1723,7 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 _fm_classify_observation_timeout() {
   local grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}} timeout maximum
   timeout=$(fm_timeout_with_wedge_margin 30 "$grace")
+  [ "$timeout" -gt 0 ] || return 1
   case "${FM_BACKEND_READ_DEADLINE_EPOCH:-}" in
     ''|*[!0-9]*) ;;
     *)

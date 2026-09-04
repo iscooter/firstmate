@@ -47,8 +47,12 @@ process = subprocess.Popen(
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     handle.write(f"{process.pid}\n")
 PY
+    [ "${FM_FAKE_TMUX_LAUNCH_DELAY:-0}" = 0 ] || sleep "$FM_FAKE_TMUX_LAUNCH_DELAY"
     ;;
   has-session)
+    if [ "${FM_FAKE_TMUX_STICKY:-0}" = 1 ] && [ -s "$record" ]; then
+      exit 0
+    fi
     if [ -s "$record" ] && kill -0 "$(cat "$record")" 2>/dev/null; then
       exit 0
     fi
@@ -595,6 +599,25 @@ test_watcher_launcher_forwards_effective_home_configuration() {
 # generous bound while supervision is needed means the Stop hook has stopped
 # arming. The guard repairs what it can reach and stays SILENT when the repair
 # takes, so a long working turn can never produce a false alarm.
+test_autoarm_fast_actionable_self_heal_stays_silent() {
+  (
+    local dir home out
+    dir=$(make_guard_case autoarm-fast-actionable)
+    home=$(case_home "$dir")
+    cat > "$home/state/x-watch.check.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'check: immediate self-heal delivery\n'
+SH
+    chmod +x "$home/state/x-watch.check.sh"
+    export FM_FAKE_TMUX_LAUNCH_DELAY=1 FM_FAKE_TMUX_STICKY=1
+    out=$(run_guard_case_autoarm "$dir")
+    [ -z "$out" ] || fail "a self-heal cycle that delivered immediately was reported failed: $out"
+    [ -s "$home/state/.watch-deliveries.log" ] \
+      || fail "the fast self-heal cycle did not publish its delivered wake"
+  ) || fail "fast actionable self-heal regression failed"
+  pass "fm-guard: an immediately delivered self-heal cycle stays silent"
+}
+
 test_autoarm_stale_ledger_self_heals_silently() {
   local dir home out
   dir=$(make_guard_case autoarm-self-heal)
@@ -1007,6 +1030,7 @@ test_watcher_launcher_replaces_unproven_tracked_owner
 test_guard_preserves_subwedge_tracked_watcher
 test_watcher_launcher_settles_proven_tracked_wedge
 test_watcher_launcher_forwards_effective_home_configuration
+test_autoarm_fast_actionable_self_heal_stays_silent
 test_autoarm_stale_ledger_self_heals_silently
 test_autoarm_self_heal_failure_surfaces_once
 test_autoarm_quiet_but_working_fleet_stays_silent

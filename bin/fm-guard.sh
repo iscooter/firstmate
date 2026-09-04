@@ -175,7 +175,7 @@ fm_guard_autoarm_accept_heal() {
 }
 
 fm_guard_autoarm_self_heal() {
-  local claim_rc gen launch_out launch_status wait_secs attempts=0
+  local claim_rc gen launch_out launch_status wait_secs attempts=0 beacon_before beacon_after delivery_before delivery_after
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     return 0
   fi
@@ -193,6 +193,8 @@ fm_guard_autoarm_self_heal() {
     return 1
   fi
   gen=$FM_AUTOARM_MY_GEN
+  beacon_before=$(fm_path_mtime "$STATE/.last-watcher-beat" 2>/dev/null || true)
+  delivery_before=$(tail -n 1 "$STATE/.watch-deliveries.log" 2>/dev/null || true)
   launch_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-afk-launch.sh" start-watcher 2>&1)
   if [ "$?" -ne 0 ]; then
@@ -208,6 +210,14 @@ fm_guard_autoarm_self_heal() {
   wait_secs=$(fm_watcher_phase_timeout 10 "$GRACE")
   while [ "$attempts" -lt $((wait_secs * 10)) ]; do
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+      fm_guard_autoarm_accept_heal "$gen"
+      return $?
+    fi
+    beacon_after=$(fm_path_mtime "$STATE/.last-watcher-beat" 2>/dev/null || true)
+    delivery_after=$(tail -n 1 "$STATE/.watch-deliveries.log" 2>/dev/null || true)
+    if { [ -z "$beacon_before" ] && [ -n "$beacon_after" ]; } \
+      || { [ -n "$beacon_before" ] && [ -n "$beacon_after" ] && [ "$beacon_after" -gt "$beacon_before" ]; } \
+      || { [ -n "$delivery_after" ] && [ "$delivery_after" != "$delivery_before" ]; }; then
       fm_guard_autoarm_accept_heal "$gen"
       return $?
     fi

@@ -64,6 +64,7 @@ fm_backend_run_read_timed() {
   local timeout now remaining
   _fm_backend_require_timeout
   timeout=$(fm_backend_read_timeout)
+  [ "$timeout" -gt 0 ] || return 124
   if [ -n "${FM_BACKEND_READ_DEADLINE_EPOCH:-}" ]; then
     now=$(date +%s)
     remaining=$((FM_BACKEND_READ_DEADLINE_EPOCH - now))
@@ -78,6 +79,7 @@ fm_backend_compound_read() {  # <function> [args...]
   shift
   case "$previous" in *[!0-9]*) previous= ;; esac
   timeout=$(fm_backend_read_timeout)
+  [ "$timeout" -gt 0 ] || return 124
   deadline=$(( $(date +%s) + timeout ))
   if [ -n "$previous" ] && [ "$previous" -lt "$deadline" ]; then
     deadline=$previous

@@ -209,7 +209,7 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
-PROCEVENT_RECONCILE_TIMEOUT=$(fm_watcher_phase_timeout 30 "$WATCHER_STALE_GRACE")
+PROCEVENT_RECONCILE_TIMEOUT=$(fm_timeout_with_wedge_margin 30 "$WATCHER_STALE_GRACE")
 # bin/fm-timeout-lib.sh is the single owner of bounded execution; load it
 # explicitly rather than relying on a transitive source, because the poll loop
 # bounds its own external calls above.
@@ -1044,6 +1044,7 @@ pause_state_class() {  # <window> <task>
   local previous=${FM_BACKEND_READ_DEADLINE_EPOCH-} deadline timeout result rc=0
   case "$previous" in *[!0-9]*) previous= ;; esac
   timeout=$(fm_backend_read_timeout)
+  [ "$timeout" -gt 0 ] || return 1
   deadline=$(( $(date +%s) + timeout ))
   if [ -n "$previous" ] && [ "$previous" -lt "$deadline" ]; then
     deadline=$previous
@@ -1708,7 +1709,7 @@ while :; do
   # each registered source has its own child blocking on that source, and this
   # only republishes results already captured durably and restarts a source
   # whose owner is gone. It is a no-op with nothing registered.
-  if [ -d "$STATE/procevent" ]; then
+  if [ -d "$STATE/procevent" ] && [ "$PROCEVENT_RECONCILE_TIMEOUT" -gt 0 ]; then
     # Bounded: reconcile restarts source runners, so an unbounded call here puts
     # an unknown deadline between two beats. On the bound the next poll
     # reconciles again.

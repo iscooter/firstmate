@@ -100,12 +100,8 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 FM_PENDING_REPLY_OBSERVE_TIMEOUT=20
 
 _fm_pending_reply_observe_timeout() {
-  if command -v fm_watcher_phase_timeout >/dev/null 2>&1; then
-    fm_watcher_phase_timeout "$FM_PENDING_REPLY_OBSERVE_TIMEOUT" \
-      "${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}"
-  else
-    printf '%s\n' "$FM_PENDING_REPLY_OBSERVE_TIMEOUT"
-  fi
+  fm_timeout_with_wedge_margin "$FM_PENDING_REPLY_OBSERVE_TIMEOUT" \
+    "${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}"
 }
 
 # bin/fm-timeout-lib.sh is the single owner of bounded execution. Load it only
@@ -847,6 +843,14 @@ fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] 
   local backend=$1 target=$2 expected_label=${3-} harness=${4-} output_var=${5-} native tail40 result capture_rc=0
   local previous=${FM_BACKEND_READ_DEADLINE_EPOCH-} deadline timeout
   timeout=$(fm_backend_read_timeout)
+  if [ "$timeout" -le 0 ]; then
+    if [ -n "$output_var" ]; then
+      printf -v "$output_var" '%s' unknown
+    else
+      printf 'unknown'
+    fi
+    return 0
+  fi
   deadline=$(( $(date +%s) + timeout ))
   case "$previous" in ''|*[!0-9]*) previous= ;; *) [ "$previous" -ge "$deadline" ] || deadline=$previous ;; esac
   FM_BACKEND_READ_DEADLINE_EPOCH=$deadline
@@ -1567,7 +1571,7 @@ _fm_pending_reply_archive_settled() {  # <state-dir> <corr_id>
 # state, and optional secondmate-home wrong-home path checks.
 fm_pending_reply_tick() {  # <state-dir>
   local state=$1 dir rec base corr task_id phase delivered meta backend target label busy sm_home harness remote_host
-  local observation observation_task found i
+  local observation observation_task found i observe_timeout
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
@@ -1680,9 +1684,14 @@ fm_pending_reply_tick() {  # <state-dir>
             # shared owner and read a timeout as no observation.
             _fm_pending_reply_tick_beat
             _fm_pending_reply_require_timeout
-            observation=$(fm_run_timed "$(_fm_pending_reply_observe_timeout)" \
-              "$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
-              fm-remote-secondmate-control.sh observe "$task_id" < /dev/null 2>/dev/null || printf 'unknown')
+            observe_timeout=$(_fm_pending_reply_observe_timeout)
+            if [ "$observe_timeout" -gt 0 ]; then
+              observation=$(fm_run_timed "$observe_timeout" \
+                "$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
+                fm-remote-secondmate-control.sh observe "$task_id" < /dev/null 2>/dev/null || printf 'unknown')
+            else
+              observation=unknown
+            fi
             _fm_pending_reply_tick_beat
             case "$observation" in busy|idle|fallback-idle|unknown) ;; *) observation=unknown ;; esac
           else

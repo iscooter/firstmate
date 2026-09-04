@@ -682,7 +682,7 @@ test_pending_reply_observation_beats_stay_in_tick_process() {
 # before the twice-grace wedge verdict can reclaim their still-working owner.
 test_external_phase_deadlines_precede_the_wedge_bound() {
   (
-    local home state pending_timeout wedge backend_timeout classify_timeout started elapsed i rc
+    local home state pending_timeout wedge backend_timeout classify_timeout skipped rc
     home=$(setup_parent phase-deadline)
     state="$home/state"
     FM_HOME="$home"
@@ -705,16 +705,15 @@ test_external_phase_deadlines_precede_the_wedge_bound() {
     [ "$classify_timeout" = "$pending_timeout" ] \
       || fail "classifier and pending observations derived different bounds"
     FM_WATCHER_STALE_GRACE=1
-    started=$(date +%s)
-    for ((i = 0; i < 2; i++)); do
-      rc=0
-      fm_run_timed "$(fm_backend_read_timeout)" bash -c \
-        'trap "" TERM; sleep 10' || rc=$?
-      [ "$rc" -eq 124 ] || fail "resistant observation returned $rc instead of timing out"
-    done
-    elapsed=$(( $(date +%s) - started ))
-    [ "$elapsed" -lt 4 ] \
-      || fail "timeout shutdown margin consumed the 2s watcher wedge bound"
+    [ "$(fm_backend_read_timeout)" -eq 0 ] \
+      || fail "one-second grace forced an observation into the 2s wedge window"
+    skipped="$home/unsafe-observation-ran"
+    rc=0
+    fm_backend_run_read_timed bash -c 'touch "$1"' _ "$skipped" || rc=$?
+    [ "$rc" -eq 124 ] || fail "unsafe minimum-grace observation returned $rc"
+    [ ! -e "$skipped" ] || fail "minimum-grace observation ran without a safe timeout"
+    [ "$(crew_absorb_class hibit)" = none ] \
+      || fail "minimum-grace classifier manufactured an observation"
   ) || fail "external phase deadline regression failed"
   pass "external phase deadlines remain inside the shared wedge bound"
 }
