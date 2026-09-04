@@ -1193,17 +1193,27 @@ ${context.command}
     }
   }
 
-  function enqueueWake(message: string, acceptedGeneration: number, recoveryProbe = false): Promise<void> {
+  function enqueueWake(
+    message: string,
+    acceptedGeneration: number,
+    recoveryProbe = false,
+  ): { settlement: Promise<void>; grantReady: Promise<boolean> } {
     const acceptedSelectionRevision = branchSelectionRevision;
+    let resolveGrantReady: (ready: boolean) => void = () => {};
+    let grantReported = false;
+    const grantReady = new Promise<boolean>((resolve) => {
+      resolveGrantReady = resolve;
+    });
+    const reportGrantReady = (ready: boolean): void => {
+      if (grantReported) return;
+      grantReported = true;
+      resolveGrantReady(ready);
+    };
     const delivery = branchChain
       .then(async () => {
         if (shuttingDown || acceptedGeneration !== generation) {
           throw new Error("supervision session was replaced before handling the accepted wake");
         }
-        if (!actingAsOwner(acceptedGeneration)) throw new Error("supervision session no longer owns the fleet lock");
-        const branchForWake = await ensureBranch(acceptedGeneration, recoveryProbe);
-        const { session, sessionManager } = branchForWake;
-        await flushMirror(session, acceptedGeneration);
         if (!actingAsOwner(acceptedGeneration)) throw new Error("supervision session no longer owns the fleet lock");
         const heartbeat = /^heartbeat($|:)/.test(message);
         const scope = scopeForUnreadWake(state, heartbeat);
@@ -1218,7 +1228,10 @@ ${context.command}
         // scopeForUnreadWake itself marks corrupted (the queue or its
         // metadata could not be read safely, or an unresolvable task-local
         // row) still falls back to main.
-        if (scope.status === "empty" || (!scope.corrupted && scope.eligibleSeqs.length === 0)) return;
+        if (scope.status === "empty" || (!scope.corrupted && scope.eligibleSeqs.length === 0)) {
+          reportGrantReady(false);
+          return;
+        }
         if (scope.corrupted) {
           throw new Error("the unread wake queue could not be read safely");
         }
@@ -1230,6 +1243,14 @@ ${context.command}
         );
         if (grant === "main-owned") throw new Error("the wake rows are already claimed by main");
         if (grant !== "published") throw new Error("could not record the branch's eligible row snapshot");
+        // Mixed signal delivery may now wake main. Publishing first makes
+        // main's per-actor drain exclude these routine rows instead of racing
+        // branch construction and claiming the whole queue.
+        reportGrantReady(true);
+        const branchForWake = await ensureBranch(acceptedGeneration, recoveryProbe);
+        const { session, sessionManager } = branchForWake;
+        await flushMirror(session, acceptedGeneration);
+        if (!actingAsOwner(acceptedGeneration)) throw new Error("supervision session no longer owns the fleet lock");
         // A row can still arrive between this re-check and the model starting
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
@@ -1262,6 +1283,7 @@ ${context.command}
         }
       })
       .catch((error: unknown) => {
+        reportGrantReady(false);
         releaseEligibleRowsSnapshot(state, wakeGrantScript, String(acceptedGeneration));
         throw error;
       })
@@ -1269,7 +1291,7 @@ ${context.command}
         if (recoveryProbe) finishProviderProbe(acceptedGeneration, acceptedSelectionRevision);
       });
     branchChain = delivery.catch(() => {});
-    return delivery;
+    return { settlement: delivery, grantReady };
   }
 
   // A model or effort change applies to the next branch turn without waiting
@@ -1341,7 +1363,8 @@ ${context.command}
     }
     if (!collectCurrentMainDialog()) return;
     if (recoveryProbe && providerRecovery) providerRecovery.probeInFlight = true;
-    offer.accept(enqueueWake(offer.message, generation, recoveryProbe));
+    const dispatch = enqueueWake(offer.message, generation, recoveryProbe);
+    offer.accept(dispatch.settlement, dispatch.grantReady);
   });
 
   pi.on?.("before_agent_start", (event, ctx) => {

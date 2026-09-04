@@ -312,7 +312,14 @@ export interface BranchDispatchOffer {
   /** Set by accept(); read by the watcher after emit returns. */
   accepted: boolean;
   settlement: Promise<void>;
-  accept(settlement?: Promise<void>): void;
+  /**
+   * Resolves true once the branch's exact row grant is published. Mixed
+   * signal delivery waits for this before waking main, so main cannot claim
+   * the routine rows while the branch is still being constructed. False
+   * means branch handling ended before a grant was established.
+   */
+  grantReady: Promise<boolean>;
+  accept(settlement?: Promise<void>, grantReady?: Promise<boolean>): void;
 }
 
 export function createBranchDispatchOffer(
@@ -328,9 +335,11 @@ export function createBranchDispatchOffer(
     eligible,
     accepted: false,
     settlement: Promise.resolve(),
-    accept(settlement = Promise.resolve()) {
+    grantReady: Promise.resolve(true),
+    accept(settlement = Promise.resolve(), grantReady = Promise.resolve(true)) {
       offer.accepted = true;
       offer.settlement = settlement;
+      offer.grantReady = grantReady;
     },
   };
   return offer;

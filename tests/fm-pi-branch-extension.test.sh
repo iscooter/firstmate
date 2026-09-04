@@ -560,9 +560,11 @@ function makeOffer(message, projects = [approvedProject], heartbeat = false, eli
     eligible,
     accepted: false,
     settlement: Promise.resolve(),
-    accept(settlement = Promise.resolve()) {
+    grantReady: Promise.resolve(true),
+    accept(settlement = Promise.resolve(), grantReady = Promise.resolve(true)) {
       offer.accepted = true;
       offer.settlement = settlement;
+      offer.grantReady = grantReady;
     },
   };
   return offer;
@@ -1797,6 +1799,9 @@ globalThis.__fmPromptGate = new Promise((resolve) => { releasePrompt = resolve; 
 const offer = makeOffer("signal: branch-driver.status");
 bus.emit("fm-branch-supervision:dispatch", offer);
 if (!offer.accepted) throw new Error("branch refused the routine offer before its mixed-queue recheck");
+if (await offer.grantReady !== true) {
+  throw new Error("branch did not publish its routine-row grant before mixed main delivery");
+}
 for (let i = 0; i < 250 && !globalThis.__fmPromptStarted; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }

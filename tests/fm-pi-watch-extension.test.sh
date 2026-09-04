@@ -934,6 +934,7 @@ while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
   out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" \
+    FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=5 \
     node --input-type=module 2>&1 <<'EOF'
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -954,11 +955,13 @@ const bus = {
 };
 let rejectBranch;
 const branchSettlement = new Promise((_, reject) => { rejectBranch = reject; });
+let publishBranchGrant;
+const branchGrantReady = new Promise((resolve) => { publishBranchGrant = () => resolve(true); });
 let rejectMainDelivery;
 const mainDelivery = new Promise((_, reject) => { rejectMainDelivery = reject; });
 bus.on("fm-branch-supervision:dispatch", (offer) => {
   offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
-  if (offer.eligible) offer.accept(branchSettlement);
+  if (offer.eligible) offer.accept(branchSettlement, branchGrantReady);
 });
 const pi = {
   on(event, handler) {
@@ -986,6 +989,11 @@ const execution = tool.execute("tool-call-mixed-signal", {}, undefined, undefine
 for (let i = 0; i < 250 && offers.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
+await new Promise((resolve) => setTimeout(resolve, 50));
+if (prompts.length !== 0) {
+  throw new Error("main started draining before the branch reserved its routine rows");
+}
+publishBranchGrant();
 for (let i = 0; i < 25 && prompts.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }

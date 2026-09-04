@@ -602,7 +602,11 @@ export default function (pi: ExtensionAPI) {
     return confirmHandlingDelivery(snapshot());
   }
 
-  function offerWakeToBranch(message: string): { settlement: Promise<void>; wakeMainAfterward: boolean } | null {
+  function offerWakeToBranch(message: string): {
+    settlement: Promise<void>;
+    grantReady: Promise<boolean>;
+    wakeMainAfterward: boolean;
+  } | null {
     const heartbeat = /^heartbeat($|:)/.test(message);
     // A check-kind close (merge-confirmation polls, Relay mentions,
     // credential/auth failures, and every other legitimately main-only
@@ -636,7 +640,11 @@ export default function (pi: ExtensionAPI) {
     const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);
     return offer.accepted
-      ? { settlement: offer.settlement, wakeMainAfterward: needsDecisionTriggerKeys.length > 0 }
+      ? {
+        settlement: offer.settlement,
+        grantReady: offer.grantReady,
+        wakeMainAfterward: needsDecisionTriggerKeys.length > 0,
+      }
       : null;
   }
 
@@ -693,6 +701,10 @@ export default function (pi: ExtensionAPI) {
               schedulePendingCleanup(owner);
             });
           });
+          // Let the branch reserve only its routine rows before main starts
+          // draining the same queue. If branch setup fails first, false means
+          // there is no reservation and main safely receives the whole batch.
+          await branchDelivery.grantReady;
           return await sendWake(owner, message, pending);
         }
         try {
@@ -756,6 +768,13 @@ export default function (pi: ExtensionAPI) {
     if (!generationIsLive(owner) || owner.cleanupTimer) return;
     const timer = setTimeout(() => {
       if (owner.cleanupTimer === timer) owner.cleanupTimer = null;
+      // A branch rejection can request this pass while the matching main
+      // follow-up is still in flight. Keep the request alive until the current
+      // restoration finishes rather than dropping it on the restoring guard.
+      if (owner.restoring) {
+        schedulePendingCleanup(owner);
+        return;
+      }
       void processPendingActionables(owner);
     }, retryDelay(1));
     timer.unref();
