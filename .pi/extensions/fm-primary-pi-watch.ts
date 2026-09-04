@@ -681,6 +681,10 @@ export default function (pi: ExtensionAPI) {
               // released, so submitting the same follow-up again would only
               // duplicate the decision wake.
               existingPending.mainOnly = true;
+              // The main send can still reject after this callback observes it
+              // in flight. Ensure that failure gets another pending-processing
+              // pass once the branch has released its grant.
+              schedulePendingCleanup(owner);
               return;
             }
             const fallbackPending = createPendingActionable(message, String(owner.child?.pid ?? ""), true);

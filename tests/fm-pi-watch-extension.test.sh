@@ -954,8 +954,8 @@ const bus = {
 };
 let rejectBranch;
 const branchSettlement = new Promise((_, reject) => { rejectBranch = reject; });
-let resolveMainDelivery;
-const mainDelivery = new Promise((resolve) => { resolveMainDelivery = resolve; });
+let rejectMainDelivery;
+const mainDelivery = new Promise((_, reject) => { rejectMainDelivery = reject; });
 bus.on("fm-branch-supervision:dispatch", (offer) => {
   offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
   if (offer.eligible) offer.accept(branchSettlement);
@@ -992,13 +992,16 @@ for (let i = 0; i < 25 && prompts.length === 0; i += 1) {
 const decisionWokeBeforeBranchSettled = prompts.length > 0;
 rejectBranch(new Error("synthetic branch failure"));
 // Keep the original sendUserMessage call active while the branch rejection
-// releases its routine-row grant. The fallback must reuse that queued main
-// wake, not submit an identical follow-up concurrently.
+// releases its routine-row grant. The fallback must not submit an identical
+// follow-up concurrently, but rejection of this in-flight send must schedule
+// a retry rather than strand both queued rows.
 await new Promise((resolve) => setTimeout(resolve, 50));
 const duplicatedWhileMainDeliveryActive = prompts.length > 1;
-lifecycleHandlers.get("message_start")?.({ message: { role: "user", content: prompts[0] } });
-resolveMainDelivery();
+rejectMainDelivery(new Error("synthetic main delivery rejection"));
 await execution;
+for (let i = 0; i < 500 && prompts.length < 3; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
 if (offers.length !== 1 || offers[0].eligible !== true) {
   throw new Error(`a needs-decision row vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
 }
@@ -1011,8 +1014,13 @@ if (!prompts[0]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
 if (!decisionWokeBeforeBranchSettled) {
   throw new Error("the needs-decision wake waited for the routine branch turn to settle");
 }
-if (duplicatedWhileMainDeliveryActive || prompts.length !== 1) {
+if (duplicatedWhileMainDeliveryActive) {
   throw new Error(`branch rejection duplicated an active main wake: ${prompts.join(" | ")}`);
+}
+if (prompts.length !== 3 ||
+    !prompts[1]?.includes("watcher: FAILED - Pi extension could not deliver an actionable wake") ||
+    !prompts[2]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
+  throw new Error(`a rejected in-flight main wake was not retried after grant release: ${prompts.join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
