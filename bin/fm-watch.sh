@@ -209,11 +209,7 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
-# Seconds allowed per process-event reconcile pass, so an unbounded source
-# restart cannot sit between two liveness beats. Fixed rather than configurable:
-# it exists to keep one phase inside the beat cadence, which is not a knob an
-# operator should be able to widen.
-PROCEVENT_RECONCILE_TIMEOUT=30
+PROCEVENT_RECONCILE_TIMEOUT=$(fm_watcher_phase_timeout 30 "$WATCHER_STALE_GRACE")
 # bin/fm-timeout-lib.sh is the single owner of bounded execution; load it
 # explicitly rather than relying on a transitive source, because the poll loop
 # bounds its own external calls above.

@@ -97,10 +97,16 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
 
-# Seconds one remote busy observation may take inside a poll tick. Fixed rather
-# than configurable: it exists to keep a single phase inside the watcher's beat
-# cadence, which is not a knob an operator should be able to widen.
 FM_PENDING_REPLY_OBSERVE_TIMEOUT=20
+
+_fm_pending_reply_observe_timeout() {
+  if command -v fm_watcher_phase_timeout >/dev/null 2>&1; then
+    fm_watcher_phase_timeout "$FM_PENDING_REPLY_OBSERVE_TIMEOUT" \
+      "${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}"
+  else
+    printf '%s\n' "$FM_PENDING_REPLY_OBSERVE_TIMEOUT"
+  fi
+}
 
 # bin/fm-timeout-lib.sh is the single owner of bounded execution. Load it only
 # for the remote path that needs it, and only once per process.
@@ -1647,7 +1653,7 @@ fm_pending_reply_tick() {  # <state-dir>
             # shared owner and read a timeout as no observation.
             _fm_pending_reply_tick_beat
             _fm_pending_reply_require_timeout
-            observation=$(fm_run_timed "$FM_PENDING_REPLY_OBSERVE_TIMEOUT" \
+            observation=$(fm_run_timed "$(_fm_pending_reply_observe_timeout)" \
               "$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
               fm-remote-secondmate-control.sh observe "$task_id" < /dev/null 2>/dev/null || printf 'unknown')
             _fm_pending_reply_tick_beat

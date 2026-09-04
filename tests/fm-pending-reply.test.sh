@@ -628,6 +628,31 @@ test_pending_reply_tick_beats_each_record_below_the_old_batch_size() {
   pass "pending-reply tick beats each record before a slow observation can accumulate"
 }
 
+# 2026-09-04 stale-beacon investigation: the external calls inside the
+# bin/fm-pending-reply-lib.sh:1287 tick and bin/fm-watch.sh poll phases must end
+# before the twice-grace wedge verdict can reclaim their still-working owner.
+test_external_phase_deadlines_precede_the_wedge_bound() {
+  (
+    local home state pending_timeout wedge
+    home=$(setup_parent phase-deadline)
+    state="$home/state"
+    FM_HOME="$home"
+    FM_ROOT_OVERRIDE="$home"
+    FM_STATE_OVERRIDE="$state"
+    FM_WATCHER_STALE_GRACE=3
+    export FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_WATCHER_STALE_GRACE
+    # shellcheck source=bin/fm-watch.sh
+    . "$ROOT/bin/fm-watch.sh"
+    wedge=$(fm_watcher_wedge_bound "$FM_WATCHER_STALE_GRACE")
+    pending_timeout=$(_fm_pending_reply_observe_timeout)
+    [ "$pending_timeout" -lt "$wedge" ] \
+      || fail "pending observation timeout $pending_timeout reached ${wedge}s wedge bound"
+    [ "$PROCEVENT_RECONCILE_TIMEOUT" -lt "$wedge" ] \
+      || fail "procevent timeout $PROCEVENT_RECONCILE_TIMEOUT reached ${wedge}s wedge bound"
+  ) || fail "external phase deadline regression failed"
+  pass "external phase deadlines remain inside the shared wedge bound"
+}
+
 test_delivery_confirmation_fallback_reconciles() {
   (
     local home state corr rec marker rc prepared_corr prepared_rec prepared_marker escalations
@@ -1664,6 +1689,7 @@ test_concurrent_escalation_yields_to_late_reply
 test_transport_success_is_not_reply_success
 test_undelivered_records_are_scan_immutable
 test_pending_reply_tick_beats_each_record_below_the_old_batch_size
+test_external_phase_deadlines_precede_the_wedge_bound
 test_delivery_confirmation_fallback_reconciles
 test_delivery_confirmation_serializes_with_reconciliation
 test_unrelated_and_stale_corr_cannot_resolve

@@ -171,6 +171,14 @@ fm_watcher_wedge_bound() {  # [grace]
   printf '%s\n' "$((grace * 2))"
 }
 
+fm_watcher_phase_timeout() {  # <preferred-seconds> [grace]
+  local preferred=$1 grace=${2:-${FM_GUARD_GRACE:-300}} maximum
+  case "$preferred" in ''|*[!0-9]*|0) return 2 ;; esac
+  maximum=$(( $(fm_watcher_wedge_bound "$grace") - 1 ))
+  [ "$preferred" -le "$maximum" ] || preferred=$maximum
+  printf '%s\n' "$preferred"
+}
+
 # The one lock state that is neither healthy nor free: a LIVE, identity-matched
 # watcher for THIS home holds the lock while its beacon has gone stale.
 # Sets FM_WATCHER_BUSY_PID and FM_WATCHER_BUSY_BEACON_AGE.
