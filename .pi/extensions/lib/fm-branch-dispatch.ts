@@ -271,6 +271,38 @@ export function activateEligibleRowsOwner(
   return runGrantScript(state, grantScript, ["activate", String(ownerPid), generation]) === 0;
 }
 
+function changeEligibleRowsReservation(
+  operation: "reserve" | "unreserve",
+  state: string,
+  seqs: readonly string[],
+  grantScript: string,
+  generation: string,
+): EligibleRowsSnapshotResult {
+  if (seqs.length === 0 || seqs.some((seq) => !/^[0-9]+$/.test(seq))) return "error";
+  const status = runGrantScript(state, grantScript, [operation, generation, ...seqs]);
+  if (status === 0) return "published";
+  if (status === 3) return "main-owned";
+  return "error";
+}
+
+export function reserveEligibleRowsSnapshot(
+  state: string,
+  seqs: readonly string[],
+  grantScript: string,
+  generation: string,
+): EligibleRowsSnapshotResult {
+  return changeEligibleRowsReservation("reserve", state, seqs, grantScript, generation);
+}
+
+export function unreserveEligibleRowsSnapshot(
+  state: string,
+  seqs: readonly string[],
+  grantScript: string,
+  generation: string,
+): boolean {
+  return changeEligibleRowsReservation("unreserve", state, seqs, grantScript, generation) === "published";
+}
+
 export function writeEligibleRowsSnapshot(
   state: string,
   seqs: readonly string[],

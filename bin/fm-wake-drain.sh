@@ -64,6 +64,7 @@ case "$PRESENTATION_LOCK_TIMEOUT" in ''|*[!0-9]*|0) PRESENTATION_LOCK_TIMEOUT=10
 # so it can never swallow a main-owned row still waiting for main.
 ACTOR=$(fm_lease_actor) || exit 2
 ELIGIBLE_ROWS_FILE="$STATE/.branch-eligible-rows"
+RESERVED_ROWS_FILE="$STATE/.branch-reserved-rows"
 ELIGIBLE_OWNER_FILE="$STATE/.branch-eligible-owner"
 MAIN_ROWS_FILE="$STATE/.main-eligible-rows"
 
@@ -89,9 +90,22 @@ branch_grant_live_locked() {
 }
 
 reclaim_stale_branch_grant_locked() {
-  [ -e "$ELIGIBLE_ROWS_FILE" ] || [ -L "$ELIGIBLE_ROWS_FILE" ] || return 0
-  if ! rows_file_valid "$ELIGIBLE_ROWS_FILE" || ! branch_grant_live_locked; then
-    rm -f -- "$ELIGIBLE_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
+  if ! [ -e "$ELIGIBLE_ROWS_FILE" ] && ! [ -L "$ELIGIBLE_ROWS_FILE" ] \
+    && ! [ -e "$RESERVED_ROWS_FILE" ] && ! [ -L "$RESERVED_ROWS_FILE" ]; then
+    return 0
+  fi
+  if { [ -e "$ELIGIBLE_ROWS_FILE" ] || [ -L "$ELIGIBLE_ROWS_FILE" ]; } \
+      && ! rows_file_valid "$ELIGIBLE_ROWS_FILE"; then
+    rm -f -- "$ELIGIBLE_ROWS_FILE" "$RESERVED_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
+    return
+  fi
+  if { [ -e "$RESERVED_ROWS_FILE" ] || [ -L "$RESERVED_ROWS_FILE" ]; } \
+      && ! rows_file_valid "$RESERVED_ROWS_FILE"; then
+    rm -f -- "$ELIGIBLE_ROWS_FILE" "$RESERVED_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
+    return
+  fi
+  if ! branch_grant_live_locked; then
+    rm -f -- "$ELIGIBLE_ROWS_FILE" "$RESERVED_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
   fi
 }
 
@@ -107,9 +121,10 @@ write_rows_file_locked() { # <target> <source>
 
 claim_main_rows_locked() {
   DRAIN_TMP=$(mktemp "$STATE/.main-eligible-rows.tmp.XXXXXX") || return 1
-  awk -F '\t' -v branch="$ELIGIBLE_ROWS_FILE" -v main="$MAIN_ROWS_FILE" '
+  awk -F '\t' -v branch="$ELIGIBLE_ROWS_FILE" -v queued="$RESERVED_ROWS_FILE" -v main="$MAIN_ROWS_FILE" '
     BEGIN {
       while ((getline line < branch) > 0) reserved[line]=1
+      while ((getline line < queued) > 0) reserved[line]=1
       while ((getline line < main) > 0) owned[line]=1
     }
     NF >= 5 && $2 ~ /^[0-9]+$/ {

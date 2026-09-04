@@ -1837,6 +1837,64 @@ EOF
   pass "a co-present needs-decision row neither vetoes nor falsely settles routine branch delivery"
 }
 
+test_mixed_decision_reservation_does_not_wait_for_prior_branch_turn() {
+  local repo home out status
+  repo="$TMP_ROOT/queued-mixed-decision-root"
+  home="$TMP_ROOT/queued-mixed-decision-home"
+  mkdir -p "$home/state" "$home/config"
+  install_pi_branch_extension_fixture "$repo"
+  PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { bus, dispatch, fire, home, makeOffer, realRoot }; })()`);
+const { bus, dispatch, fire, home, makeOffer, realRoot } = globalThis.__t;
+import { appendFileSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+fire("session_start", {});
+let releaseFirst;
+globalThis.__fmPromptGate = new Promise((resolve) => { releaseFirst = resolve; });
+const first = dispatch("signal: branch-driver.status");
+if (!first.accepted) throw new Error("first routine wake was not accepted");
+for (let i = 0; i < 250 && !globalThis.__fmPromptStarted; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (!globalThis.__fmPromptStarted) throw new Error("first branch turn never started");
+appendFileSync(
+  `${home}/state/.wake-queue`,
+  "2\t2\tsignal\tbranch-driver.status\tsignal: routine follow-up\n" +
+    "3\t3\tsignal\tdecision-task.status\tneeds-decision: decision-task.status\n",
+);
+const second = makeOffer("signal: branch-driver.status decision-task.status");
+bus.emit("fm-branch-supervision:dispatch", second);
+if (!second.accepted) throw new Error("mixed follow-up was not accepted");
+const ready = await Promise.race([
+  second.grantReady,
+  new Promise((resolve) => setTimeout(() => resolve("timeout"), 100)),
+]);
+if (ready !== true) throw new Error(`mixed follow-up waited behind the prior branch turn: ${ready}`);
+const reserved = readFileSync(`${home}/state/.branch-reserved-rows`, "utf8").trim().split("\n");
+if (!reserved.includes("2") || reserved.includes("3")) {
+  throw new Error(`mixed follow-up reserved the wrong rows: ${reserved}`);
+}
+const drain = spawnSync("bash", [`${realRoot}/bin/fm-wake-drain.sh`], {
+  encoding: "utf8",
+  env: { ...process.env, FM_HOME: home, FM_STATE_OVERRIDE: `${home}/state`, FM_ROOT_OVERRIDE: realRoot },
+});
+if (drain.status !== 0) throw new Error(`main drain failed: ${drain.stderr}`);
+if (!drain.stdout.includes("\t3\tsignal\tdecision-task.status\t") ||
+    drain.stdout.includes("\t2\tsignal\tbranch-driver.status\t")) {
+  throw new Error(`main did not receive only the decision side of the queued mixed wake: ${drain.stdout}`);
+}
+void releaseFirst;
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a queued mixed decision must reserve routine rows before the prior branch turn settles: $out"
+  pass "a mixed decision wakes main without waiting for an earlier supervision turn"
+}
+
 test_settled_branch_prompt_releases_unacknowledged_grant() {
   local repo home out status
   repo="$TMP_ROOT/settled-grant-root"
@@ -4098,6 +4156,7 @@ test_branch_predrain_recheck_keeps_a_heartbeat_a_co_present_check_arrives_under
 test_branch_report_refuses_a_task_the_wake_did_not_name
 test_branch_predrain_recheck_excludes_new_main_owned_row_without_deferring_eligible_work
 test_branch_predrain_needs_decision_keeps_routine_row_branch_eligible
+test_mixed_decision_reservation_does_not_wait_for_prior_branch_turn
 test_settled_branch_prompt_releases_unacknowledged_grant
 test_post_construction_provider_error_falls_back_latches_and_recovers_on_cooldown
 test_selection_change_does_not_corrupt_inflight_provider_state

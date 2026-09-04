@@ -97,7 +97,9 @@ import {
   deactivateEligibleRowsOwner,
   FM_BRANCH_DISPATCH_EVENT,
   releaseEligibleRowsSnapshot,
+  reserveEligibleRowsSnapshot,
   scopeForUnreadWake,
+  unreserveEligibleRowsSnapshot,
   writeEligibleRowsSnapshot,
   type BranchDispatchOffer,
 } from "./lib/fm-branch-dispatch.ts";
@@ -1199,24 +1201,27 @@ ${context.command}
     recoveryProbe = false,
   ): { settlement: Promise<void>; grantReady: Promise<boolean> } {
     const acceptedSelectionRevision = branchSelectionRevision;
-    let resolveGrantReady: (ready: boolean) => void = () => {};
-    let grantReported = false;
-    const grantReady = new Promise<boolean>((resolve) => {
-      resolveGrantReady = resolve;
-    });
-    const reportGrantReady = (ready: boolean): void => {
-      if (grantReported) return;
-      grantReported = true;
-      resolveGrantReady(ready);
-    };
+    const heartbeat = /^heartbeat($|:)/.test(message);
+    const acceptedScope = scopeForUnreadWake(state, heartbeat);
+    const reservedSeqs = [...acceptedScope.eligibleSeqs];
+    const reservation = !acceptedScope.corrupted && reservedSeqs.length > 0
+      ? reserveEligibleRowsSnapshot(state, reservedSeqs, wakeGrantScript, String(acceptedGeneration))
+      : "error";
+    // Reservation is independent of branchChain: a mixed signal can wake main
+    // as soon as this offer is accepted even when an earlier branch model turn
+    // is still running. Main excludes reserved rows, while the active snapshot
+    // remains scoped to only the one serialized branch turn that may drain it.
+    const grantReady = Promise.resolve(reservation === "published");
     const delivery = branchChain
       .then(async () => {
+        if (reservation === "main-owned") throw new Error("the wake rows are already claimed by main");
+        if (reservation !== "published") throw new Error("could not reserve the branch's eligible rows");
         if (shuttingDown || acceptedGeneration !== generation) {
           throw new Error("supervision session was replaced before handling the accepted wake");
         }
         if (!actingAsOwner(acceptedGeneration)) throw new Error("supervision session no longer owns the fleet lock");
-        const heartbeat = /^heartbeat($|:)/.test(message);
         const scope = scopeForUnreadWake(state, heartbeat);
+        const eligibleSeqs = scope.eligibleSeqs.filter((seq) => reservedSeqs.includes(seq));
         // A newly-arrived main-owned (check-kind) row never bounces this
         // whole recheck back to main - scopeForUnreadWake excludes it from
         // eligibleSeqs rather than vetoing the scan, in a heartbeat review as
@@ -1228,25 +1233,18 @@ ${context.command}
         // scopeForUnreadWake itself marks corrupted (the queue or its
         // metadata could not be read safely, or an unresolvable task-local
         // row) still falls back to main.
-        if (scope.status === "empty" || (!scope.corrupted && scope.eligibleSeqs.length === 0)) {
-          reportGrantReady(false);
-          return;
-        }
+        if (scope.status === "empty" || (!scope.corrupted && eligibleSeqs.length === 0)) return;
         if (scope.corrupted) {
           throw new Error("the unread wake queue could not be read safely");
         }
         const grant = writeEligibleRowsSnapshot(
           state,
-          scope.eligibleSeqs,
+          eligibleSeqs,
           wakeGrantScript,
           String(acceptedGeneration),
         );
         if (grant === "main-owned") throw new Error("the wake rows are already claimed by main");
         if (grant !== "published") throw new Error("could not record the branch's eligible row snapshot");
-        // Mixed signal delivery may now wake main. Publishing first makes
-        // main's per-actor drain exclude these routine rows instead of racing
-        // branch construction and claiming the whole queue.
-        reportGrantReady(true);
         const branchForWake = await ensureBranch(acceptedGeneration, recoveryProbe);
         const { session, sessionManager } = branchForWake;
         await flushMirror(session, acceptedGeneration);
@@ -1255,7 +1253,7 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        wakeTaskScope = heartbeat ? null : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
+        wakeTaskScope = heartbeat ? null : { rows: [...eligibleSeqs], tasks: new Set(acceptedScope.eligibleTasks) };
         try {
           await session.prompt(
             `FIRSTMATE SUPERVISION WAKE: ${message}\n\nHandle this per your operating procedure and finish with fm_branch_report.`,
@@ -1283,12 +1281,18 @@ ${context.command}
         }
       })
       .catch((error: unknown) => {
-        reportGrantReady(false);
         releaseEligibleRowsSnapshot(state, wakeGrantScript, String(acceptedGeneration));
         throw error;
       })
       .finally(() => {
+        const reservationReleased = reservation !== "published" || unreserveEligibleRowsSnapshot(
+          state,
+          reservedSeqs,
+          wakeGrantScript,
+          String(acceptedGeneration),
+        );
         if (recoveryProbe) finishProviderProbe(acceptedGeneration, acceptedSelectionRevision);
+        if (!reservationReleased) throw new Error("could not release the branch's queued wake-row reservation");
       });
     branchChain = delivery.catch(() => {});
     return { settlement: delivery, grantReady };

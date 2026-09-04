@@ -765,6 +765,10 @@ test_main_reclaims_a_grant_whose_branch_owner_exited() {
     kill "$owner" 2>/dev/null || true
     fail "branch owner activation failed"
   }
+  FM_STATE_OVERRIDE="$state" "$GRANT" reserve stale-owner 1 || {
+    kill "$owner" 2>/dev/null || true
+    fail "branch row reservation failed"
+  }
   FM_STATE_OVERRIDE="$state" "$GRANT" publish stale-owner 1 || {
     kill "$owner" 2>/dev/null || true
     fail "branch grant publication failed"
@@ -775,7 +779,9 @@ test_main_reclaims_a_grant_whose_branch_owner_exited() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/main.out" 2> "$dir/main.err" || fail "main reclaim drain failed"
   grep -Fq "$(printf '\tsignal\ttask-a.status\t')" "$dir/main.out" \
     || fail "main did not reclaim the dead branch owner's row"
-  [ ! -e "$state/.branch-eligible-rows" ] && [ ! -e "$state/.branch-eligible-owner" ] \
+  [ ! -e "$state/.branch-eligible-rows" ] \
+    && [ ! -e "$state/.branch-reserved-rows" ] \
+    && [ ! -e "$state/.branch-eligible-owner" ] \
     || fail "dead branch ownership evidence survived reclaim"
   sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/main.err")
   generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/main.err")
