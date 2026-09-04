@@ -59,6 +59,8 @@ type PendingActionableClose = {
   message: string;
   predecessorArmPid: string;
   delivered?: true;
+  /** A released mixed-signal branch grant must retry on main, not re-enter the branch. */
+  mainOnly?: true;
 };
 
 type ReplacementActionableHandoff = {
@@ -269,12 +271,17 @@ function nodeErrorCode(error: unknown): string {
     : "";
 }
 
-function createPendingActionable(message: string, predecessorArmPid: string): PendingActionableClose {
+function createPendingActionable(
+  message: string,
+  predecessorArmPid: string,
+  mainOnly = false,
+): PendingActionableClose {
   return {
     version: 1,
     token: `${process.pid}-${Date.now()}-${++replacementCoordinator.nextTokenId}`,
     message,
     predecessorArmPid,
+    ...(mainOnly ? { mainOnly: true as const } : {}),
   };
 }
 
@@ -289,7 +296,9 @@ function validatePendingActionable(value: unknown): PendingActionableClose {
     typeof (value as { predecessorArmPid?: unknown }).predecessorArmPid !== "string" ||
     !/^[0-9]*$/.test((value as { predecessorArmPid: string }).predecessorArmPid) ||
     ((value as { delivered?: unknown }).delivered !== undefined &&
-      (value as { delivered?: unknown }).delivered !== true)
+      (value as { delivered?: unknown }).delivered !== true) ||
+    ((value as { mainOnly?: unknown }).mainOnly !== undefined &&
+      (value as { mainOnly?: unknown }).mainOnly !== true)
   ) {
     throw new Error(`invalid Pi replacement actionable handoff at ${actionableHandoff}`);
   }
@@ -659,7 +668,21 @@ export default function (pi: ExtensionAPI) {
           // delivery. If branch handling fails, wake main once more after its
           // row grant is released so the routine rows cannot be stranded.
           void branchDelivery.settlement.catch(() => {
-            void sendWake(owner, message).catch(() => {});
+            // If main has not consumed the decision wake yet, reuse its
+            // actionable record. Otherwise create a new record for the now-
+            // released routine rows. Either way, a rejected delivery or a
+            // session replacement remains eligible for the normal replay
+            // path instead of depending on a future unrelated watcher close.
+            let fallbackPending = owner.pendingActionables.find((item) => item.token === pending.token);
+            if (!fallbackPending || fallbackPending.delivered) {
+              fallbackPending = createPendingActionable(message, String(owner.child?.pid ?? ""), true);
+              enqueuePendingActionable(owner, fallbackPending);
+            } else {
+              fallbackPending.mainOnly = true;
+            }
+            void sendWake(owner, message, fallbackPending).catch(() => {
+              schedulePendingCleanup(owner);
+            });
           });
           return await sendWake(owner, message, pending);
         }
@@ -784,7 +807,13 @@ export default function (pi: ExtensionAPI) {
             return;
           }
           const message = restoration.failure ? `${pending.message}\n\n${restoration.failure}` : pending.message;
-          const delivered = await deliverActionableWake(owner, message, Boolean(restoration.failure), pending, restoration.recovery);
+          const delivered = await deliverActionableWake(
+            owner,
+            message,
+            Boolean(restoration.failure) || pending.mainOnly === true,
+            pending,
+            restoration.recovery,
+          );
           if (!delivered) {
             settleClaim("failed");
             releaseClaim();

@@ -939,9 +939,10 @@ import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const offers = [];
-let prompt = "";
+const prompts = [];
 let tool = null;
 const handlers = new Map();
+const lifecycleHandlers = new Map();
 const bus = {
   on(channel, handler) {
     handlers.set(channel, [...(handlers.get(channel) ?? []), handler]);
@@ -951,21 +952,28 @@ const bus = {
     for (const handler of handlers.get(channel) ?? []) handler(data);
   },
 };
-let releaseBranch;
-const branchSettlement = new Promise((resolve) => { releaseBranch = resolve; });
+let rejectBranch;
+const branchSettlement = new Promise((_, reject) => { rejectBranch = reject; });
 bus.on("fm-branch-supervision:dispatch", (offer) => {
   offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
   if (offer.eligible) offer.accept(branchSettlement);
 });
 const pi = {
-  on() {},
+  on(event, handler) {
+    lifecycleHandlers.set(event, handler);
+  },
   events: bus,
   registerCommand() {},
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
   sendUserMessage: async (message) => {
-    prompt = message;
+    prompts.push(message);
+    if (prompts.length === 1) {
+      lifecycleHandlers.get("message_start")?.({ message: { role: "user", content: message } });
+    } else if (prompts.length === 2) {
+      throw new Error("synthetic fallback delivery rejection");
+    }
   },
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
@@ -980,23 +988,29 @@ const execution = tool.execute("tool-call-mixed-signal", {}, undefined, undefine
 for (let i = 0; i < 250 && offers.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-for (let i = 0; i < 25 && !prompt; i += 1) {
+for (let i = 0; i < 25 && prompts.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-const decisionWokeBeforeBranchSettled = Boolean(prompt);
-releaseBranch();
+const decisionWokeBeforeBranchSettled = prompts.length > 0;
+rejectBranch(new Error("synthetic branch failure"));
 await execution;
+for (let i = 0; i < 500 && prompts.length < 3; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
 if (offers.length !== 1 || offers[0].eligible !== true) {
   throw new Error(`a needs-decision row vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
 }
 if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
   throw new Error(`the routine signal lost its project scope: ${JSON.stringify(offers)}`);
 }
-if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
-  throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompt}`);
+if (!prompts[0]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
+  throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompts.join(" | ")}`);
 }
 if (!decisionWokeBeforeBranchSettled) {
   throw new Error("the needs-decision wake waited for the routine branch turn to settle");
+}
+if (prompts.length !== 3 || !prompts[2]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
+  throw new Error(`a rejected post-branch fallback was not replayed: ${prompts.join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
