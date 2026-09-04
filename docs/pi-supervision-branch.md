@@ -29,7 +29,6 @@ The supervision branch itself is Pi-only by construction:
   This main-only classification is specific to marked signal rows; stale and heartbeat rows retain their existing eligibility rules.
   A fleet-wide heartbeat keeps its own all-or-nothing rule (see "Heartbeat routing" below): it takes every branch-ownable unread row or none of them.
   A co-present main-owned check row no longer defers that review to main, because it is not fleet context the branch is missing and main is woken for it on its own triggering close.
-  At the branch's pre-drain recheck, a co-present marked needs-decision signal defers the eligible rows to its already-woken main turn rather than publishing a partial grant; this keeps those rows in that turn's drain even if branch setup or prompting would have failed.
 - The branch itself: `.pi/extensions/fm-branch-supervision.ts` creates the branch session, serializes wakes, mirrors dialog, and merges outcomes.
   The branch conversation lasts for exactly one main session: every main session start - a cold start, `/new`, `/resume`, `/fork`, or a reload - opens a NEW branch conversation, and a conversation recorded by an earlier session is never reopened as the live one.
   That keeps the branch reasoning from the current generated prompt and the current main dialog rather than from weeks of accumulated thread, where a superseded rule could still outweigh today's.
@@ -55,8 +54,7 @@ The supervision branch itself is Pi-only by construction:
 - Autonomy: supervision is default-on for every task once a Pi primary session owns the fleet lock (docs/configuration.md "Pi supervision branch"); no captain grant file is required.
   A fleet-wide heartbeat is separately eligible only when every row other than a check or marked needs-decision signal is a heartbeat row or a resolvable task-local row (see "Heartbeat routing" below); every other fleet-wide or unresolvable wake, and every watcher-failure alarm, stays on main.
   The branch recomputes eligibility immediately before prompting the branch to drain and publishes the exact eligible row set to `state/.branch-eligible-rows` through `writeEligibleRowsSnapshot`.
-  A newly-arrived check row observed at that recheck no longer defers the whole queue to main: it is excluded from the eligible set, so whatever else is currently eligible still reaches the branch, and the check row stays queued for main's own later drain.
-  A marked needs-decision signal is different because its main turn may already be draining concurrently: the branch publishes no partial grant, leaving that main turn to claim the complete mixed queue.
+  A newly-arrived main-owned row observed at that recheck no longer defers the whole queue to main: it is excluded from the eligible set, so whatever else is currently eligible still reaches the branch, and the main-owned row stays queued for main's own drain.
   [`watcher-continuity.md`](watcher-continuity.md#per-actor-acknowledgement) owns the consume-side guarantee that neither actor can present or acknowledge the other's claim.
   Heartbeat keeps its own all-or-nothing recheck over the rows it can claim: it takes every branch-ownable unread row or none of them, and an unresolvable task-local row still defers the whole review to main.
   A producer can still append a row in the instant between that final check and drain startup; this accepted residual follows the confused-agent-grade boundary above rather than claiming adversarial queue isolation.

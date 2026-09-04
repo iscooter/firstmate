@@ -1767,11 +1767,12 @@ EOF
   pass "pre-drain eligibility re-check excludes a newly main-owned row without deferring eligible work"
 }
 
-# A needs-decision signal wakes main independently. If it appears before the
-# branch's pre-drain recheck, the branch must not reserve the routine rows:
-# main can already be draining, and a later branch failure would otherwise
-# release those rows only after that drain had excluded them.
-test_branch_predrain_needs_decision_leaves_complete_queue_for_main() {
+# A needs-decision signal wakes main independently, but it must not veto an
+# already accepted routine delivery at the branch's pre-drain recheck. The
+# grant serializes the actors: branch owns only the routine row, while the
+# decision row remains main-owned. If the prompted branch then fails, rejecting
+# the settlement releases the grant so watcher fallback can replay both rows.
+test_branch_predrain_needs_decision_keeps_routine_row_branch_eligible() {
   local repo home out status
   repo="$TMP_ROOT/predrain-needs-decision-root"
   home="$TMP_ROOT/predrain-needs-decision-home"
@@ -1783,7 +1784,7 @@ const prelude = process.env.DRIVER_PRELUDE;
 await eval(`(async () => { ${prelude}; globalThis.__t = { bus, fire, home, makeOffer, realRoot }; })()`);
 const { bus, fire, home, makeOffer, realRoot } = globalThis.__t;
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 fire("session_start", {});
 writeFileSync(
@@ -1791,31 +1792,44 @@ writeFileSync(
   "1\t1\tsignal\tbranch-driver.status\tsignal: routine progress\n" +
     "2\t2\tsignal\tdecision-task.status\tneeds-decision: decision-task.status\n",
 );
+let releasePrompt;
+globalThis.__fmPromptGate = new Promise((resolve) => { releasePrompt = resolve; });
 const offer = makeOffer("signal: branch-driver.status");
 bus.emit("fm-branch-supervision:dispatch", offer);
 if (!offer.accepted) throw new Error("branch refused the routine offer before its mixed-queue recheck");
-await offer.settlement;
-if ((globalThis.__fmPrompts ?? []).length !== 0) {
-  throw new Error("branch prompted despite a co-present needs-decision main turn");
+for (let i = 0; i < 250 && !globalThis.__fmPromptStarted; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (!globalThis.__fmPromptStarted) {
+  throw new Error("a co-present needs-decision row vetoed the accepted routine branch prompt");
+}
+const snapshot = readFileSync(`${home}/state/.branch-eligible-rows`, "utf8").trim().split("\n");
+if (!snapshot.includes("1") || snapshot.includes("2")) {
+  throw new Error(`mixed queue granted the wrong rows to branch: ${snapshot}`);
+}
+releasePrompt();
+const failure = await offer.settlement.then(() => null, (error) => error);
+if (!(failure instanceof Error) || !failure.message.includes("produced no durable outcome")) {
+  throw new Error(`accepted wake settled without delivery instead of rejecting to fallback: ${String(failure)}`);
 }
 if (existsSync(`${home}/state/.branch-eligible-rows`)) {
-  throw new Error("branch published a partial grant beside a needs-decision row");
+  throw new Error("failed branch prompt retained its routine-row grant");
 }
 const drain = spawnSync("bash", [`${realRoot}/bin/fm-wake-drain.sh`], {
   encoding: "utf8",
   env: { ...process.env, FM_HOME: home, FM_STATE_OVERRIDE: `${home}/state`, FM_ROOT_OVERRIDE: realRoot },
 });
-if (drain.status !== 0) throw new Error(`main drain failed: ${drain.stderr}`);
+if (drain.status !== 0) throw new Error(`main fallback drain failed: ${drain.stderr}`);
 if (!drain.stdout.includes("\t1\tsignal\tbranch-driver.status\t") ||
     !drain.stdout.includes("\t2\tsignal\tdecision-task.status\t")) {
-  throw new Error(`main did not receive the complete mixed queue: ${drain.stdout}`);
+  throw new Error(`fallback did not receive the released mixed queue: ${drain.stdout}`);
 }
 process.exit(0);
 EOF
   status=$?
   out=$(cat "$TMP_ROOT/node-output")
-  expect_code 0 "$status" "a mixed needs-decision recheck must leave every row claimable by main: $out"
-  pass "a co-present needs-decision signal prevents a partial branch grant"
+  expect_code 0 "$status" "a mixed needs-decision recheck must keep routine branch delivery live: $out"
+  pass "a co-present needs-decision row neither vetoes nor falsely settles routine branch delivery"
 }
 
 test_settled_branch_prompt_releases_unacknowledged_grant() {
@@ -4078,7 +4092,7 @@ test_branch_default_on_heartbeat_afk_and_fallback
 test_branch_predrain_recheck_keeps_a_heartbeat_a_co_present_check_arrives_under
 test_branch_report_refuses_a_task_the_wake_did_not_name
 test_branch_predrain_recheck_excludes_new_main_owned_row_without_deferring_eligible_work
-test_branch_predrain_needs_decision_leaves_complete_queue_for_main
+test_branch_predrain_needs_decision_keeps_routine_row_branch_eligible
 test_settled_branch_prompt_releases_unacknowledged_grant
 test_post_construction_provider_error_falls_back_latches_and_recovers_on_cooldown
 test_selection_change_does_not_corrupt_inflight_provider_state
