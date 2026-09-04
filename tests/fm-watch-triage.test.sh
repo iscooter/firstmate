@@ -1522,8 +1522,9 @@ test_actionable_signal_surfaced() {
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
-# A needs-decision status append must skip the Pi supervision branch and reach
-# main directly (docs/pi-supervision-branch.md "Autonomy"). The row still
+# A needs-decision status append surfaced through this actionable signal path
+# must skip the Pi supervision branch and reach main directly
+# (docs/pi-supervision-branch.md "Autonomy"). The row still
 # queues as an ordinary signal-kind wake - fm-branch-dispatch.ts's
 # scopeForUnreadWake tells it apart from a routine signal by this payload
 # marker, not by kind.
@@ -1544,8 +1545,8 @@ test_needs_decision_signal_payload_marked_for_branch_exclusion() {
 # A needs-decision whose key transition was rejected by the reserved-key
 # vocabulary is reported as a "reconciliation-required: " wrapped event
 # (fm-classify-lib.sh's status_span_first_actionable_record), but it is still a
-# needs-decision the captain must see directly - the payload marker must not
-# be fooled by that wrapper.
+# needs-decision signal that this path routes directly to main - the payload
+# marker must not be fooled by that wrapper.
 test_needs_decision_reconciliation_required_still_marked() {
   local dir state fakebin out status_file pid
   dir=$(make_case needs-decision-reconciliation); state="$dir/state"; fakebin="$dir/fakebin"

@@ -809,8 +809,9 @@ CLASSES
   pass "every main-only check class still reaches main, never the supervision branch"
 }
 
-# A needs-decision status append must reach main directly, exactly like a
-# check-kind trigger, never taking the supervision-branch hop first
+# A needs-decision status append surfaced through an actionable signal must
+# reach main directly, exactly like a check-kind trigger, never taking the
+# supervision-branch hop first
 # (docs/pi-supervision-branch.md "Autonomy"). Unlike a check row it shares the
 # ordinary "signal:" kind and wake-message shape, so the dispatcher tells it
 # apart by payload (fm-branch-dispatch.ts's needsDecisionKeys) instead of by

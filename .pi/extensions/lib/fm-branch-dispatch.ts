@@ -98,11 +98,12 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // starves by being left behind.
 //
 // A signal-kind row whose payload is "needs-decision:"-prefixed - a task-local
-// needs-decision status append (bin/fm-watch.sh's signal_files_actionable) -
-// gets the identical treatment: excluded from eligibleSeqs, never a scan veto,
-// and forced to main on its own triggering close
-// (fm-primary-pi-watch.ts's offerWakeToBranch). Every needs-decision must reach
-// main directly rather than taking the supervision-branch hop first.
+// needs-decision status append surfaced by bin/fm-watch.sh's
+// signal_files_actionable - gets the identical treatment: excluded from
+// eligibleSeqs, never a scan veto, and forced to main on its own triggering
+// close (fm-primary-pi-watch.ts's offerWakeToBranch). This classification is
+// intentionally limited to marked signal rows; stale and heartbeat rows keep
+// their existing eligibility rules.
 //
 // That applies to a heartbeat review too, and it is the whole point: a
 // heartbeat used to be deferred to main merely because some unrelated check
@@ -180,10 +181,9 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     if (kind === "signal") {
       const payload = fields[4] ?? "";
       if (/^needs-decision:/.test(payload)) {
-        // Always main-owned, exactly like a check-kind row above: a
-        // needs-decision status append must reach main directly rather than
-        // taking the supervision-branch hop, so it is excluded from what the
-        // branch may claim without vetoing the rest of the scan
+        // Main-owned exactly like a check-kind row above: a needs-decision
+        // status append surfaced through the actionable signal path is
+        // excluded from what the branch may claim without vetoing the scan
         // (docs/pi-supervision-branch.md "Autonomy").
         needsDecisionKeys.push(key);
         continue;

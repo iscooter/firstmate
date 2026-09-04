@@ -1216,9 +1216,9 @@ run_check_capture() {
 # turn-end pane-churn proof before it is benign.
 # Also populates FM_SIGNAL_NEEDS_DECISION_FILES (space-separated status-file
 # paths) with exactly the files whose newly classified span carries a
-# needs-decision event, so the caller can route those - and only those - rows
-# as main-only (docs/pi-supervision-branch.md; every needs-decision must reach
-# main directly, never the supervision branch).
+# needs-decision event, so the caller can route those - and only those - signal
+# rows as main-only (docs/pi-supervision-branch.md). Stale and heartbeat rows
+# retain their existing eligibility rules.
 signal_files_actionable() {  # <status-file> ...
   local f task record rest endpoint ident needs_decision rc found=1
   FM_SIGNAL_SURFACE_ENDPOINTS=''
