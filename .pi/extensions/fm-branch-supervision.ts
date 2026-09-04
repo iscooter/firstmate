@@ -1222,6 +1222,12 @@ ${context.command}
         if (scope.corrupted) {
           throw new Error("the unread wake queue could not be read safely");
         }
+        // A needs-decision signal has already woken main. Do not publish a
+        // partial branch grant while that main turn can drain: if the branch
+        // later failed, main could already have excluded these routine rows
+        // before the catch below released them, leaving no unread trigger.
+        // Let the needs-decision turn claim the complete mixed queue instead.
+        if (scope.needsDecisionKeys.length > 0) return;
         const grant = writeEligibleRowsSnapshot(
           state,
           scope.eligibleSeqs,
