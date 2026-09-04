@@ -17,7 +17,56 @@ make_guard_case() {
   dir="$TMP_ROOT/$name"
   home="$dir/home"
   root="$dir/root"
-  mkdir -p "$home/state" "$home/config" "$root"
+  mkdir -p "$home/state" "$home/config" "$root" "$dir/fakebin"
+  cat > "$dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+session=
+previous=
+for arg in "$@"; do
+  [ "$previous" = -s ] || [ "$previous" = -t ] && session=$arg
+  previous=$arg
+done
+state=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+record="$state/.fake-tmux-${session//\//-}"
+case "${1:-}" in
+  new-session)
+    command=${!#}
+    python3 - "$command" "$record" <<'PY'
+import os
+import subprocess
+import sys
+log = open(sys.argv[2] + ".log", "ab", buffering=0)
+process = subprocess.Popen(
+    ["/bin/bash", "-c", sys.argv[1]],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=log,
+    start_new_session=True,
+)
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    handle.write(f"{process.pid}\n")
+PY
+    ;;
+  has-session)
+    [ -s "$record" ] && kill -0 "$(cat "$record")" 2>/dev/null
+    ;;
+  kill-session)
+    [ -s "$record" ] || exit 1
+    kill -TERM "$(cat "$record")" 2>/dev/null || true
+    rm -f "$record"
+    ;;
+  list-windows)
+    case " $* " in
+      *' -a '*) printf 'firstmate:fm-task\n' ;;
+      *) printf '%s\n' captain fm-task ;;
+    esac
+    ;;
+  display-message) printf 'claude\n' ;;
+  capture-pane|list-panes) : ;;
+esac
+SH
+  chmod +x "$dir/fakebin/tmux"
   fm_write_meta "$home/state/task.meta" "window=firstmate:fm-task" "kind=ship"
   printf '%s\n' "$dir"
 }
@@ -67,9 +116,12 @@ run_guard_case_read_only() {
 # beacon with no live watcher process is the healthy mid-turn state.
 run_guard_case_autoarm() {
   local dir=$1
-  FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+  FM_ROOT_OVERRIDE="$ROOT" \
     FM_HOME="$(case_home "$dir")" \
+    PATH="$dir/fakebin:$PATH" \
     FM_GUARD_GRACE=999 \
+    FM_SUPERVISOR_TARGET=test:captain \
+    FM_SUPERVISOR_BACKEND=tmux \
     FM_SUPERVISION_MODEL=autoarm \
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
@@ -132,31 +184,15 @@ record_pi_extension_session() {
   return 0
 }
 
-install_rearm_stub() {
-  local dir=$1 pid=$2 home stub
+stop_fake_watcher() {
+  local dir=$1 home state=${2:-} record session
   home=$(case_home "$dir")
-  stub="$dir/rearm-launcher"
-  cat > "$stub" <<'SH'
-#!/usr/bin/env bash
-set -u
-[ "${1:-}" = start-watcher ] || exit 2
-identity=$(FM_STATE_OVERRIDE="$FM_HOME/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$FM_TEST_REARM_ROOT/bin/fm-wake-lib.sh" "$FM_TEST_REARM_PID") || exit 1
-mkdir -p "$FM_HOME/state/.watch.lock"
-printf '%s\n' "$FM_TEST_REARM_PID" > "$FM_HOME/state/.watch.lock/pid"
-printf '%s\n' "$FM_HOME" > "$FM_HOME/state/.watch.lock/fm-home"
-printf '%s\n' "$FM_TEST_REARM_ROOT/bin/fm-watch.sh" > "$FM_HOME/state/.watch.lock/watcher-path"
-printf '%s\n' "$identity" > "$FM_HOME/state/.watch.lock/pid-identity"
-touch "$FM_HOME/state/.last-watcher-beat"
-printf 'launched\n' >> "$FM_HOME/state/.test-rearm-launches"
-SH
-  chmod +x "$stub"
-  export FM_GUARD_REARM_LAUNCHER="$stub"
-  export FM_TEST_REARM_PID="$pid"
-  export FM_TEST_REARM_ROOT="$ROOT"
-}
-
-clear_rearm_stub() {
-  unset FM_GUARD_REARM_LAUNCHER FM_TEST_REARM_PID FM_TEST_REARM_ROOT
+  [ -n "$state" ] || state="$home/state"
+  record="$state/.watch-arm-terminal"
+  [ -f "$record" ] || return 0
+  session=$(awk -F '\t' 'NR == 1 { print $2 }' "$record")
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    tmux kill-session -t "$session" >/dev/null 2>&1 || true
 }
 
 count_text() {
@@ -415,26 +451,67 @@ test_autoarm_stale_beacon_prints_no_passive_banner() {
   pass "fm-guard: the auto-arm model has no passive stale-beacon banner"
 }
 
+test_watcher_launcher_preserves_live_tracked_owner() {
+  local dir home session pid before after out
+  dir=$(make_guard_case watcher-owner-preserved)
+  home=$(case_home "$dir")
+  session=existing-watch-owner
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" tmux new-session -d -s "$session" 'exec sleep 60'
+  printf 'tmux\t%s\t\n' "$session" > "$home/state/.watch-arm-terminal"
+  pid=$(cat "$home/state/.fake-tmux-$session")
+  before=$(cat "$home/state/.watch-arm-terminal")
+  out=$(PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_SUPERVISOR_TARGET=test:captain FM_SUPERVISOR_BACKEND=tmux \
+    "$ROOT/bin/fm-afk-launch.sh" start-watcher 2>&1)
+  after=$(cat "$home/state/.watch-arm-terminal")
+  kill -0 "$pid" 2>/dev/null || fail "start-watcher closed a live tracked owner"
+  [ "$after" = "$before" ] || fail "start-watcher replaced the live tracked owner record"
+  [ -z "$out" ] || fail "preserving a live tracked watcher owner should be silent: $out"
+  stop_fake_watcher "$dir"
+  pass "watcher self-heal preserves an unproven live tracked owner"
+}
+
+test_watcher_launcher_forwards_effective_home_configuration() {
+  local dir home state config i=0 out
+  dir=$(make_guard_case watcher-owner-overrides)
+  home=$(case_home "$dir")
+  state="$dir/custom-state"
+  config="$dir/custom-config"
+  mkdir -p "$state" "$config"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$state/x-watch.check.sh"
+  chmod +x "$state/x-watch.check.sh"
+  out=$(PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$config" FM_GUARD_GRACE=3 \
+    FM_SUPERVISOR_TARGET=test:captain FM_SUPERVISOR_BACKEND=tmux \
+    "$ROOT/bin/fm-afk-launch.sh" start-watcher 2>&1)
+  while [ "$i" -lt 50 ] && [ ! -e "$state/.last-watcher-beat" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  assert_present "$state/.last-watcher-beat" "tracked watcher did not use the effective state override"
+  assert_absent "$home/state/.last-watcher-beat" "tracked watcher fell back to the default home state"
+  assert_contains "$out" "daemon launched in detached tmux session" \
+    "tracked watcher launch with effective overrides did not report its tracked owner"
+  stop_fake_watcher "$dir" "$state"
+  pass "tracked watcher launch forwards effective state, config, and grace"
+}
+
 # The beacon-independent tripwire: an auto-arm ledger that has gone quiet past a
 # generous bound while supervision is needed means the Stop hook has stopped
 # arming. The guard repairs what it can reach and stays SILENT when the repair
 # takes, so a long working turn can never produce a false alarm.
 test_autoarm_stale_ledger_self_heals_silently() {
-  local dir home out holder
+  local dir home out
   dir=$(make_guard_case autoarm-self-heal)
   home=$(case_home "$dir")
-  sleep 60 &
-  holder=$!
-  install_rearm_stub "$dir" "$holder"
+  printf 'working: still running\n' > "$home/state/task.status"
   : > "$home/state/.claude-autoarm-failure-notified"
   : > "$home/state/.claude-autoarm-failure-alarmed"
   out=$(run_guard_case_autoarm "$dir")
-  clear_rearm_stub
-  kill "$holder" 2>/dev/null || true
-  wait "$holder" 2>/dev/null || true
   [ -z "$out" ] || fail "a successful self-heal was not silent: $out"
-  [ -s "$home/state/.test-rearm-launches" ] \
+  [ -s "$home/state/.watch-arm-terminal" ] \
     || fail "the stale-ledger guard did not launch a tracked watcher owner"
+  stop_fake_watcher "$dir"
   [ ! -e "$home/state/.claude-autoarm-failure-alarmed" ] \
     || fail "the self-heal left the attended-alarm marker in place"
   [ -e "$home/state/.claude-autoarm-failure-notified" ] \
@@ -444,12 +521,9 @@ test_autoarm_stale_ledger_self_heals_silently() {
 
 # Only a self-heal that cannot take is surfaced, once per episode.
 test_autoarm_self_heal_failure_surfaces_once() {
-  local dir home out1 out2 marker holder
+  local dir home out1 out2 marker
   dir=$(make_guard_case autoarm-self-heal-failure)
   home=$(case_home "$dir")
-  sleep 60 &
-  holder=$!
-  install_rearm_stub "$dir" "$holder"
   # The attended-alarm marker is the obstruction the self-heal must clear BEFORE
   # it can arm, because it suppresses the next Stop-owned continuation. Make it a
   # path the guard cannot remove - a non-empty directory - so the repair provably
@@ -458,9 +532,6 @@ test_autoarm_self_heal_failure_surfaces_once() {
   mkdir -p "$marker/unremovable"
   out1=$(run_guard_case_autoarm "$dir")
   out2=$(run_guard_case_autoarm "$dir")
-  clear_rearm_stub
-  kill "$holder" 2>/dev/null || true
-  wait "$holder" 2>/dev/null || true
   assert_contains "$out1" "supervision could not re-arm" \
     "a failed self-heal did not surface"
   [ "$(count_text "$out1" "supervision could not re-arm")" -eq 1 ] \
@@ -833,6 +904,8 @@ test_persistent_model_ignores_pi_extension_evidence
 test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_prints_no_passive_banner
+test_watcher_launcher_preserves_live_tracked_owner
+test_watcher_launcher_forwards_effective_home_configuration
 test_autoarm_stale_ledger_self_heals_silently
 test_autoarm_self_heal_failure_surfaces_once
 test_autoarm_quiet_but_working_fleet_stays_silent

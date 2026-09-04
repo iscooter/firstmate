@@ -194,15 +194,24 @@ fm_watcher_phase_timeout() {  # <preferred-seconds> [grace]
 FM_WATCHER_BUSY_PID=
 # shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
 FM_WATCHER_BUSY_BEACON_AGE=
+# shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+FM_WATCHER_BUSY_IDENTITY=
 fm_watcher_busy_holder() {  # <state-dir> <watch-path> [grace] [home]
   local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME}
-  local beat pid age beat_age lock_age
+  local beat pid identity current age beat_age lock_age
   FM_WATCHER_BUSY_PID=
   FM_WATCHER_BUSY_BEACON_AGE=
+  FM_WATCHER_BUSY_IDENTITY=
   case "$grace" in ''|*[!0-9]*) grace=300 ;; esac
   pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  identity=$(cat "$state/.watch.lock/pid-identity" 2>/dev/null || true)
   fm_pid_alive "$pid" || return 1
+  [ -n "$identity" ] || return 1
+  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+  [ "$current" = "$identity" ] || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] || return 1
+  [ "$(cat "$state/.watch.lock/pid-identity" 2>/dev/null || true)" = "$identity" ] || return 1
   # A holder that has taken the lock but not yet reached its first beat is
   # STARTING, not stalling, so the lock's own age is the honest measure until
   # this holder publishes a beacon. A missing beacon and one older than the
@@ -228,6 +237,8 @@ fm_watcher_busy_holder() {  # <state-dir> <watch-path> [grace] [home]
   FM_WATCHER_BUSY_PID=$pid
   # shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
   FM_WATCHER_BUSY_BEACON_AGE=$age
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+  FM_WATCHER_BUSY_IDENTITY=$identity
 }
 
 # fm_watcher_healthy above is the PID-STRICT primitive: true only when a live,

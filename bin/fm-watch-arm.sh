@@ -289,6 +289,20 @@ report_attached() {
 # path. Without --escalate the sequence is TERM plus one bounded wait, unchanged.
 # 0 = the recorded holder is gone, was never live, or its stale lock was cleared;
 # 1 = it survived the bound; 2 = its stale lock could not be cleared.
+expected_watcher_identity_alive() {  # <pid> <identity>
+  local current
+  fm_pid_alive "$1" || return 1
+  current=$(fm_pid_identity "$1" 2>/dev/null) || return 1
+  [ -n "$2" ] && [ "$current" = "$2" ]
+}
+
+expected_watcher_still_holds_lock() {  # <pid> <identity>
+  [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "$1" ] || return 1
+  [ "$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)" = "$2" ] || return 1
+  fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$1" "$FM_HOME" || return 1
+  expected_watcher_identity_alive "$1" "$2"
+}
+
 stop_recorded_watcher() {  # [--escalate] [expected-pid] [expected-identity]
   local escalate=0 lock_pid lock_identity expected_pid expected_identity i
   if [ "${1:-}" = --escalate ]; then
@@ -313,26 +327,37 @@ stop_recorded_watcher() {  # [--escalate] [expected-pid] [expected-identity]
     return 0
   fi
   if [ -n "$expected_pid" ]; then
-    [ "$(fm_pid_identity "$expected_pid" 2>/dev/null || true)" = "$expected_identity" ] || return 3
+    expected_watcher_still_holds_lock "$expected_pid" "$expected_identity" || return 3
   fi
-  [ "$escalate" -eq 0 ] || kill -CONT "$lock_pid" 2>/dev/null || true
+  if [ "$escalate" -eq 1 ]; then
+    [ -z "$expected_pid" ] || expected_watcher_still_holds_lock "$expected_pid" "$expected_identity" || return 3
+    kill -CONT "$lock_pid" 2>/dev/null || { [ -z "$expected_pid" ] || return 3; }
+  fi
+  [ -z "$expected_pid" ] || expected_watcher_still_holds_lock "$expected_pid" "$expected_identity" || return 3
   if ! kill -TERM "$lock_pid" 2>/dev/null; then
     [ -z "$expected_pid" ] || return 3
   fi
   i=0
-  while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
+  while [ "$i" -lt 50 ]; do
+    fm_pid_alive "$lock_pid" || return 0
+    [ -z "$expected_pid" ] || expected_watcher_identity_alive "$expected_pid" "$expected_identity" || return 3
     sleep 0.1
     i=$((i + 1))
   done
-  if [ "$escalate" -eq 1 ] && fm_pid_alive "$lock_pid"; then
-    kill -KILL "$lock_pid" 2>/dev/null || true
+  if [ "$escalate" -eq 1 ]; then
+    [ -z "$expected_pid" ] || expected_watcher_still_holds_lock "$expected_pid" "$expected_identity" || return 3
+    kill -KILL "$lock_pid" 2>/dev/null || { [ -z "$expected_pid" ] || return 3; }
     i=0
-    while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
+    while [ "$i" -lt 50 ]; do
+      fm_pid_alive "$lock_pid" || return 0
+      [ -z "$expected_pid" ] || expected_watcher_identity_alive "$expected_pid" "$expected_identity" || return 3
       sleep 0.1
       i=$((i + 1))
     done
   fi
-  ! fm_pid_alive "$lock_pid"
+  fm_pid_alive "$lock_pid" || return 0
+  [ -z "$expected_pid" ] || expected_watcher_identity_alive "$expected_pid" "$expected_identity" || return 3
+  return 1
 }
 
 # Reclaim a PROVEN wedge, and only a proven one: a live identity-matched holder
@@ -382,8 +407,8 @@ settle_busy_holder() {
     fm_watcher_busy_holder "$STATE" "$WATCH" "$GRACE" "$FM_HOME" || return 0
     pid=$FM_WATCHER_BUSY_PID
     age=$FM_WATCHER_BUSY_BEACON_AGE
+    identity=$FM_WATCHER_BUSY_IDENTITY
     if [ "$age" -ge "$WEDGE_BOUND" ]; then
-      identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
       reclaim_rc=0
       reclaim_wedged_holder "$pid" "$age" "$identity" || reclaim_rc=$?
       [ "$reclaim_rc" -ne 1 ] || return 1

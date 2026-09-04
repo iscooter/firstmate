@@ -292,7 +292,7 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 # live worktree, while the foreground process group - when it is readable - is
 # authoritative for the negative verdicts, since it is the only source that can
 # distinguish a truly idle pane from a rewritten process title.
-fm_backend_tmux_agent_state() {  # <target>
+_fm_backend_tmux_agent_state() {  # <target>
   local target=$1 comm session window windows inventory_status
   local foreground argv0s name pid fg_seen=0 fg_shell=0 fg_other=0
   case "$target" in
@@ -399,6 +399,15 @@ EOF
     shell) printf 'dead' ;;
     *) printf 'ambiguous' ;;
   esac
+}
+
+fm_backend_tmux_agent_state() {  # <target>
+  local result
+  result=$(fm_backend_compound_read _fm_backend_tmux_agent_state "$1") || {
+    printf 'unreadable'
+    return 0
+  }
+  printf '%s' "$result"
 }
 
 # Backward-compatible three-state view for callers that only need a yes/no

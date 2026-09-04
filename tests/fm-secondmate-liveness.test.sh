@@ -136,6 +136,26 @@ test_tmux_agent_state_classifies() {
   pass "fm_backend_tmux_agent_state: separates live, dead, missing, ambiguous, and unreadable"
 }
 
+test_tmux_agent_state_shares_one_read_deadline() {
+  local fakebin out started elapsed
+  fakebin=$(fm_fakebin "$TMP_ROOT/tmux-one-deadline")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) printf 'win\n' ;;
+  *) sleep 2; printf 'bash\n' ;;
+esac
+SH
+  chmod +x "$fakebin/tmux"
+  started=$(date +%s)
+  out=$(PATH="$fakebin:$BASE_PATH" FM_GUARD_GRACE=1 \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_agent_state tmux sess:win' "$ROOT")
+  elapsed=$(( $(date +%s) - started ))
+  [ "$out" = unreadable ] || fail "an exhausted compound read deadline must be unreadable, got '$out'"
+  [ "$elapsed" -lt 4 ] || fail "compound tmux probes received independent deadlines ($elapsed seconds)"
+  pass "fm_backend_tmux_agent_state: one deadline bounds the complete observation"
+}
+
 test_tmux_agent_state_rejects_malformed_targets_before_probe() {
   local fakebin marker target out
   fakebin=$(fm_fakebin "$TMP_ROOT/tmux-malformed")
@@ -541,6 +561,7 @@ test_sweep_noop_with_no_secondmate_meta() {
 }
 
 test_tmux_agent_state_classifies
+test_tmux_agent_state_shares_one_read_deadline
 test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility

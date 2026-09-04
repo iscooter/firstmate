@@ -1201,6 +1201,8 @@ test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
   settled=$(fm_pending_reply_create "$home" "$state" hibit "legacy settled request")
   fm_pending_reply_mark_delivered "$state" "$settled"
   fm_pending_reply_set "$hot/$settled" phase resolved || fail "legacy fixture should settle"
+  fm_pending_reply_set "$hot/$settled" resolved_epoch 21000 || fail "legacy fixture should record resolution time"
+  fm_pending_reply_set "$hot/$settled" resolved_via status || fail "legacy fixture should record resolution source"
   [ -f "$hot/$settled" ] || fail "legacy fixture should start hot"
 
   (
@@ -1217,6 +1219,8 @@ test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
   open_escalation=$(fm_pending_reply_create "$home" "$state" hibit "legacy open escalation")
   fm_pending_reply_mark_delivered "$state" "$open_escalation"
   fm_pending_reply_set "$hot/$open_escalation" phase resolved || fail "fixture should resolve"
+  fm_pending_reply_set "$hot/$open_escalation" resolved_epoch 21000 || fail "fixture should record resolution time"
+  fm_pending_reply_set "$hot/$open_escalation" resolved_via status || fail "fixture should record resolution source"
   fm_pending_reply_set "$hot/$open_escalation" escalated_epoch 20900 \
     || fail "fixture should record an escalation"
   _fm_pending_reply_settled "$hot/$open_escalation" \

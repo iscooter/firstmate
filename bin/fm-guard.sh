@@ -160,7 +160,7 @@ AUTOARM_LEDGER_GRACE=7200
 # terminal lifecycle, and bound only the wait for the watcher's first beat.
 # Prints the reason on failure; silent and 0 once a watcher is verified.
 fm_guard_autoarm_self_heal() {
-  local claim_rc gen launcher launch_out wait_secs attempts=0
+  local claim_rc gen launch_out wait_secs attempts=0
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     return 0
   fi
@@ -178,9 +178,8 @@ fm_guard_autoarm_self_heal() {
     return 1
   fi
   gen=$FM_AUTOARM_MY_GEN
-  launcher=${FM_GUARD_REARM_LAUNCHER:-$SCRIPT_DIR/fm-afk-launch.sh}
   launch_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$launcher" start-watcher 2>&1)
+    "$SCRIPT_DIR/fm-afk-launch.sh" start-watcher 2>&1)
   if [ "$?" -ne 0 ]; then
     fm_autoarm_write_owned "$STATE" "$gen" failed >/dev/null 2>&1 || true
     launch_out=$(printf '%s\n' "$launch_out" | tail -n 1)

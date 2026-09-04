@@ -64,8 +64,37 @@ fm_backend_read_timeout() {
 }
 
 fm_backend_run_read_timed() {
+  local timeout now remaining
   _fm_backend_require_timeout
-  fm_run_timed "$(fm_backend_read_timeout)" "$@"
+  timeout=$(fm_backend_read_timeout)
+  if [ -n "${FM_BACKEND_READ_DEADLINE_EPOCH:-}" ]; then
+    now=$(date +%s)
+    remaining=$((FM_BACKEND_READ_DEADLINE_EPOCH - now))
+    [ "$remaining" -gt 0 ] || return 124
+    [ "$timeout" -le "$remaining" ] || timeout=$remaining
+  fi
+  fm_run_timed "$timeout" "$@"
+}
+
+fm_backend_compound_read() {  # <function> [args...]
+  local function_name=$1 timeout deadline result rc=0 previous=${FM_BACKEND_READ_DEADLINE_EPOCH-}
+  shift
+  case "$previous" in *[!0-9]*) previous= ;; esac
+  timeout=$(fm_backend_read_timeout)
+  deadline=$(( $(date +%s) + timeout ))
+  if [ -n "$previous" ] && [ "$previous" -lt "$deadline" ]; then
+    deadline=$previous
+  fi
+  FM_BACKEND_READ_DEADLINE_EPOCH=$deadline
+  result=$("$function_name" "$@") || rc=$?
+  [ "$(date +%s)" -lt "$deadline" ] || rc=124
+  if [ -n "$previous" ]; then
+    FM_BACKEND_READ_DEADLINE_EPOCH=$previous
+  else
+    unset FM_BACKEND_READ_DEADLINE_EPOCH
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$result"
 }
 unset FM_BACKEND_SCRIPT
 FM_BACKEND_DEFAULT_ROOT="$(cd "$FM_BACKEND_LIB_DIR/.." && pwd)"

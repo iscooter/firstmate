@@ -1491,16 +1491,19 @@ _fm_pending_reply_tick_beat() {
 # record on every poll and is the gate that keeps the settled majority off the
 # expensive path (a per-record lock plus a re-source of fm-wake-lib.sh).
 _fm_pending_reply_settled() {  # <record-path>
-  local rec=$1 line phase='' escalated='' closed=''
+  local rec=$1 line phase='' escalated='' closed='' resolved_epoch='' resolved_via=''
   [ -f "$rec" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       phase=*) phase=${line#phase=} ;;
       escalated_epoch=*) escalated=${line#escalated_epoch=} ;;
       escalation_closed_epoch=*) closed=${line#escalation_closed_epoch=} ;;
+      resolved_epoch=*) resolved_epoch=${line#resolved_epoch=} ;;
+      resolved_via=*) resolved_via=${line#resolved_via=} ;;
     esac
   done < "$rec"
   [ "$phase" = resolved ] || return 1
+  [ -n "$resolved_epoch" ] && [ -n "$resolved_via" ] || return 1
   [ -z "$escalated" ] || [ -n "$closed" ]
 }
 
