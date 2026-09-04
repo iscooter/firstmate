@@ -665,21 +665,26 @@ export default function (pi: ExtensionAPI) {
           // The branch owns only the routine rows in this mixed signal. Queue
           // the decision wake on main now; waiting for the branch model turn
           // would delay both the captain's decision and every later watcher
-          // delivery. If branch handling fails, wake main once more after its
-          // row grant is released so the routine rows cannot be stranded.
+          // delivery. If branch handling fails after main has consumed that
+          // wake, submit a fresh one after releasing the row grant so the
+          // routine rows cannot be stranded.
           void branchDelivery.settlement.catch(() => {
-            // If main has not consumed the decision wake yet, reuse its
-            // actionable record. Otherwise create a new record for the now-
-            // released routine rows. Either way, a rejected delivery or a
-            // session replacement remains eligible for the normal replay
-            // path instead of depending on a future unrelated watcher close.
-            let fallbackPending = owner.pendingActionables.find((item) => item.token === pending.token);
-            if (!fallbackPending || fallbackPending.delivered) {
-              fallbackPending = createPendingActionable(message, String(owner.child?.pid ?? ""), true);
-              enqueuePendingActionable(owner, fallbackPending);
-            } else {
-              fallbackPending.mainOnly = true;
+            // If main has not consumed the decision wake yet, its existing
+            // actionable record will cover the now-released routine rows too.
+            // Otherwise create a new record. A rejected delivery or session
+            // replacement remains eligible for the normal replay path instead
+            // of depending on a future unrelated watcher close.
+            const existingPending = owner.pendingActionables.find((item) => item.token === pending.token);
+            if (existingPending && !existingPending.delivered) {
+              // The original main delivery is still queued or in flight. Once
+              // Pi consumes it, it drains after the branch grant has been
+              // released, so submitting the same follow-up again would only
+              // duplicate the decision wake.
+              existingPending.mainOnly = true;
+              return;
             }
+            const fallbackPending = createPendingActionable(message, String(owner.child?.pid ?? ""), true);
+            enqueuePendingActionable(owner, fallbackPending);
             void sendWake(owner, message, fallbackPending).catch(() => {
               schedulePendingCleanup(owner);
             });

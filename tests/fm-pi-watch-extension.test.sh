@@ -954,6 +954,8 @@ const bus = {
 };
 let rejectBranch;
 const branchSettlement = new Promise((_, reject) => { rejectBranch = reject; });
+let resolveMainDelivery;
+const mainDelivery = new Promise((resolve) => { resolveMainDelivery = resolve; });
 bus.on("fm-branch-supervision:dispatch", (offer) => {
   offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
   if (offer.eligible) offer.accept(branchSettlement);
@@ -969,11 +971,7 @@ const pi = {
   },
   sendUserMessage: async (message) => {
     prompts.push(message);
-    if (prompts.length === 1) {
-      lifecycleHandlers.get("message_start")?.({ message: { role: "user", content: message } });
-    } else if (prompts.length === 2) {
-      throw new Error("synthetic fallback delivery rejection");
-    }
+    if (prompts.length === 1) await mainDelivery;
   },
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
@@ -993,10 +991,14 @@ for (let i = 0; i < 25 && prompts.length === 0; i += 1) {
 }
 const decisionWokeBeforeBranchSettled = prompts.length > 0;
 rejectBranch(new Error("synthetic branch failure"));
+// Keep the original sendUserMessage call active while the branch rejection
+// releases its routine-row grant. The fallback must reuse that queued main
+// wake, not submit an identical follow-up concurrently.
+await new Promise((resolve) => setTimeout(resolve, 50));
+const duplicatedWhileMainDeliveryActive = prompts.length > 1;
+lifecycleHandlers.get("message_start")?.({ message: { role: "user", content: prompts[0] } });
+resolveMainDelivery();
 await execution;
-for (let i = 0; i < 500 && prompts.length < 3; i += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
-}
 if (offers.length !== 1 || offers[0].eligible !== true) {
   throw new Error(`a needs-decision row vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
 }
@@ -1009,8 +1011,8 @@ if (!prompts[0]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
 if (!decisionWokeBeforeBranchSettled) {
   throw new Error("the needs-decision wake waited for the routine branch turn to settle");
 }
-if (prompts.length !== 3 || !prompts[2]?.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
-  throw new Error(`a rejected post-branch fallback was not replayed: ${prompts.join(" | ")}`);
+if (duplicatedWhileMainDeliveryActive || prompts.length !== 1) {
+  throw new Error(`branch rejection duplicated an active main wake: ${prompts.join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
