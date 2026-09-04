@@ -156,25 +156,30 @@ fm_guard_clear_stale_banner() {
 # working turn, which is a property of the model rather than a local preference.
 AUTOARM_LEDGER_GRACE=7200
 
-# Re-arm supervision through the home-scoped owner path, then verify it.
+# Restore the Stop-owned owner path so the next turn end arms, and say so only
+# when that cannot be done.
 #
-# Two constraints shape this, and missing either one is what makes a self-heal
-# worse than the banner it replaces:
-#   - The arm must OUTLIVE this guard. bin/fm-watch-arm.sh stays alive for its
-#     watcher's whole life, so a foreground call would hold every guarded command
-#     open for a full cycle, and bounding the call with fm_run_timed would kill
-#     the process GROUP - taking the newly started watcher with it and then
-#     reporting the re-arm as failed. So the arm is started detached, exactly as
-#     bin/fm-startup-network.sh starts its own bounded worker, and is left
-#     running when this function returns.
-#   - Detaching must not become fire-and-forget. bin/fm-watch-arm.sh's header
-#     bans an unverified `&` because a dying child leaves NO watcher behind a
-#     false "already running". So this waits, bounded, for the successor's own
-#     first beat and reports success only on that proof.
-# The obstruction repair below stays first: a stalled claim or a spent failure
-# episode would make the fresh arm stand down again immediately.
+# WHY THIS REPAIRS RATHER THAN LAUNCHES. For a Claude primary the owner path IS
+# the Stop hook, and it is already proven, home-scoped, and single-flighted by
+# the auto-arm generation claim and the failure-episode markers this function
+# works on. Reusing it beats giving a synchronous guard a watcher lifecycle of
+# its own, because every way to hold one is worse: a foreground arm blocks the
+# guarded command for a whole watcher cycle; bounding that arm with fm_run_timed
+# kills the process GROUP and takes the newly started watcher with it, then
+# reports the re-arm as failed; and a detached start is the unverified
+# fire-and-forget bin/fm-watch-arm.sh's header bans, because a reaped child
+# leaves NO watcher behind a false "already running". A terminal-owning launcher
+# would additionally need its own record, reconcile and single flight - this
+# guard runs on nearly every guarded command, so without them a home whose Stop
+# hook is genuinely dead would create one terminal per command.
+# So the repair targets exactly what BLOCKS the next Stop-owned arm:
+#   - a generation claim whose owner is gone, which every later firing defers to;
+#   - a spent failure episode whose alarm marker suppresses the next continuation.
+# Both are bounded, home-scoped writes. The once-per-episode failure NOTICE is
+# deliberately left alone: retiring it without a verified watcher would swallow
+# the one notice the operator still needs.
 #
-# Prints the reason on failure; silent and 0 once a watcher is verified.
+# Prints the reason on failure; silent and 0 when the mechanism is unobstructed.
 fm_guard_autoarm_self_heal() {
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     # A live, healthy claim IS the mechanism working; nothing to repair.

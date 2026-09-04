@@ -377,10 +377,28 @@ fm_backend_herdr_workspace_label() {
 # compatible if a future herdr build honors it. Never used by
 # fm_backend_herdr_version_check, which is intentionally session-independent
 # (reads only .client.* fields).
+# Every herdr read the watcher makes is a CLI round trip through here, so this is
+# the narrowest shared boundary at which a stalled server can be bounded. It
+# matters because the watcher's stale scan calls a read once per recorded window
+# on every poll: without a deadline a hung server stops the liveness beats
+# mid-phase, and with per-phase beats a silent beacon is exactly what the arm
+# layer now treats as a proven wedge - so a stalled read could get a working
+# watcher reclaimed. The bound is deliberately generous (a slow-but-working
+# server must never be cut off) and it wraps the external command rather than a
+# shell function, because fm_run_timed cannot invoke a function under the GNU
+# timeout mechanism. A hit deadline returns nonzero, which every caller already
+# reads as an unreadable pane - no observation, never a crew verdict.
+FM_BACKEND_HERDR_CLI_TIMEOUT=30
+
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
-  HERDR_SESSION="$session" herdr "$@" --session "$session"
+  command -v fm_run_timed >/dev/null 2>&1 || {
+    HERDR_SESSION="$session" herdr "$@" --session "$session"
+    return $?
+  }
+  HERDR_SESSION="$session" fm_run_timed "$FM_BACKEND_HERDR_CLI_TIMEOUT" \
+    herdr "$@" --session "$session"
 }
 
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.

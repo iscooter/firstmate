@@ -70,13 +70,16 @@ wait_live() {
 # ever ran - and then every "no wake, no marker" assertion passes vacuously
 # while every "marker written" assertion fails spuriously.
 # Since the 2026-09-04 stale-beacon hardening the watcher beats at EVERY phase
-# boundary, so a single beacon advance proves the watcher is moving, not that a
-# poll has elapsed - and the watcher deliberately publishes no separate
-# per-iteration marker. So this waits for TWO advances rather than one: every
-# iteration ends in a bounded wait of at least FM_POLL before the next iteration
-# beats again, so two distinct beacon seconds cannot both fall inside one
-# sub-second fixture iteration, and a completed cycle is what the caller's
-# assertions describe.
+# boundary, so a single beacon advance proves it is moving, not that a poll has
+# elapsed, and it publishes no separate per-iteration marker. Two advances are
+# the strongest signal available today: an iteration ends by beating and then
+# blocking in event_wait_or_sleep, so a fixture whose iterations are sub-second
+# cannot produce two distinct beacon seconds inside one of them.
+# This is deliberately NOT the terminal wait's quiet stretch, which looks like
+# the obvious end-of-cycle signature but is not usable: the in-phase beat step is
+# a quarter of the liveness grace capped at 5s, so on a home with the default
+# 300s grace the gaps BETWEEN in-iteration beats are longer than FM_POLL and a
+# quiet window cannot be attributed to the terminal wait.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   local state=$1 pid=$2 limit=${3:-300} beat first now advances=0 i=0
