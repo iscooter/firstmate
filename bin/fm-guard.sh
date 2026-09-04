@@ -159,8 +159,20 @@ AUTOARM_LEDGER_GRACE=7200
 # Claim one auto-arm generation, launch its arm in the backend-owned non-visible
 # terminal lifecycle, and bound only the wait for the watcher's first beat.
 # Prints the reason on failure; silent and 0 once a watcher is verified.
+fm_guard_autoarm_accept_heal() {
+  local gen=$1
+  fm_autoarm_write_owned "$STATE" "$gen" healthy >/dev/null 2>&1 || true
+  if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
+    rm -f "$FAILURE_ALARM" 2>/dev/null || true
+    if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
+      printf 'a spent supervision failure episode could not be cleared'
+      return 1
+    fi
+  fi
+}
+
 fm_guard_autoarm_self_heal() {
-  local claim_rc gen launch_out wait_secs attempts=0
+  local claim_rc gen launch_out launch_status wait_secs attempts=0
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     return 0
   fi
@@ -186,18 +198,15 @@ fm_guard_autoarm_self_heal() {
     printf '%s' "${launch_out:-the tracked watcher owner could not launch}"
     return 1
   fi
+  launch_status=$(printf '%s\n' "$launch_out" | tail -n 1)
+  case "$launch_status" in
+    'watcher-owner: preserved '*) fm_guard_autoarm_accept_heal "$gen"; return $? ;;
+  esac
   wait_secs=$(fm_watcher_phase_timeout 10 "$GRACE")
   while [ "$attempts" -lt $((wait_secs * 10)) ]; do
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
-      fm_autoarm_write_owned "$STATE" "$gen" healthy >/dev/null 2>&1 || true
-      if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
-        rm -f "$FAILURE_ALARM" 2>/dev/null || true
-        if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
-          printf 'a spent supervision failure episode could not be cleared'
-          return 1
-        fi
-      fi
-      return 0
+      fm_guard_autoarm_accept_heal "$gen"
+      return $?
     fi
     sleep 0.1
     attempts=$((attempts + 1))

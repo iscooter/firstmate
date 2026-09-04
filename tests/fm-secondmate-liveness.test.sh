@@ -156,6 +156,25 @@ SH
   pass "fm_backend_tmux_agent_state: one deadline bounds the complete observation"
 }
 
+test_backend_capture_bounds_readiness_and_capture_together() {
+  local fakebin started elapsed rc=0
+  fakebin=$(fm_fakebin "$TMP_ROOT/capture-one-deadline")
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+sleep 2
+printf '{"server":{"running":true}}\n'
+SH
+  chmod +x "$fakebin/herdr"
+  started=$(date +%s)
+  PATH="$fakebin:$BASE_PATH" FM_GUARD_GRACE=1 \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_capture herdr default:w1:p2 20' "$ROOT" \
+    >/dev/null 2>&1 || rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 0 ] || fail "a timed-out Herdr readiness probe reported a capture"
+  [ "$elapsed" -lt 3 ] || fail "Herdr readiness escaped the semantic capture deadline ($elapsed seconds)"
+  pass "fm_backend_capture: one deadline includes backend readiness"
+}
+
 test_tmux_agent_state_rejects_malformed_targets_before_probe() {
   local fakebin marker target out
   fakebin=$(fm_fakebin "$TMP_ROOT/tmux-malformed")
@@ -562,6 +581,7 @@ test_sweep_noop_with_no_secondmate_meta() {
 
 test_tmux_agent_state_classifies
 test_tmux_agent_state_shares_one_read_deadline
+test_backend_capture_bounds_readiness_and_capture_together
 test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility

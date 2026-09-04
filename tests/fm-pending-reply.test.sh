@@ -151,6 +151,27 @@ test_normal_correlated_reply_resolves_once() {
   pass "normal correlated reply resolves once (idempotent)"
 }
 
+test_interrupted_resolution_completes_before_archive() {
+  local home state corr status hot archived
+  home=$(setup_parent interrupted-resolution)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=1100
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "audit the ledger")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  status="$state/hibit.status"
+  printf 'done [corr=%s]: ledger clean\n' "$corr" > "$status"
+  hot=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$hot" phase resolved || fail "could not stage interrupted resolution"
+  fm_pending_reply_try_resolve "$state" "$corr" || fail "interrupted resolution was not recoverable"
+  archived=$(fm_pending_reply_path "$state" "$corr")
+  [ "$archived" != "$hot" ] && [ -f "$archived" ] || fail "recovered resolution stayed in the hot set"
+  [ "$(fm_pending_reply_get "$archived" resolved_epoch)" = 1100 ] \
+    || fail "recovered resolution omitted its epoch"
+  [ "$(fm_pending_reply_get "$archived" resolved_via)" = status ] \
+    || fail "recovered resolution omitted its source"
+  pass "interrupted resolution completes metadata before leaving the hot set"
+}
+
 test_completed_turn_no_report_triggers_one_recovery() {
   local home state corr hook_log rec
   home=$(setup_parent one-recovery)
@@ -1684,6 +1705,7 @@ test_failed_send_discards_undelivered_expectation() {
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
+test_interrupted_resolution_completes_before_archive
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_attempt_is_never_reinjected
 test_recovery_reply_resolves_original

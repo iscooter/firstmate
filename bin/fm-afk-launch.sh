@@ -534,7 +534,7 @@ fm_afk_launch_start() {
 }
 
 fm_afk_launch_start_watcher() {
-  local captain_target captain_backend read_result result
+  local captain_target captain_backend read_result result grace wedge backup
   FM_AFK_LAUNCH_RECORD="$FM_AFK_LAUNCH_STATE/.watch-arm-terminal"
   FM_AFK_LAUNCH_WS_LABEL="firstmate-watch-arm"
   FM_AFK_LAUNCH_ENTRY="$FM_ROOT/bin/fm-watch-arm.sh"
@@ -551,6 +551,32 @@ fm_afk_launch_start_watcher() {
   read_result=$?
   if [ "$read_result" -eq 0 ]; then
     if fm_afk_launch_terminal_alive "$FM_AFK_REC_BACKEND" "$FM_AFK_REC_TARGET"; then
+      grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
+      if fm_watcher_healthy "$FM_AFK_LAUNCH_STATE" "$FM_ROOT/bin/fm-watch.sh" "$grace" "$FM_HOME"; then
+        printf 'watcher-owner: preserved healthy holder\n'
+        return 0
+      fi
+      if fm_watcher_busy_holder "$FM_AFK_LAUNCH_STATE" "$FM_ROOT/bin/fm-watch.sh" "$grace" "$FM_HOME"; then
+        wedge=$(fm_watcher_wedge_bound "$grace")
+        if [ "$FM_WATCHER_BUSY_BEACON_AGE" -lt "$wedge" ]; then
+          printf 'watcher-owner: preserved busy holder pid=%s beacon=%ss\n' \
+            "$FM_WATCHER_BUSY_PID" "$FM_WATCHER_BUSY_BEACON_AGE"
+          return 0
+        fi
+        backup=$(mktemp "$FM_AFK_LAUNCH_STATE/.watch-arm-terminal.backup.XXXXXX") || return 1
+        cp "$FM_AFK_LAUNCH_RECORD" "$backup" || { rm -f "$backup"; return 1; }
+        case "$captain_backend" in
+          herdr) fm_afk_launch_create_herdr "$captain_target" "$captain_backend"; result=$? ;;
+          tmux) fm_afk_launch_create_tmux "$captain_target" "$captain_backend"; result=$? ;;
+          *) result=1 ;;
+        esac
+        if [ "$result" -ne 0 ]; then
+          mv "$backup" "$FM_AFK_LAUNCH_RECORD" || return 1
+        else
+          rm -f "$backup" || return 1
+        fi
+        return "$result"
+      fi
       return 0
     fi
     fm_afk_launch_close_recorded || return 1

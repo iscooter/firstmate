@@ -53,6 +53,7 @@ PY
     ;;
   kill-session)
     [ -s "$record" ] || exit 1
+    kill -CONT "$(cat "$record")" 2>/dev/null || true
     kill -TERM "$(cat "$record")" 2>/dev/null || true
     rm -f "$record"
     ;;
@@ -77,6 +78,17 @@ case_home() {
 
 case_root() {
   printf '%s/root\n' "$1"
+}
+
+age_path() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+import time
+age = int(sys.argv[2])
+when = time.time() - age
+os.utime(sys.argv[1], (when, when))
+PY
 }
 
 record_live_watcher() {
@@ -119,7 +131,7 @@ run_guard_case_autoarm() {
   FM_ROOT_OVERRIDE="$ROOT" \
     FM_HOME="$(case_home "$dir")" \
     PATH="$dir/fakebin:$PATH" \
-    FM_GUARD_GRACE=999 \
+    FM_GUARD_GRACE="${FM_TEST_GUARD_GRACE:-999}" \
     FM_SUPERVISOR_TARGET=test:captain \
     FM_SUPERVISOR_BACKEND=tmux \
     FM_SUPERVISION_MODEL=autoarm \
@@ -182,6 +194,25 @@ record_pi_extension_session() {
   done
   [ -n "$session_pid" ] && printf '%s\n' "$session_pid" > "$home/state/.lock"
   return 0
+}
+
+start_fake_tracked_watcher() {
+  local dir=$1 session=$2 grace=$3 home command i=0 pid
+  home=$(case_home "$dir")
+  printf 'working: still running\n' > "$home/state/task.status"
+  command=$(printf 'exec env FM_HOME=%q FM_STATE_OVERRIDE=%q FM_GUARD_GRACE=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=tmux %q' \
+    "$home" "$home/state" "$grace" test:captain "$ROOT/bin/fm-watch.sh")
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" tmux new-session -d -s "$session" "$command"
+  printf 'tmux\t%s\t\n' "$session" > "$home/state/.watch-arm-terminal"
+  pid=$(cat "$home/state/.fake-tmux-$session")
+  while [ "$i" -lt 50 ] \
+    && { [ ! -s "$home/state/.watch.lock/pid" ] || [ ! -e "$home/state/.last-watcher-beat" ]; }; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] \
+    && [ -e "$home/state/.last-watcher-beat" ] || return 1
+  printf '%s\n' "$pid"
 }
 
 stop_fake_watcher() {
@@ -469,6 +500,56 @@ test_watcher_launcher_preserves_live_tracked_owner() {
   [ -z "$out" ] || fail "preserving a live tracked watcher owner should be silent: $out"
   stop_fake_watcher "$dir"
   pass "watcher self-heal preserves an unproven live tracked owner"
+}
+
+test_guard_preserves_subwedge_tracked_watcher() {
+  local dir home session pid out before after
+  dir=$(make_guard_case tracked-subwedge)
+  home=$(case_home "$dir")
+  session=subwedge-owner
+  pid=$(start_fake_tracked_watcher "$dir" "$session" 10) \
+    || fail "could not start sub-wedge watcher"
+  kill -STOP "$pid"
+  age_path "$home/state/.watch.lock/pid" 11
+  age_path "$home/state/.last-watcher-beat" 11
+  before=$(cat "$home/state/.watch-arm-terminal")
+  out=$(FM_TEST_GUARD_GRACE=10 run_guard_case_autoarm "$dir")
+  after=$(cat "$home/state/.watch-arm-terminal")
+  [ -z "$out" ] || fail "a preserved sub-wedge watcher caused a self-heal warning: $out"
+  kill -0 "$pid" 2>/dev/null || fail "the guard reaped a sub-wedge watcher"
+  [ "$after" = "$before" ] || fail "the guard replaced a sub-wedge tracked owner"
+  stop_fake_watcher "$dir"
+  pass "guard accepts a tracked watcher below the proven wedge bound"
+}
+
+test_watcher_launcher_settles_proven_tracked_wedge() {
+  local dir home session pid i=0 out
+  dir=$(make_guard_case tracked-proven-wedge)
+  home=$(case_home "$dir")
+  session=wedged-owner
+  pid=$(start_fake_tracked_watcher "$dir" "$session" 2) \
+    || fail "could not start proven watcher wedge"
+  kill -STOP "$pid"
+  age_path "$home/state/.watch.lock/pid" 5
+  age_path "$home/state/.last-watcher-beat" 5
+  out=$(PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_GUARD_GRACE=2 FM_SUPERVISOR_TARGET=test:captain FM_SUPERVISOR_BACKEND=tmux \
+    "$ROOT/bin/fm-afk-launch.sh" start-watcher 2>&1)
+  while [ "$i" -lt 90 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null && fail "tracked owner shielded a proven watcher wedge"
+  i=0
+  while [ "$i" -lt 30 ] \
+    && ! grep -F "check: watcher-wedge-reclaimed pid=$pid" "$home/state/.wake-queue" >/dev/null 2>&1; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -F "check: watcher-wedge-reclaimed pid=$pid" "$home/state/.wake-queue" >/dev/null \
+    || fail "tracked wedge settlement did not publish reclaim evidence: $out; owner logs: $(cat "$home/state"/.fake-tmux-*.log 2>/dev/null || true)"
+  stop_fake_watcher "$dir"
+  pass "tracked lifecycle hands a proven wedge to identity-verified reclaim"
 }
 
 test_watcher_launcher_forwards_effective_home_configuration() {
@@ -905,6 +986,8 @@ test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_prints_no_passive_banner
 test_watcher_launcher_preserves_live_tracked_owner
+test_guard_preserves_subwedge_tracked_watcher
+test_watcher_launcher_settles_proven_tracked_wedge
 test_watcher_launcher_forwards_effective_home_configuration
 test_autoarm_stale_ledger_self_heals_silently
 test_autoarm_self_heal_failure_surfaces_once

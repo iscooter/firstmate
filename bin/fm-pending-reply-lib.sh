@@ -691,13 +691,27 @@ fm_pending_reply_try_resolve() {  # <state-dir> <corr_id> [status-file-override]
 
 _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-override]
   local state=$1 corr=$2 status_override=${3-}
-  local rec phase delivered marker delivery_entry delivery_state status_file signature previous line via now
+  local rec phase delivered marker delivery_entry delivery_state status_file signature previous line via now resolved_epoch resolved_via
   local unconfirmed=0
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   if [ "$phase" = resolved ]; then
+    resolved_epoch=$(fm_pending_reply_get "$rec" resolved_epoch)
+    resolved_via=$(fm_pending_reply_get "$rec" resolved_via)
+    if [ -z "$resolved_via" ]; then
+      status_file=${status_override:-$(fm_pending_reply_get "$rec" parent_status)}
+      line=$(fm_pending_reply_find_resolve_line "$status_file" "$corr")
+      [ -n "$line" ] || return 1
+      via=$(fm_pending_reply_resolve_via_of_line "$line")
+      fm_pending_reply_set "$rec" resolved_via "$via" || return 1
+    fi
+    if [ -z "$resolved_epoch" ]; then
+      now=$(fm_pending_reply_now)
+      fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
+    fi
     _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
+    _fm_pending_reply_archive_settled "$state" "$corr" || true
     return 0
   fi
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
@@ -724,13 +738,13 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   fi
   via=$(fm_pending_reply_resolve_via_of_line "$line")
   now=$(fm_pending_reply_now)
-  fm_pending_reply_set "$rec" phase resolved || return 1
   if [ -z "$delivered" ]; then
     fm_pending_reply_mark_delivered "$state" "$corr" "$now" || return 1
     rm -f "$marker" 2>/dev/null || true
   fi
   fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
   fm_pending_reply_set "$rec" resolved_via "$via" || return 1
+  fm_pending_reply_set "$rec" phase resolved || return 1
   # The record is resolved either way; a failed close stays retryable from the
   # watcher tick rather than turning a settled request back into a failure.
   _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
