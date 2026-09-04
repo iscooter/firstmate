@@ -593,7 +593,7 @@ export default function (pi: ExtensionAPI) {
     return confirmHandlingDelivery(snapshot());
   }
 
-  function offerWakeToBranch(message: string): Promise<void> | null {
+  function offerWakeToBranch(message: string): { settlement: Promise<void>; wakeMainAfterward: boolean } | null {
     const heartbeat = /^heartbeat($|:)/.test(message);
     // A check-kind close (merge-confirmation polls, Relay mentions,
     // credential/auth failures, and every other legitimately main-only
@@ -606,11 +606,13 @@ export default function (pi: ExtensionAPI) {
     // also let a check-kind trigger itself slip past main's delivery.
     const isCheckTrigger = /^check:/.test(message);
     const scope = scopeForUnreadWake(state, heartbeat);
-    // A signal close containing a needs-decision status file gets the identical
-    // main-only treatment as a check-kind trigger, without extending that
-    // classification to heartbeat scans (docs/pi-supervision-branch.md
-    // "Autonomy"). The message keeps the ordinary "signal:<files>" shape, so
-    // compare this cycle's status-file basenames with the needs-decision keys.
+    // A signal close containing only needs-decision status files gets the
+    // identical main-only treatment as a check-kind trigger, without extending
+    // that classification to stale or heartbeat rows (docs/
+    // pi-supervision-branch.md "Autonomy"). A mixed close remains eligible for
+    // its routine rows; scopeForUnreadWake excludes the decision rows from the
+    // branch grant. The message keeps the ordinary "signal:<files>" shape, so
+    // compare this cycle's status-file basenames with the classified keys.
     const signalKeys = /^signal:/.test(message)
       ? message
         .slice("signal:".length)
@@ -618,11 +620,15 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean)
         .map((path) => path.split("/").pop() ?? path)
       : [];
-    const isNeedsDecisionTrigger = signalKeys.some((key) => scope.needsDecisionKeys.includes(key));
-    const eligible = !isCheckTrigger && !isNeedsDecisionTrigger && scope.eligible;
+    const needsDecisionTriggerKeys = signalKeys.filter((key) => scope.needsDecisionKeys.includes(key));
+    const hasRoutineSignalTrigger = signalKeys.some((key) => scope.routineSignalKeys.includes(key));
+    const isNeedsDecisionOnlyTrigger = needsDecisionTriggerKeys.length > 0 && !hasRoutineSignalTrigger;
+    const eligible = !isCheckTrigger && !isNeedsDecisionOnlyTrigger && scope.eligible;
     const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);
-    return offer.accepted ? offer.settlement : null;
+    return offer.accepted
+      ? { settlement: offer.settlement, wakeMainAfterward: needsDecisionTriggerKeys.length > 0 }
+      : null;
   }
 
   async function deliverActionableWake(
@@ -647,7 +653,10 @@ export default function (pi: ExtensionAPI) {
       const branchDelivery = offerWakeToBranch(message);
       if (branchDelivery) {
         try {
-          await branchDelivery;
+          await branchDelivery.settlement;
+          if (branchDelivery.wakeMainAfterward) {
+            return await sendWake(owner, message, pending);
+          }
           return true;
         } catch {}
       }
