@@ -69,14 +69,17 @@ wait_live() {
 # machine a short fixed budget can reap a round before the cycle it asserts on
 # ever ran - and then every "no wake, no marker" assertion passes vacuously
 # while every "marker written" assertion fails spuriously.
-# The liveness beacon is touched at the TOP of every poll, so this drops any
-# beacon left by an earlier round, waits for THIS watcher to write a fresh one
-# (some poll's top), then waits for that one to advance (the next poll's top) -
-# and the whole cycle in between is what the caller's assertions describe.
+# state/.last-poll-cycle is touched at the TOP of every poll and nowhere else, so
+# this drops any marker left by an earlier round, waits for THIS watcher to write
+# a fresh one (some poll's top), then waits for that one to advance (the next
+# poll's top) - and the whole cycle in between is what the caller's assertions
+# describe. It must NOT read the liveness beacon: since the 2026-09-04
+# stale-beacon hardening the watcher beats at every phase boundary, so an
+# advancing beacon proves the watcher is moving, not that a poll has elapsed.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   local state=$1 pid=$2 limit=${3:-300} beat first now i=0
-  beat="$state/.last-watcher-beat"
+  beat="$state/.last-poll-cycle"
   rm -f "$beat"
   first=""
   while [ "$i" -lt "$limit" ]; do
@@ -3915,6 +3918,59 @@ test_beacon_stays_fresh_while_absorbing() {
   pass "the liveness beacon stays fresh while the watcher absorbs benign wakes (fm-guard never false-alarms)"
 }
 
+# Beacon age in whole seconds, or empty when no beacon exists yet.
+beacon_age() {  # <beacon-path>
+  local mtime
+  mtime=$(file_mtime "$1") || return 0
+  [ -n "$mtime" ] || return 0
+  printf '%s' "$(( $(date +%s) - mtime ))"
+}
+
+# 2026-09-04 stale-beacon investigation, sections 3 and 6. The watcher used to
+# touch the beacon ONCE per poll iteration (bin/fm-watch.sh:1562), while one
+# iteration on a busy home had grown to 100-350s against the 300s
+# FM_GUARD_GRACE - so a healthy, working watcher read as wedged, the arm refused
+# to start behind it, and the Stop hook reported the supervision mechanism
+# broken. The report's smallest counterfactual is exactly this: hold ONE phase
+# (the signal grace) longer than the whole liveness grace and change nothing
+# else. With per-phase beats the beacon must never reach the grace while the
+# watcher is demonstrably alive and still inside that phase.
+test_beacon_survives_a_phase_longer_than_the_grace() {
+  local dir state fakebin out pid grace linger deadline age beat worst=0
+  dir=$(make_case beacon-long-phase); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  beat="$state/.last-watcher-beat"
+  grace=3
+  linger=8
+  printf 'working: chugging along\n' > "$state/task.status"
+  # Provably working, so the no-verb signal is absorbed and the watcher stays in
+  # the loop rather than exiting on this wake.
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_POLL=1 FM_SIGNAL_GRACE="$linger" FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_GUARD_GRACE="$grace" FM_WATCHER_STALE_GRACE="$grace" "$WATCH" > "$out" &
+  pid=$!
+  deadline=$(( $(date +%s) + linger + 4 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    age=$(beacon_age "$beat")
+    if [ -n "$age" ] && [ "$age" -gt "$worst" ]; then
+      worst=$age
+    fi
+    sleep 0.5
+  done
+  if ! kill -0 "$pid" 2>/dev/null; then
+    reap "$pid"
+    unset FM_FAKE_CREW_STATE
+    fail "watcher exited while lingering inside its signal grace"
+  fi
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  [ "$worst" -lt "$grace" ] \
+    || fail "beacon aged to ${worst}s during a ${linger}s phase with a ${grace}s grace (once-per-iteration beat regressed)"
+  pass "a working watcher whose phase outlives the grace keeps a fresh beacon (no false wedge)"
+}
+
 # --- afk coherence: the daemon owns triage; the watcher does not double-triage ---
 
 test_afk_signal_records_heartbeat_endpoint() {
@@ -4080,6 +4136,7 @@ test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_backstop_surfaces_a_masked_status
 test_beacon_stays_fresh_while_absorbing
+test_beacon_survives_a_phase_longer_than_the_grace
 test_afk_signal_records_heartbeat_endpoint
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

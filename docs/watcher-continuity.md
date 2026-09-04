@@ -100,6 +100,14 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 
 The default 300-second grace is unchanged.
 Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
+The watcher touches it at every phase boundary of its poll rather than once per iteration, so the beacon's age measures the current phase, not the whole iteration.
+The separate `state/.last-poll-cycle` marks the iteration boundary and carries no liveness meaning.
+
+That distinction is what makes a stale beacon on a live holder usable as evidence.
+`fm_watcher_busy_holder` names that state - a live, identity-matched holder of this home's lock whose beacon has aged past the grace - and `fm_watcher_wedge_bound` (`FM_WATCHER_WEDGE_GRACE`, default twice the grace) is where the arm layer stops waiting for it and starts reclaiming it.
+Below the bound the holder is supervision mid-phase: `bin/fm-watch.sh` exits with the typed `watcher: busy holder pid=<N> beacon=<age>s` outcome instead of a bare failure, `bin/fm-watch-arm.sh` waits for it (`FM_ARM_BUSY_HOLDER_WAIT`, default half the grace) and attaches when it beats again, and `bin/fm-claude-stop-autoarm.sh` waits the same way between its bounded attempts instead of re-deciding a second later.
+Past the bound the arm reclaims it through the same identity-verified stop `--restart` uses, escalating from `SIGCONT` plus `SIGTERM` to `SIGKILL` only after that stop has had its bounded window, then publishes a `check: watcher-wedge-reclaimed pid=<N>` wake.
+Only a reap that does not take is reported as a failure; a live holder inside the wedge bound never produces `auto-arm FAILED`.
 
 ## Regression coverage
 
@@ -108,6 +116,8 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 `tests/fm-watch-arm.test.sh` covers durable queue replay, real remote parent-replies ingestion into the authoritative status log, decision-only OPEN DECISIONS recovery, interrupted handling replay, generation-bound acknowledgement, a persistent live successor after recovery, a watcher close inside the handling window that must leave the printed acknowledgement valid, and the self-healing moved-generation acknowledgement that consumes its handled rows and names its remedy.
 `tests/fm-watch-recovery-loop.test.sh` covers the once-per-generation announcement bound with the real Pi extension against a refused handling handshake, and a handling successor that must surface a real crew event instead of going blind.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, recovery publication before stale-lock removal, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
+It also pins the two halves of the busy-holder split against each other: a healthy watcher whose single iteration outlives the grace is attached to and never reported failed, while a SIGSTOPped holder past the wedge bound is reclaimed and named in a wake.
+`tests/fm-watch-triage.test.sh` pins the beacon staying inside the grace while one phase deliberately runs longer than the whole grace.
 `tests/fm-subagent-pretool-check.test.sh` proves Claude retains only the non-status Bash seatbelts.
 `tests/fm-claude-stop-autoarm.test.sh` covers the auto-arm's scope, stale and live session owners, unchanged AFK and need boundaries, single-flight, bounded failure retries, benign live-watcher cycle ends, one-notice failure episodes, and exit-2 translation.
 It also covers generation-claim single-flight, stuck-claim supersession, superseded-owner silence, notice-marker refusal and retry, ownership-atomic episode reset, and the legacy upgrade shim; [`turnend-guard.md`](turnend-guard.md) owns those behavior contracts.

@@ -10,16 +10,21 @@
 # healthy, prints a loud, clearly delimited banner so the agent cannot skim past
 # it in the tool output of whatever it was doing - the one channel every harness
 # has. Supervision health is MODEL-AWARE (fm_watcher_supervision_verdict in
-# bin/fm-wake-lib.sh): under the Claude Stop auto-arm model the watcher runs only
-# between turns, so mid-turn a fresh beacon with no live watcher is healthy and
-# only a stale beacon (beyond FM_GUARD_GRACE) is a genuine lapse; under the Pi
+# bin/fm-wake-lib.sh), and so is what this guard DOES about it:
+# under the Claude Stop auto-arm model the watcher runs only between turns, so
+# an aged beacon mid-turn is the ordinary state and there is no passive banner at
+# all; instead, an auto-arm ledger that has gone quiet past a generous bound
+# while supervision is needed triggers a bounded mid-turn self-heal of the
+# Stop-owned owner path, and the guard prints one line only when that self-heal
+# fails (fm_guard_autoarm_self_heal below owns the evidence, the repair, and why
+# the beacon is not the question for this model). Under the Pi
 # extension model the extension tears the watcher down and respawns it on every
 # actionable wake, so a fresh beacon with a genuinely unheld lock is healthy
 # while that live Pi session provably owns continuity; any held but unhealthy
 # lock is down; under every
 # persistent-watcher harness a live identity-matched watcher with a fresh beacon
-# is required. The banner names the true failing condition (a missing live
-# watcher process vs a genuinely stale beacon). The full banner is emitted once
+# is required. For those two models the banner names the true failing condition
+# (a missing live watcher process vs a genuinely stale beacon). The full banner is emitted once
 # per distinct down-episode in this FM_HOME (keyed to the failing condition, not
 # the beacon mtime, which a healthy between-turns watcher advances every poll);
 # later guarded commands in the same episode print a one-line reminder instead.
@@ -40,6 +45,9 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 GRACE=${FM_GUARD_GRACE:-300}
+OWNER_LOCK="$STATE/.claude-autoarm.lock"
+FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
+FAILURE_ALARM="$STATE/.claude-autoarm-failure-alarmed"
 queue_pending=false
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
 case "$READ_ONLY" in 1|true|TRUE|yes|YES) READ_ONLY=1 ;; *) READ_ONLY=0 ;; esac
@@ -130,6 +138,55 @@ fm_guard_clear_stale_banner() {
   rm -f "$STALE_BANNER_MARKER" 2>/dev/null || true
 }
 
+# --- auto-arm model: mid-turn self-heal instead of a passive banner ----------
+# Under the Stop auto-arm model the watcher runs only BETWEEN turns, so mid-turn
+# there is legitimately no watcher and the beacon ages. Printing "SUPERVISION IS
+# OFF" for that was a false alarm in essentially every printing (2026-09-04
+# investigation: 2 banners and 19 reminders in one session, and 72 of that
+# session's 179 commands had been wrapped in a grep filter to hide them, which
+# also hid the independent queued-wakes and worktree-tangle alarms). The beacon
+# cannot answer the only question worth asking here, so this branch does not ask
+# it: it asks whether the ARM MECHANISM is still running, and if it is not, it
+# repairs what it can and speaks only when the repair fails.
+#
+# The auto-arm ledger (state/.claude-autoarm-epoch) advances at every turn end
+# while supervision is needed, so its age - not the beacon's - is the evidence
+# that the Stop hook has stopped arming. The bound is deliberately generous: a
+# single long working turn advances nothing, and that must stay silent.
+AUTOARM_LEDGER_GRACE=${FM_GUARD_AUTOARM_LEDGER_GRACE:-7200}
+case "$AUTOARM_LEDGER_GRACE" in ''|*[!0-9]*|0) AUTOARM_LEDGER_GRACE=7200 ;; esac
+
+# Repair the two states that stop the Stop-owned owner path from arming at the
+# next turn end, and that this guard can safely clear mid-turn:
+#   - a generation claim whose owner is gone, which every later firing defers to;
+#   - a spent failure episode whose markers suppress the next continuation.
+# Both are bounded, home-scoped writes; the guard never starts a watcher itself,
+# because backgrounding an arm is exactly the mistake that silently takes
+# supervision down (bin/fm-watch-arm.sh header, bin/fm-arm-command-policy.mjs).
+# Prints the reason on failure; silent and 0 when the mechanism is unobstructed.
+fm_guard_autoarm_self_heal() {
+  local marker
+  if fm_autoarm_claim_open "$STATE" "$GRACE"; then
+    # A live, healthy claim IS the mechanism working; nothing to repair.
+    return 0
+  fi
+  if fm_lock_role "$OWNER_LOCK" >/dev/null 2>&1; then
+    fm_autoarm_release_abandoned "$STATE" "$GRACE" || {
+      printf 'a stalled supervision claim could not be released'
+      return 1
+    }
+  fi
+  for marker in "$FAILURE_NOTICE" "$FAILURE_ALARM"; do
+    [ -e "$marker" ] || [ -L "$marker" ] || continue
+    rm -f "$marker" 2>/dev/null || true
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+      printf 'a spent supervision failure episode could not be cleared'
+      return 1
+    fi
+  done
+  return 0
+}
+
 # Worktree-tangle alarm, checked FIRST and independent of in-flight tasks: the
 # firstmate PRIMARY checkout (FM_ROOT) must stay on its default branch. If a
 # crewmate's branch/commits landed here instead of in its own isolated worktree,
@@ -181,7 +238,32 @@ fi
 # No fresh watcher with tasks in flight is the dangerous state: emit a prominent,
 # bordered banner FIRST so it reads as an alarm, not a buried stderr line. Later
 # calls in the same episode get a one-line reminder only.
-if [ "$watcher_healthy" = false ]; then
+supervision_model=$(fm_supervision_model)
+if [ "$watcher_healthy" = false ] && [ "$supervision_model" = autoarm ]; then
+  # No passive banner for this model: see fm_guard_autoarm_self_heal above.
+  # A ledger that is still advancing means the Stop-owned mechanism is arming at
+  # every turn end, so the aged beacon is the expected mid-turn state and this
+  # guard says nothing at all. Only a ledger that has gone quiet past its
+  # generous bound, with supervision still needed, is evidence the mechanism has
+  # stopped - and even then the guard repairs first and speaks only if it cannot.
+  if [ "$READ_ONLY" -ne 1 ] \
+    && [ "$(fm_path_age "$STATE/.claude-autoarm-epoch")" -ge "$AUTOARM_LEDGER_GRACE" ]; then
+    self_heal_rc=0
+    self_heal_reason=$(fm_guard_autoarm_self_heal) || self_heal_rc=$?
+    if [ "$self_heal_rc" -eq 0 ]; then
+      # A successful self-heal is silent, and it ends any earlier failure
+      # episode so a later genuine one announces again.
+      fm_guard_clear_stale_banner
+    else
+      episode_key=$(fm_guard_stale_episode_key autoarm-self-heal-failed)
+      episode_key=${episode_key%$'\n'}
+      if fm_guard_claim_stale_banner "$STATE" "$episode_key"; then
+        printf 'WARNING: supervision could not re-arm: %s. %s\n' \
+          "$self_heal_reason" "$CONTINUE_LINE" >&2
+      fi
+    fi
+  fi
+elif [ "$watcher_healthy" = false ]; then
   episode_key=$(fm_guard_stale_episode_key "$watcher_down_reason")
   episode_key=${episode_key%$'\n'}
   print_full_banner=0

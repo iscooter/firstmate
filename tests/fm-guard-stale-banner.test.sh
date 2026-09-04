@@ -369,30 +369,82 @@ test_autoarm_fresh_beacon_without_watcher_is_healthy() {
   pass "fm-guard stale banner: auto-arm fresh beacon without a live watcher is healthy"
 }
 
-test_autoarm_stale_beacon_alarms_with_correct_reason() {
+# 2026-09-04 stale-beacon investigation, section 9. Under the Stop auto-arm model
+# the watcher runs only BETWEEN turns, so mid-turn an aged beacon is the ordinary
+# state: the passive "WATCHER DOWN - SUPERVISION IS OFF" banner printed 21 times
+# in the incident session, prompted exactly one action (a health check that
+# concluded nothing was broken), and trained the operator to filter guard output
+# entirely - which also hid the independent queued-wakes and tangle alarms. It is
+# deleted for this model rather than made smarter.
+test_autoarm_stale_beacon_prints_no_passive_banner() {
   local dir out
   dir=$(make_guard_case autoarm-stale)
-  # No beacon at all -> a genuine supervision lapse even under the auto-arm model.
+  # No beacon at all, with the auto-arm ledger still advancing: the mechanism is
+  # arming at every turn end, so the guard has nothing to say.
+  touch "$(case_home "$dir")/state/.claude-autoarm-epoch"
   out=$(run_guard_case_autoarm "$dir")
-  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
-    || fail "auto-arm model with an absent/stale beacon must alarm: $out"
-  assert_contains "$out" "no watcher has a fresh beacon" \
-    "auto-arm stale-beacon banner must name the stale-beacon reason"
-  pass "fm-guard stale banner: auto-arm stale beacon alarms with the true reason"
+  [ -z "$out" ] \
+    || fail "auto-arm model printed a passive supervision banner: $out"
+  pass "fm-guard: the auto-arm model has no passive stale-beacon banner"
 }
 
-test_autoarm_stale_episode_is_stable() {
-  local dir out1 out2
-  dir=$(make_guard_case autoarm-stable-episode)
+# The beacon-independent tripwire: an auto-arm ledger that has gone quiet past a
+# generous bound while supervision is needed means the Stop hook has stopped
+# arming. The guard repairs what it can reach and stays SILENT when the repair
+# takes, so a long working turn can never produce a false alarm.
+test_autoarm_stale_ledger_self_heals_silently() {
+  local dir home out
+  dir=$(make_guard_case autoarm-self-heal)
+  home=$(case_home "$dir")
+  # A spent failure episode is exactly what suppresses the next Stop-owned
+  # continuation, and it is the state this guard can clear on its own.
+  : > "$home/state/.claude-autoarm-failure-notified"
+  : > "$home/state/.claude-autoarm-failure-alarmed"
+  out=$(run_guard_case_autoarm "$dir")
+  [ -z "$out" ] || fail "a successful self-heal was not silent: $out"
+  [ ! -e "$home/state/.claude-autoarm-failure-notified" ] \
+    || fail "the self-heal left the failure-notice marker in place"
+  [ ! -e "$home/state/.claude-autoarm-failure-alarmed" ] \
+    || fail "the self-heal left the attended-alarm marker in place"
+  pass "fm-guard: a stale auto-arm ledger is self-healed silently while work is in flight"
+}
+
+# Only a self-heal that cannot take is surfaced, once per episode.
+test_autoarm_self_heal_failure_surfaces_once() {
+  local dir home out1 out2 marker
+  dir=$(make_guard_case autoarm-self-heal-failure)
+  home=$(case_home "$dir")
+  marker="$home/state/.claude-autoarm-failure-notified"
+  # A dangling symlink into a missing directory: rm removes the link itself, so
+  # make the marker a path the guard cannot clear - a non-empty directory.
+  mkdir -p "$marker/unremovable"
   out1=$(run_guard_case_autoarm "$dir")
   out2=$(run_guard_case_autoarm "$dir")
-  [ "$(count_text "$out1" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
-    || fail "first auto-arm stale call did not print the full banner: $out1"
-  [ "$(count_text "$out2" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 0 ] \
-    || fail "auto-arm stale episode re-printed the full banner instead of deduping: $out2"
-  assert_contains "$out2" "full banner already printed this episode" \
-    "second auto-arm stale call did not print the concise reminder"
-  pass "fm-guard stale banner: auto-arm stale episode stays one episode across calls"
+  assert_contains "$out1" "supervision could not re-arm" \
+    "a failed self-heal did not surface"
+  [ "$(count_text "$out1" "supervision could not re-arm")" -eq 1 ] \
+    || fail "the failed self-heal printed more than one line: $out1"
+  [ -z "$out2" ] \
+    || fail "the failed self-heal repeated its notice in the same episode: $out2"
+  pass "fm-guard: a self-heal that cannot take surfaces one line, once per episode"
+}
+
+# The false alarm the deleted banner used to produce: a long working turn with a
+# quiet fleet. The ledger's own bound - not the beacon - is what gates the
+# self-heal, so a turn that produces no wakes stays completely silent.
+test_autoarm_quiet_but_working_fleet_stays_silent() {
+  local dir home out
+  dir=$(make_guard_case autoarm-quiet-working)
+  home=$(case_home "$dir")
+  # A ledger written recently: the Stop hook armed at the last turn end and this
+  # turn simply has not ended yet. No beacon at all, work in flight.
+  touch "$home/state/.claude-autoarm-epoch"
+  : > "$home/state/.claude-autoarm-failure-notified"
+  out=$(run_guard_case_autoarm "$dir")
+  [ -z "$out" ] || fail "a quiet but working fleet produced a supervision warning: $out"
+  [ -e "$home/state/.claude-autoarm-failure-notified" ] \
+    || fail "a fresh ledger must not trigger the self-heal at all"
+  pass "fm-guard: a long working turn with a fresh auto-arm ledger stays silent"
 }
 
 test_persistent_no_watcher_banner_names_missing_process() {
@@ -739,8 +791,10 @@ test_branch_actor_is_not_told_to_drain_queued_wakes
 test_persistent_model_ignores_pi_extension_evidence
 test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
-test_autoarm_stale_beacon_alarms_with_correct_reason
-test_autoarm_stale_episode_is_stable
+test_autoarm_stale_beacon_prints_no_passive_banner
+test_autoarm_stale_ledger_self_heals_silently
+test_autoarm_self_heal_failure_surfaces_once
+test_autoarm_quiet_but_working_fleet_stays_silent
 test_persistent_no_watcher_banner_names_missing_process
 test_persistent_no_watcher_episode_survives_beacon_touch
 test_fresh_beacon_without_live_watcher_stays_alarm

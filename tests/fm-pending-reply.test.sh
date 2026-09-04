@@ -1084,6 +1084,115 @@ test_tick_skips_terminal_and_reuses_target_observation() {
   pass "tick skips terminal records and reuses target observations"
 }
 
+# 2026-09-04 stale-beacon investigation, sections 5.3, 5.4 and 8.2. The poll tick
+# re-read EVERY record on every pass, and nothing ever left the directory: 1,883
+# records, all already resolved, cost 103s per poll and grew ~3s a day, which is
+# what pushed a whole poll iteration past the liveness grace. A settled record
+# must leave the hot set, and must still be resolvable by its correlation id.
+test_settled_records_leave_the_hot_set_and_stay_addressable() {
+  local home state settled open hot archive
+  home=$(setup_parent retention-archive)
+  state="$home/state"
+  # This fixture clock is read only by this test, after an earlier case's
+  # subshell-scoped clock.
+  # shellcheck disable=SC2031
+  export FM_PENDING_REPLY_NOW=20000
+  settled=$(fm_pending_reply_create "$home" "$state" hibit "settled request")
+  fm_pending_reply_mark_delivered "$state" "$settled"
+  printf 'done [corr=%s]: complete\n' "$settled" > "$state/hibit.status"
+  fm_pending_reply_try_resolve "$state" "$settled" || fail "settled fixture should resolve"
+  open=$(fm_pending_reply_create "$home" "$state" hibit "still open request")
+  fm_pending_reply_mark_delivered "$state" "$open"
+
+  hot=$(fm_pending_reply_dir "$state")
+  archive=$(fm_pending_reply_archive_dir "$state")
+  [ -f "$hot/$settled" ] || fail "the settled record should start in the hot set"
+
+  fm_pending_reply_tick "$state" || fail "tick failed"
+
+  [ ! -e "$hot/$settled" ] || fail "a settled record was left in the hot set the tick rescans"
+  [ -f "$archive/$settled" ] || fail "the settled record was not archived"
+  [ -f "$hot/$open" ] || fail "an OPEN record must stay in the hot set"
+  # Still addressable by correlation id, which is what corr reuse, the
+  # wrong-home detector, teardown, and the handoff receiver all depend on.
+  [ "$(fm_pending_reply_path "$state" "$settled")" = "$archive/$settled" ] \
+    || fail "an archived record is no longer resolvable by its correlation id"
+  [ "$(phase_of "$state" "$settled")" = resolved ] \
+    || fail "the archived record's phase is unreadable"
+  if fm_pending_reply_corr_reusable "$state" "$settled" hibit; then
+    fail "a settled correlation must not become reusable by being archived"
+  fi
+  pass "a settled pending-reply record leaves the hot set and stays addressable by correlation id"
+}
+
+# The exception that must NOT be archived early: a resolved record whose
+# escalation is still open. The tick's convergence retry for that close is the
+# one reason a resolved record stays hot.
+test_a_resolved_record_with_an_open_escalation_stays_hot_until_closed() {
+  local home state corr hot archive rec
+  home=$(setup_parent retention-open-escalation)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=21000
+  # Invoked indirectly through FM_PENDING_REPLY_SEND_HOOK.
+  # shellcheck disable=SC2329
+  retention_recovery_hook() { return 0; }
+  export -f retention_recovery_hook
+  # shellcheck disable=SC2031
+  export FM_PENDING_REPLY_SEND_HOOK=retention_recovery_hook
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "escalated then answered")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" request
+  fm_pending_reply_send_recovery "$state" "$corr" || fail "fixture recovery send failed"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" recovery
+  fm_pending_reply_maybe_escalate "$state" "$corr" || fail "fixture should escalate"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  printf 'done [corr=%s]: answered at last\n' "$corr" >> "$state/hibit.status"
+  fm_pending_reply_try_resolve "$state" "$corr" || fail "fixture should resolve"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" escalation_closed_epoch "" || fail "could not reopen the escalation"
+
+  hot=$(fm_pending_reply_dir "$state")
+  archive=$(fm_pending_reply_archive_dir "$state")
+  # The record is NOT settled while its escalation is open, so the tick must take
+  # the full close path for it rather than the settled fast path.
+  _fm_pending_reply_settled "$hot/$corr" \
+    && fail "a resolved record with an open escalation was treated as settled"
+  fm_pending_reply_tick "$state" || fail "tick failed"
+  [ ! -f "$hot/$corr" ] \
+    || fail "the record stayed in the hot set after its close landed"
+  [ -f "$archive/$corr" ] || fail "the closed record was not archived"
+  [ -n "$(fm_pending_reply_get "$archive/$corr" escalation_closed_epoch)" ] \
+    || fail "the tick archived the record without converging the escalation close"
+  pass "a resolved record with an open escalation converges its close and leaves the hot set in one tick"
+}
+
+# An operator may already have moved records out of the hot path by hand into
+# state/pending-replies/archive/. That directory is adopted, not replaced, and
+# the records already in it stay addressable.
+test_a_preexisting_archive_is_adopted() {
+  local home state corr hot archive settled
+  home=$(setup_parent retention-preexisting-archive)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=22000
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "hand-archived request")
+  hot=$(fm_pending_reply_dir "$state")
+  archive=$(fm_pending_reply_archive_dir "$state")
+  mkdir -p "$archive"
+  mv "$hot/$corr" "$archive/$corr"
+
+  settled=$(fm_pending_reply_create "$home" "$state" hibit "settled request")
+  fm_pending_reply_mark_delivered "$state" "$settled"
+  printf 'done [corr=%s]: complete\n' "$settled" > "$state/hibit.status"
+  fm_pending_reply_try_resolve "$state" "$settled" || fail "settled fixture should resolve"
+
+  fm_pending_reply_tick "$state" || fail "tick failed against a pre-existing archive"
+  [ -f "$archive/$corr" ] || fail "the pre-existing archived record was disturbed"
+  [ -f "$archive/$settled" ] || fail "the newly settled record did not join the existing archive"
+  [ "$(fm_pending_reply_path "$state" "$corr")" = "$archive/$corr" ] \
+    || fail "a hand-archived record is not resolvable by its correlation id"
+  pass "a pre-existing pending-reply archive is adopted rather than replaced"
+}
+
 test_correlations_reuse_only_for_matching_open_task() {
   local dir fb log home state got corr1 corr2 corr3 rec
   dir="$TMP_ROOT/corr-reuse"; mkdir -p "$dir"
@@ -1534,6 +1643,9 @@ test_unknown_backend_state_uses_capture_fallback
 test_kimi_capture_fallback_uses_recorded_harness
 test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
+test_settled_records_leave_the_hot_set_and_stay_addressable
+test_a_resolved_record_with_an_open_escalation_stays_hot_until_closed
+test_a_preexisting_archive_is_adopted
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
 test_remote_repost_waits_for_the_reply_channel

@@ -145,6 +145,71 @@ fm_watcher_healthy() {
   return 0
 }
 
+# Exit status bin/fm-watch.sh uses for the one refusal that is NOT a failure:
+# the singleton lock is held by a live, identity-matched watcher of this home
+# whose beacon has gone stale. It is distinct from every other nonzero exit so
+# bin/fm-watch-arm.sh can wait for or reclaim that holder instead of reporting a
+# working fleet's supervision as broken.
+# shellcheck disable=SC2034 # Read by bin/fm-watch-arm.sh and bin/fm-claude-stop-autoarm.sh.
+FM_WATCH_BUSY_HOLDER_EXIT=3
+
+# Seconds since the last beat past which a LIVE holder stops being "slow" and
+# becomes a PROVEN wedge. Two grace windows, because bin/fm-watch.sh beats at
+# every phase boundary of its poll: a holder that has not beaten for twice the
+# whole liveness grace is stuck inside one phase, not merely running a long one.
+# Single owner, shared by the watcher's typed refusal, the arm's reclaim, and the
+# Stop auto-arm's wait-versus-report split, so all three agree on where slow ends
+# and wedged begins. FM_WATCHER_WEDGE_GRACE overrides it.
+fm_watcher_wedge_bound() {  # [grace]
+  local grace=${1:-${FM_GUARD_GRACE:-300}} bound
+  case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
+  bound=${FM_WATCHER_WEDGE_GRACE:-$((grace * 2))}
+  case "$bound" in ''|*[!0-9]*|0) bound=$((grace * 2)) ;; esac
+  printf '%s\n' "$bound"
+}
+
+# The one lock state that is neither healthy nor free: a LIVE, identity-matched
+# watcher for THIS home holds the lock while its beacon has gone stale.
+# Sets FM_WATCHER_BUSY_PID and FM_WATCHER_BUSY_BEACON_AGE.
+#
+# Before the watcher beat at every phase boundary this was the ROUTINE reading of
+# a perfectly healthy watcher whose single poll iteration had simply outgrown the
+# grace, and the arm layer's only answer to it was to report supervision broken
+# (2026-09-04 investigation: bin/fm-watch.sh:1562 beat once per iteration while
+# an iteration had grown to 100-350s against a 300s grace). With per-phase beats
+# it means the holder really is inside one long phase, so waiting is right up to
+# fm_watcher_wedge_bound and only past that bound is it evidence of a wedge.
+# shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+FM_WATCHER_BUSY_PID=
+# shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+FM_WATCHER_BUSY_BEACON_AGE=
+fm_watcher_busy_holder() {  # <state-dir> <watch-path> [grace] [home]
+  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME}
+  local beat pid age
+  FM_WATCHER_BUSY_PID=
+  FM_WATCHER_BUSY_BEACON_AGE=
+  case "$grace" in ''|*[!0-9]*) grace=300 ;; esac
+  pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
+  # A holder that has taken the lock but not yet reached its first beat is
+  # STARTING, not stalling, so with no beacon at all the lock's own age is the
+  # honest measure of how long it has been silent. Treating a missing beacon as
+  # ancient would make every freshly claimed lock look wedged.
+  beat="$state/.last-watcher-beat"
+  if [ -e "$beat" ]; then
+    age=$(fm_path_age "$beat")
+  else
+    age=$(fm_path_age "$state/.watch.lock")
+  fi
+  case "$age" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$age" -ge "$grace" ] || return 1
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+  FM_WATCHER_BUSY_PID=$pid
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_busy_holder returns.
+  FM_WATCHER_BUSY_BEACON_AGE=$age
+}
+
 # fm_watcher_healthy above is the PID-STRICT primitive: true only when a live,
 # identity-matched watcher PROCESS holds this home's lock with a fresh beacon. The
 # arm layer (bin/fm-watch-arm.sh, bin/fm-claude-stop-autoarm.sh) needs exactly

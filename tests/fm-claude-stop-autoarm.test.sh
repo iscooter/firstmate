@@ -539,6 +539,71 @@ test_benign_cycle_end_with_live_watcher_is_silent() {
   pass "auto-arm: benign cycle end with a live watcher and fresh beacon stays silent across the next cycle"
 }
 
+# 2026-09-04 stale-beacon investigation, section 8.3. A LIVE, identity-matched
+# watcher whose beacon has aged past the grace but not past the wedge bound is
+# supervision mid-phase, not a broken mechanism. The hook used to run the same
+# predicate twice a second apart (both refusals landed at 1788501895 and
+# 1788501896) and then print "auto-arm FAILED - the Stop-owned automatic
+# supervision mechanism is broken", which sent the operator to investigate a
+# watcher that was seconds from delivering a real wake.
+test_live_busy_holder_never_reports_a_broken_mechanism() {
+  local dir out status pid identity
+  dir=$(make_primary_dir "$TMP_ROOT/busy-holder")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" benign-live
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify the busy holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  export FM_GUARD_GRACE=1 FM_WATCHER_WEDGE_GRACE=3600
+  sleep 2   # beacon now past the grace, far inside the wedge bound
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  unset FM_GUARD_GRACE FM_WATCHER_WEDGE_GRACE
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a live sub-wedge holder must close quietly, not alarm"
+  assert_not_contains "$out" "automatic supervision mechanism is broken" \
+    "a working watcher mid-phase was reported as a broken mechanism"
+  [ -z "$out" ] || fail "live busy holder produced an operator notice: $out"
+  [ "$(epoch_outcome "$dir")" = clean ] \
+    || fail "live busy holder must record outcome=clean, got: $(epoch_outcome "$dir")"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" \
+    "a live busy holder opened a failure episode"
+  pass "auto-arm: a live holder inside the wedge bound is never reported as a broken mechanism"
+}
+
+# The same section's second half: the retry must actually WAIT. A holder that
+# reaches its next beat while the hook is waiting must be verified healthy,
+# which is impossible if the hook only re-runs its predicate a second later.
+test_retry_waits_for_the_holder_to_beat_again() {
+  local dir out status pid identity toucher
+  dir=$(make_primary_dir "$TMP_ROOT/busy-holder-beats")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" benign-live
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify the busy holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  export FM_GUARD_GRACE=4 FM_WATCHER_WEDGE_GRACE=3600 FM_CLAUDE_AUTOARM_BUSY_WAIT=8
+  sleep 5   # beacon past the 4s grace when the hook starts
+  ( sleep 2; touch "$dir/state/.last-watcher-beat" ) &
+  toucher=$!
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  unset FM_GUARD_GRACE FM_WATCHER_WEDGE_GRACE FM_CLAUDE_AUTOARM_BUSY_WAIT
+  wait "$toucher" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "the hook must verify the holder that beat during the wait"
+  [ -z "$out" ] || fail "a holder that beat again during the wait produced a notice: $out"
+  [ "$(epoch_outcome "$dir")" = clean ] \
+    || fail "a verified holder must record outcome=clean, got: $(epoch_outcome "$dir")"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 1 ] \
+    || fail "the hook burned a second instant attempt instead of waiting"
+  pass "auto-arm: a bounded attempt waits for the holder's next beat instead of re-deciding a second later"
+}
+
 test_positive_recovery_budget_contention_preserves_episode() {
   local dir out status pid identity holder
   dir=$(make_primary_dir "$TMP_ROOT/recovery-budget-contention")
@@ -1165,6 +1230,8 @@ test_failure_notice_marker_write_refuses_delivery_and_retries
 test_unverified_clean_close_exhausts_retries
 test_post_alarm_actionable_close_is_suppressed
 test_benign_cycle_end_with_live_watcher_is_silent
+test_live_busy_holder_never_reports_a_broken_mechanism
+test_retry_waits_for_the_holder_to_beat_again
 test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
