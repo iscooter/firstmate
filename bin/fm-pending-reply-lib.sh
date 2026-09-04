@@ -1575,10 +1575,7 @@ fm_pending_reply_tick() {  # <state-dir>
     task_id=$(fm_pending_reply_get "$rec" task_id)
     phase=$(fm_pending_reply_get "$rec" phase)
     if [ "$phase" = resolved ]; then
-      # Resolved with an escalation still open: the retry that makes the close
-      # converge after a transient write failure. The record leaves the hot set
-      # on the next tick, once the close has landed.
-      fm_pending_reply_close_escalation "$state" "$corr" || true
+      fm_pending_reply_try_resolve "$state" "$corr" || true
       continue
     fi
     fm_pending_reply_reconcile_delivery "$state" "$corr" || true

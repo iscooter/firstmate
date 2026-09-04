@@ -846,12 +846,30 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
 # uses unknown as the cue for harness-scoped pane-tail detection, while
 # fm-crew-state.sh also corroborates native idle verdicts with the recorded
 # harness's signature before treating a no-run crew as not busy.
-fm_backend_busy_state() {  # <backend> <target>
+_fm_backend_busy_state() {  # <backend> <target>
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
     herdr) fm_backend_herdr_busy_state "$@" ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+fm_backend_busy_state() {  # <backend> <target>
+  local result
+  result=$(fm_backend_run_read_timed env \
+    FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
+    FM_CONFIG_OVERRIDE="$FM_BACKEND_CONFIG_DIR" \
+    FM_GUARD_GRACE="${FM_GUARD_GRACE:-300}" \
+    FM_WATCHER_STALE_GRACE="${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}" \
+    bash -c '. "$1"; shift; _fm_backend_busy_state "$@"' \
+    _ "$FM_BACKEND_LIB_DIR/fm-backend.sh" "$@") || {
+      printf 'unknown'
+      return 0
+    }
+  case "$result" in
+    busy|idle|unknown) printf '%s' "$result" ;;
     *) printf 'unknown' ;;
   esac
 }

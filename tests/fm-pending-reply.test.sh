@@ -162,7 +162,7 @@ test_interrupted_resolution_completes_before_archive() {
   printf 'done [corr=%s]: ledger clean\n' "$corr" > "$status"
   hot=$(fm_pending_reply_path "$state" "$corr")
   fm_pending_reply_set "$hot" phase resolved || fail "could not stage interrupted resolution"
-  fm_pending_reply_try_resolve "$state" "$corr" || fail "interrupted resolution was not recoverable"
+  fm_pending_reply_tick "$state" || fail "tick could not recover interrupted resolution"
   archived=$(fm_pending_reply_path "$state" "$corr")
   [ "$archived" != "$hot" ] && [ -f "$archived" ] || fail "recovered resolution stayed in the hot set"
   [ "$(fm_pending_reply_get "$archived" resolved_epoch)" = 1100 ] \

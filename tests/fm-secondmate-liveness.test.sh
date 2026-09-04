@@ -175,6 +175,24 @@ SH
   pass "fm_backend_capture: one deadline includes backend readiness"
 }
 
+test_backend_busy_state_bounds_readiness_and_returns_unknown() {
+  local fakebin started elapsed out
+  fakebin=$(fm_fakebin "$TMP_ROOT/busy-one-deadline")
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+sleep 2
+printf '{"server":{"running":true}}\n'
+SH
+  chmod +x "$fakebin/herdr"
+  started=$(date +%s)
+  out=$(PATH="$fakebin:$BASE_PATH" FM_GUARD_GRACE=1 \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_busy_state herdr default:w1:p2' "$ROOT")
+  elapsed=$(( $(date +%s) - started ))
+  [ "$out" = unknown ] || fail "a timed-out Herdr busy observation must be unknown, got '$out'"
+  [ "$elapsed" -lt 3 ] || fail "Herdr busy readiness escaped the semantic deadline ($elapsed seconds)"
+  pass "fm_backend_busy_state: one deadline includes readiness and returns unknown"
+}
+
 test_tmux_agent_state_rejects_malformed_targets_before_probe() {
   local fakebin marker target out
   fakebin=$(fm_fakebin "$TMP_ROOT/tmux-malformed")
@@ -582,6 +600,7 @@ test_sweep_noop_with_no_secondmate_meta() {
 test_tmux_agent_state_classifies
 test_tmux_agent_state_shares_one_read_deadline
 test_backend_capture_bounds_readiness_and_capture_together
+test_backend_busy_state_bounds_readiness_and_returns_unknown
 test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility
