@@ -1531,7 +1531,7 @@ _fm_pending_reply_archive_locked() {  # <state-dir> <corr_id>
 # state, and optional secondmate-home wrong-home path checks.
 fm_pending_reply_tick() {  # <state-dir>
   local state=$1 dir rec base corr task_id phase delivered meta backend target label busy sm_home harness remote_host
-  local observation observation_task found i seen=0
+  local observation observation_task found i
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
@@ -1541,10 +1541,7 @@ fm_pending_reply_tick() {  # <state-dir>
     case "$base" in
       .*) continue ;;
     esac
-    # Keep proving liveness on a home whose hot set is still large - the first
-    # tick after an upgrade archives a long backlog in one pass.
-    seen=$((seen + 1))
-    [ $((seen % 50)) -ne 0 ] || _fm_pending_reply_tick_beat
+    _fm_pending_reply_tick_beat
     # Settled records leave the hot set instead of being re-read forever. This
     # gate is one file read with no subprocess, and it runs BEFORE the corr,
     # task, and phase reads below, so the common case costs neither the
@@ -1656,7 +1653,9 @@ fm_pending_reply_tick() {  # <state-dir>
             _fm_pending_reply_tick_beat
             case "$observation" in busy|idle|fallback-idle|unknown) ;; *) observation=unknown ;; esac
           else
+            _fm_pending_reply_tick_beat
             observation=$(fm_pending_reply_backend_observation "$backend" "$target" "$label" "$harness")
+            _fm_pending_reply_tick_beat
           fi
           observation_tasks+=("$task_id")
           observation_values+=("$observation")

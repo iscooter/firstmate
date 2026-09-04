@@ -606,6 +606,28 @@ test_undelivered_records_are_scan_immutable() {
   pass "undelivered records remain immutable across scan paths"
 }
 
+# 2026-09-04 stale-beacon investigation: fm_pending_reply_tick at
+# bin/fm-pending-reply-lib.sh:1287 spent 103s rescanning 1,883 records, while
+# bin/fm-watch.sh:1562 beat only once per 100-350s iteration. A batch of fewer
+# than 50 slow records therefore received no between-record heartbeat and could
+# make a progressing watcher look wedged.
+test_pending_reply_tick_beats_each_record_below_the_old_batch_size() {
+  local home state beats=0 i
+  home=$(setup_parent beat-each-record)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=5550
+  for ((i = 1; i <= 21; i++)); do
+    fm_pending_reply_create "$home" "$state" "task-$i" "pending request $i" >/dev/null \
+      || fail "could not create pending record $i"
+  done
+  pending_reply_test_beat() { beats=$((beats + 1)); }
+  FM_PENDING_REPLY_TICK_BEAT=pending_reply_test_beat fm_pending_reply_tick "$state" \
+    || fail "pending-reply tick failed"
+  [ "$beats" -ge 21 ] \
+    || fail "21 progressing records produced only $beats watcher beats"
+  pass "pending-reply tick beats each record before a slow observation can accumulate"
+}
+
 test_delivery_confirmation_fallback_reconciles() {
   (
     local home state corr rec marker rc prepared_corr prepared_rec prepared_marker escalations
@@ -1641,6 +1663,7 @@ test_concurrent_resolution_closes_escalation_once
 test_concurrent_escalation_yields_to_late_reply
 test_transport_success_is_not_reply_success
 test_undelivered_records_are_scan_immutable
+test_pending_reply_tick_beats_each_record_below_the_old_batch_size
 test_delivery_confirmation_fallback_reconciles
 test_delivery_confirmation_serializes_with_reconciliation
 test_unrelated_and_stale_corr_cannot_resolve
