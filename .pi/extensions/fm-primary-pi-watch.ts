@@ -606,23 +606,23 @@ export default function (pi: ExtensionAPI) {
     // also let a check-kind trigger itself slip past main's delivery.
     const isCheckTrigger = /^check:/.test(message);
     const scope = scopeForUnreadWake(state, heartbeat);
-    // A needs-decision status append surfaced by bin/fm-watch.sh's
-    // signal_files_actionable gets the identical main-only treatment as a
-    // check-kind trigger, without extending that classification to stale or
-    // heartbeat rows (docs/pi-supervision-branch.md "Autonomy"). The wake
-    // message text stays the ordinary "signal:<files>" shape every harness-arm
-    // script already recognizes. Only this cycle's own file list is
-    // cross-referenced against scope.needsDecisionKeys, the status-file
-    // basenames scopeForUnreadWake just excluded for a needs-decision payload,
-    // to detect that THIS trigger is one of them.
-    const isNeedsDecisionTrigger =
-      scope.needsDecisionKeys.length > 0 &&
-      /^signal:/.test(message) &&
-      message
+    // A signal close containing only needs-decision status files gets the
+    // identical main-only treatment as a check-kind trigger, without extending
+    // that classification to stale or heartbeat rows (docs/
+    // pi-supervision-branch.md "Autonomy"). A mixed close remains eligible for
+    // its routine files; scopeForUnreadWake excludes the decision rows from the
+    // branch grant. The message keeps the ordinary "signal:<files>" shape, so
+    // compare this cycle's status-file basenames with the needs-decision keys.
+    const signalKeys = /^signal:/.test(message)
+      ? message
         .slice("signal:".length)
         .split(/\s+/)
         .filter(Boolean)
-        .some((path) => scope.needsDecisionKeys.includes(path.split("/").pop() ?? path));
+        .map((path) => path.split("/").pop() ?? path)
+      : [];
+    const isNeedsDecisionTrigger =
+      signalKeys.length > 0 &&
+      signalKeys.every((key) => scope.needsDecisionKeys.includes(key));
     const eligible = !isCheckTrigger && !isNeedsDecisionTrigger && scope.eligible;
     const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);

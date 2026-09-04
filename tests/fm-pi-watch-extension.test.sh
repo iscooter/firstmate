@@ -905,6 +905,100 @@ EOF
   pass "a needs-decision signal trigger reaches main, never the supervision branch, without vetoing an unrelated eligible row"
 }
 
+# A watcher cycle can coalesce more than one changed status file. A
+# needs-decision file in that batch remains excluded from the branch's row
+# scope, but must not turn the routine file's accepted signal into a main wake.
+test_pi_mixed_signal_keeps_routine_rows_branch_eligible() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-mixed-signal-root"
+  home="$TMP_ROOT/pi-mixed-signal-home"
+  log="$TMP_ROOT/pi-mixed-signal.log"
+  stop="$TMP_ROOT/pi-mixed-signal.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config" "$home/projects/approved"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  printf 'project=%s/projects/approved\nwindow=fm-a\n' "$home" > "$home/state/task-a.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-b\n' "$home" > "$home/state/task-b.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: task-a.status task-b.status\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" \
+    node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const offers = [];
+let prompt = "";
+let tool = null;
+const handlers = new Map();
+const bus = {
+  on(channel, handler) {
+    handlers.set(channel, [...(handlers.get(channel) ?? []), handler]);
+    return () => {};
+  },
+  emit(channel, data) {
+    for (const handler of handlers.get(channel) ?? []) handler(data);
+  },
+};
+bus.on("fm-branch-supervision:dispatch", (offer) => {
+  offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
+  if (offer.eligible) offer.accept();
+});
+const pi = {
+  on() {},
+  events: bus,
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    prompt = message;
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+writeFileSync(
+  `${process.env.FM_HOME}/state/.wake-queue`,
+  "1\t1\tsignal\ttask-a.status\tneeds-decision: task-a.status task-b.status\n" +
+    "2\t2\tsignal\ttask-b.status\tsignal: task-a.status task-b.status\n",
+);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-mixed-signal", {}, undefined, undefined, {});
+for (let i = 0; i < 250 && offers.length === 0; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+for (let i = 0; i < 25 && !prompt; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (offers.length !== 1 || offers[0].eligible !== true) {
+  throw new Error(`a needs-decision file vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
+}
+if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
+  throw new Error(`the routine signal lost its project scope: ${JSON.stringify(offers)}`);
+}
+if (prompt) throw new Error(`the accepted routine signal fell through to main: ${prompt}`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "a mixed signal batch must keep its routine rows branch-eligible: $out"
+  [ -z "$out" ] || fail "Pi mixed-signal test printed output: $out"
+  pass "a needs-decision file does not veto routine branch delivery in the same signal batch"
+}
+
 test_pi_heartbeat_restoration_failure_stays_on_main() {
   local repo home plugin log out status
   repo="$TMP_ROOT/pi-heartbeat-restoration-failure-root"
@@ -3708,6 +3802,7 @@ test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
 test_pi_needs_decision_signal_stays_on_main
+test_pi_mixed_signal_keeps_routine_rows_branch_eligible
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch
 test_pi_handling_delivery_failure_is_typed_once
