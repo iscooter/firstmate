@@ -49,7 +49,11 @@ with open(sys.argv[2], "w", encoding="utf-8") as handle:
 PY
     ;;
   has-session)
-    [ -s "$record" ] && kill -0 "$(cat "$record")" 2>/dev/null
+    if [ -s "$record" ] && kill -0 "$(cat "$record")" 2>/dev/null; then
+      exit 0
+    fi
+    printf "can't find session: %s\n" "$session" >&2
+    exit 1
     ;;
   kill-session)
     [ -s "$record" ] || exit 1
@@ -482,11 +486,12 @@ test_autoarm_stale_beacon_prints_no_passive_banner() {
   pass "fm-guard: the auto-arm model has no passive stale-beacon banner"
 }
 
-test_watcher_launcher_preserves_live_tracked_owner() {
+test_watcher_launcher_replaces_unproven_tracked_owner() {
   local dir home session pid before after out
-  dir=$(make_guard_case watcher-owner-preserved)
+  dir=$(make_guard_case watcher-owner-unproven)
   home=$(case_home "$dir")
   session=existing-watch-owner
+  printf 'working: still running\n' > "$home/state/task.status"
   PATH="$dir/fakebin:$PATH" FM_HOME="$home" tmux new-session -d -s "$session" 'exec sleep 60'
   printf 'tmux\t%s\t\n' "$session" > "$home/state/.watch-arm-terminal"
   pid=$(cat "$home/state/.fake-tmux-$session")
@@ -495,11 +500,16 @@ test_watcher_launcher_preserves_live_tracked_owner() {
     FM_SUPERVISOR_TARGET=test:captain FM_SUPERVISOR_BACKEND=tmux \
     "$ROOT/bin/fm-afk-launch.sh" start-watcher 2>&1)
   after=$(cat "$home/state/.watch-arm-terminal")
-  kill -0 "$pid" 2>/dev/null || fail "start-watcher closed a live tracked owner"
-  [ "$after" = "$before" ] || fail "start-watcher replaced the live tracked owner record"
-  [ -z "$out" ] || fail "preserving a live tracked watcher owner should be silent: $out"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -0 "$pid" 2>/dev/null && fail "watcher-less tracked shell blocked replacement"
+  [ "$after" != "$before" ] || fail "watcher-less tracked owner record was preserved"
+  assert_contains "$out" "daemon launched in detached tmux session" \
+    "replacing an unproven tracked owner did not launch its successor"
   stop_fake_watcher "$dir"
-  pass "watcher self-heal preserves an unproven live tracked owner"
+  pass "watcher self-heal replaces a tracked owner without life evidence"
 }
 
 test_guard_preserves_subwedge_tracked_watcher() {
@@ -548,6 +558,10 @@ test_watcher_launcher_settles_proven_tracked_wedge() {
   done
   grep -F "check: watcher-wedge-reclaimed pid=$pid" "$home/state/.wake-queue" >/dev/null \
     || fail "tracked wedge settlement did not publish reclaim evidence: $out; owner logs: $(cat "$home/state"/.fake-tmux-*.log 2>/dev/null || true)"
+  assert_absent "$home/state/.fake-tmux-$session" "old tracked terminal was not reconciled by exact id"
+  assert_absent "$home/state/.watch-arm-terminal.next" "successor terminal record was left staged"
+  [ "$(awk -F '\t' 'NR == 1 { print $2 }' "$home/state/.watch-arm-terminal")" != "$session" ] \
+    || fail "old tracked terminal identifier replaced the successor record"
   stop_fake_watcher "$dir"
   pass "tracked lifecycle hands a proven wedge to identity-verified reclaim"
 }
@@ -602,7 +616,7 @@ test_autoarm_stale_ledger_self_heals_silently() {
 
 # Only a self-heal that cannot take is surfaced, once per episode.
 test_autoarm_self_heal_failure_surfaces_once() {
-  local dir home out1 out2 marker
+  local dir home out1 out2 marker outcome
   dir=$(make_guard_case autoarm-self-heal-failure)
   home=$(case_home "$dir")
   # The attended-alarm marker is the obstruction the self-heal must clear BEFORE
@@ -619,6 +633,10 @@ test_autoarm_self_heal_failure_surfaces_once() {
     || fail "the failed self-heal printed more than one line: $out1"
   [ -z "$out2" ] \
     || fail "the failed self-heal repeated its notice in the same episode: $out2"
+  outcome=$(FM_STATE_OVERRIDE="$home/state" bash -c \
+    '. "$1"; fm_autoarm_ledger_read "$2" || exit 1; printf "%s" "$FM_AUTOARM_OUTCOME"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$home/state") || fail "failed self-heal ledger was unreadable"
+  [ "$outcome" != healthy ] || fail "failed self-heal was published as healthy"
   pass "fm-guard: a self-heal that cannot take surfaces one line, once per episode"
 }
 
@@ -985,7 +1003,7 @@ test_persistent_model_ignores_pi_extension_evidence
 test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_prints_no_passive_banner
-test_watcher_launcher_preserves_live_tracked_owner
+test_watcher_launcher_replaces_unproven_tracked_owner
 test_guard_preserves_subwedge_tracked_watcher
 test_watcher_launcher_settles_proven_tracked_wedge
 test_watcher_launcher_forwards_effective_home_configuration

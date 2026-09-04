@@ -400,6 +400,7 @@ inbox_steer_check() {  # <window> <task>
       ;;
   esac
   tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || tail40=
+  beat
   if window_is_busy "$w" "$tail40"; then
     return 0
   fi
@@ -564,7 +565,11 @@ signal_turnend_panes_churned() {  # <file> ...
   done
   for ((i = 0; i < ${#signal_tasks[@]}; i++)); do
     task=${signal_tasks[$i]}
-    crew_is_provably_working "$task" && continue
+    if crew_is_provably_working "$task"; then
+      beat
+      continue
+    fi
+    beat
     task_index=${signal_indexes[$i]}
     churn_indexes+=("$task_index")
   done
@@ -587,7 +592,11 @@ signal_turnend_panes_churned() {  # <file> ...
     [ "$hash_bytes" = 32 ] || return 1
     prev=$(cat "$hash_file" 2>/dev/null) || return 1
     [[ $prev =~ ^[0-9a-f]{32}$ ]] || return 1
-    now=$(fm_backend_capture "$backend" "$w" 40 "$label" 2>/dev/null) || return 1
+    if ! now=$(fm_backend_capture "$backend" "$w" 40 "$label" 2>/dev/null); then
+      beat
+      return 1
+    fi
+    beat
     [ -n "$now" ] || return 1
     [ "$(printf '%s' "$now" | hash_pane)" != "$prev" ] || return 1
     churned_keys+=("$key")
@@ -1943,7 +1952,11 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    if ! tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null); then
+      beat
+      continue
+    fi
+    beat
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"

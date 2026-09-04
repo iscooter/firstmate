@@ -763,6 +763,7 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   fm_backend_run_read_timed env \
     FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
     FM_CONFIG_OVERRIDE="$FM_BACKEND_CONFIG_DIR" \
+    FM_BACKEND_READ_DEADLINE_EPOCH="${FM_BACKEND_READ_DEADLINE_EPOCH:-}" \
     FM_GUARD_GRACE="${FM_GUARD_GRACE:-300}" \
     FM_WATCHER_STALE_GRACE="${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}" \
     bash -c '. "$1"; shift; _fm_backend_capture "$@"' \
@@ -861,6 +862,7 @@ fm_backend_busy_state() {  # <backend> <target>
   result=$(fm_backend_run_read_timed env \
     FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
     FM_CONFIG_OVERRIDE="$FM_BACKEND_CONFIG_DIR" \
+    FM_BACKEND_READ_DEADLINE_EPOCH="${FM_BACKEND_READ_DEADLINE_EPOCH:-}" \
     FM_GUARD_GRACE="${FM_GUARD_GRACE:-300}" \
     FM_WATCHER_STALE_GRACE="${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}" \
     bash -c '. "$1"; shift; _fm_backend_busy_state "$@"' \

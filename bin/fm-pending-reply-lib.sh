@@ -844,19 +844,34 @@ fm_pending_reply_fallback_idle_eligible() {  # <record-path>
 # another read busy, and a weak rendered idle degrades to `fallback-idle`,
 # which the caller accepts as idle only after its grace window.
 fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] [harness]
-  local backend=$1 target=$2 expected_label=${3-} harness=${4-} native tail40
+  local backend=$1 target=$2 expected_label=${3-} harness=${4-} native tail40 result capture_rc=0
+  local previous=${FM_BACKEND_READ_DEADLINE_EPOCH-} deadline timeout
+  timeout=$(fm_backend_read_timeout)
+  deadline=$(( $(date +%s) + timeout ))
+  case "$previous" in ''|*[!0-9]*) previous= ;; *) [ "$previous" -ge "$deadline" ] || deadline=$previous ;; esac
+  FM_BACKEND_READ_DEADLINE_EPOCH=$deadline
   native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null || printf 'unknown')
+  _fm_pending_reply_tick_beat
   case "$native" in
-    busy|idle) printf '%s' "$native"; return 0 ;;
+    busy|idle) result=$native ;;
+    *)
+      tail40=$(fm_backend_capture "$backend" "$target" 40 "$expected_label" 2>/dev/null) || capture_rc=$?
+      if [ "$capture_rc" -ne 0 ]; then
+        result=unknown
+      elif printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
+        | fm_busy_lines_match "$harness"; then
+        result=busy
+      else
+        result=fallback-idle
+      fi
+      ;;
   esac
-  tail40=$(fm_backend_capture "$backend" "$target" 40 "$expected_label" 2>/dev/null) \
-    || { printf 'unknown'; return 0; }
-  if printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-    | fm_busy_lines_match "$harness"; then
-    printf 'busy'
+  if [ -n "$previous" ]; then
+    FM_BACKEND_READ_DEADLINE_EPOCH=$previous
   else
-    printf 'fallback-idle'
+    unset FM_BACKEND_READ_DEADLINE_EPOCH
   fi
+  printf '%s' "$result"
 }
 
 fm_pending_reply_busy_state_from_observation() {  # <record-path> <observation>

@@ -534,7 +534,9 @@ fm_afk_launch_start() {
 }
 
 fm_afk_launch_start_watcher() {
-  local captain_target captain_backend read_result result grace wedge backup
+  local captain_target captain_backend read_result result grace wedge
+  local old_backend old_target old_pid old_beat beat_now holder_pid established
+  local main_record next_record deadline wait_secs
   FM_AFK_LAUNCH_RECORD="$FM_AFK_LAUNCH_STATE/.watch-arm-terminal"
   FM_AFK_LAUNCH_WS_LABEL="firstmate-watch-arm"
   FM_AFK_LAUNCH_ENTRY="$FM_ROOT/bin/fm-watch-arm.sh"
@@ -552,6 +554,11 @@ fm_afk_launch_start_watcher() {
   if [ "$read_result" -eq 0 ]; then
     if fm_afk_launch_terminal_alive "$FM_AFK_REC_BACKEND" "$FM_AFK_REC_TARGET"; then
       grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
+      # Rounds 2-4 converge on one ownership rule: round 2 preserves a working
+      # watcher, round 3 lets a proven wedge reach identity-verified reclaim,
+      # and round 4 replaces a watcher-less shell. Preserve only positive life
+      # evidence: a healthy beat, or an identity-proven busy holder below the
+      # wedge bound. Reconcile every other exact recorded terminal.
       if fm_watcher_healthy "$FM_AFK_LAUNCH_STATE" "$FM_ROOT/bin/fm-watch.sh" "$grace" "$FM_HOME"; then
         printf 'watcher-owner: preserved healthy holder\n'
         return 0
@@ -563,23 +570,61 @@ fm_afk_launch_start_watcher() {
             "$FM_WATCHER_BUSY_PID" "$FM_WATCHER_BUSY_BEACON_AGE"
           return 0
         fi
-        backup=$(mktemp "$FM_AFK_LAUNCH_STATE/.watch-arm-terminal.backup.XXXXXX") || return 1
-        cp "$FM_AFK_LAUNCH_RECORD" "$backup" || { rm -f "$backup"; return 1; }
+        old_backend=$FM_AFK_REC_BACKEND
+        old_target=$FM_AFK_REC_TARGET
+        old_pid=$FM_WATCHER_BUSY_PID
+        old_beat=$(fm_path_mtime "$FM_AFK_LAUNCH_STATE/.last-watcher-beat" 2>/dev/null || echo 0)
+        main_record=$FM_AFK_LAUNCH_RECORD
+        next_record="$FM_AFK_LAUNCH_STATE/.watch-arm-terminal.next"
+        rm -f "$next_record" || return 1
+        FM_AFK_LAUNCH_RECORD=$next_record
         case "$captain_backend" in
           herdr) fm_afk_launch_create_herdr "$captain_target" "$captain_backend"; result=$? ;;
           tmux) fm_afk_launch_create_tmux "$captain_target" "$captain_backend"; result=$? ;;
           *) result=1 ;;
         esac
-        if [ "$result" -ne 0 ]; then
-          mv "$backup" "$FM_AFK_LAUNCH_RECORD" || return 1
-        else
-          rm -f "$backup" || return 1
+        if [ "$result" -eq 0 ]; then
+          wait_secs=$(fm_watcher_phase_timeout 10 "$grace")
+          deadline=$(( $(date +%s) + wait_secs ))
+          established=0
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            holder_pid=$(cat "$FM_AFK_LAUNCH_STATE/.watch.lock/pid" 2>/dev/null || true)
+            if [ "$holder_pid" != "$old_pid" ] \
+              && fm_watcher_healthy "$FM_AFK_LAUNCH_STATE" "$FM_ROOT/bin/fm-watch.sh" "$grace" "$FM_HOME"; then
+              established=1
+              break
+            fi
+            beat_now=$(fm_path_mtime "$FM_AFK_LAUNCH_STATE/.last-watcher-beat" 2>/dev/null || echo 0)
+            if ! fm_pid_alive "$old_pid" && [ "$beat_now" -gt "$old_beat" ]; then
+              established=1
+              break
+            fi
+            sleep 0.1
+          done
+          [ "$established" -eq 1 ] || result=1
         fi
+        if [ "$result" -eq 0 ]; then
+          fm_afk_launch_close_terminal "$old_backend" "$old_target" >/dev/null 2>&1 || true
+          fm_afk_launch_terminal_absent "$old_backend" "$old_target" || result=1
+        fi
+        if [ "$result" -eq 0 ]; then
+          if ! mv "$next_record" "$main_record"; then
+            result=1
+          fi
+        fi
+        if [ "$result" -ne 0 ]; then
+          if fm_afk_launch_record_read >/dev/null 2>&1; then
+            fm_afk_launch_close_recorded >/dev/null 2>&1 || true
+          fi
+          rm -f "$next_record" || true
+        fi
+        FM_AFK_LAUNCH_RECORD=$main_record
         return "$result"
       fi
-      return 0
+      fm_afk_launch_close_recorded || return 1
+    else
+      fm_afk_launch_close_recorded || return 1
     fi
-    fm_afk_launch_close_recorded || return 1
   elif [ "$read_result" -eq 2 ]; then
     return 1
   fi

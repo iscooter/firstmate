@@ -161,13 +161,16 @@ AUTOARM_LEDGER_GRACE=7200
 # Prints the reason on failure; silent and 0 once a watcher is verified.
 fm_guard_autoarm_accept_heal() {
   local gen=$1
-  fm_autoarm_write_owned "$STATE" "$gen" healthy >/dev/null 2>&1 || true
   if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
     rm -f "$FAILURE_ALARM" 2>/dev/null || true
     if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
       printf 'a spent supervision failure episode could not be cleared'
       return 1
     fi
+  fi
+  if ! fm_autoarm_write_owned "$STATE" "$gen" healthy >/dev/null 2>&1; then
+    printf 'the healthy supervision generation could not be published'
+    return 1
   fi
 }
 
