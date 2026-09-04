@@ -93,8 +93,10 @@ CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$ARM_CONFIRM_DEFAULT}
 # that turned a working 330s cycle into "auto-arm FAILED" on 2026-09-04. Wait for
 # such a holder rather than reporting or reaping it: WEDGE_BOUND
 # (fm_watcher_wedge_bound) is where waiting stops and a reclaim is justified.
-BUSY_HOLDER_WAIT=${FM_ARM_BUSY_HOLDER_WAIT:-$((GRACE / 2))}
-case "$BUSY_HOLDER_WAIT" in ''|*[!0-9]*) BUSY_HOLDER_WAIT=$((GRACE / 2)) ;; esac
+# Derived from the grace, not configurable: half a grace window is long enough
+# for a holder mid-phase to reach its next beat and short enough that two Stop
+# attempts still close inside one grace.
+BUSY_HOLDER_WAIT=$((GRACE / 2))
 WEDGE_BOUND=$(fm_watcher_wedge_bound "$GRACE")
 # Poll interval while attached to an existing healthy watcher.
 ATTACH_POLL=${FM_ARM_ATTACH_POLL:-0.5}
@@ -327,8 +329,15 @@ reclaim_wedged_holder() {  # <pid> <beacon-age>
     echo "watcher: FAILED - wedged holder pid=$pid (beacon ${age}s) did not stop" >&2
     return 1
   fi
-  fm_wake_append check watcher-wedge-reclaim \
-    "check: watcher-wedge-reclaimed pid=$pid beacon=${age}s" || true
+  # The wake IS the reclaim's durable record: it is the only way the operator
+  # learns a watcher was killed. A reclaim whose wake could not be published has
+  # therefore lost its evidence, so it is reported as a failure rather than as a
+  # success with a silently dropped notification.
+  if ! fm_wake_append check watcher-wedge-reclaim \
+    "check: watcher-wedge-reclaimed pid=$pid beacon=${age}s"; then
+    echo "watcher: FAILED - reclaimed wedged holder pid=$pid but could not publish its wake" >&2
+    return 1
+  fi
   echo "watcher: reclaimed wedged holder pid=$pid (beacon ${age}s)"
 }
 

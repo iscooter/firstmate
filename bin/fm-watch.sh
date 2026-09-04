@@ -209,13 +209,11 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
-PROCEVENT_RECONCILE_TIMEOUT=${FM_PROCEVENT_RECONCILE_TIMEOUT:-30}  # seconds allowed
-                                      # per process-event reconcile pass, so an
-                                      # unbounded source restart cannot sit
-                                      # between two liveness beats
-case "$PROCEVENT_RECONCILE_TIMEOUT" in
-  ''|*[!0-9]*|0) PROCEVENT_RECONCILE_TIMEOUT=30 ;;
-esac
+# Seconds allowed per process-event reconcile pass, so an unbounded source
+# restart cannot sit between two liveness beats. Fixed rather than configurable:
+# it exists to keep one phase inside the beat cadence, which is not a knob an
+# operator should be able to widen.
+PROCEVENT_RECONCILE_TIMEOUT=30
 # bin/fm-timeout-lib.sh is the single owner of bounded execution; load it
 # explicitly rather than relying on a transitive source, because the poll loop
 # bounds its own external calls above.
@@ -1654,12 +1652,8 @@ while :; do
 
   # Top of the iteration. Every phase below closes with its own beat (see beat),
   # so the beacon's age measures the CURRENT phase rather than the whole
-  # iteration. That is deliberately NOT an iteration boundary any more, so the
-  # boundary gets its own marker: nothing in the runtime reads it, and it exists
-  # so an observer can tell "the watcher is still moving" (the beacon) from "a
-  # whole poll has elapsed" (this).
+  # iteration, and it is deliberately no longer an iteration boundary.
   beat
-  touch "$STATE/.last-poll-cycle" 2>/dev/null || true
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached

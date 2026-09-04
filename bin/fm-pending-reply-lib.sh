@@ -97,6 +97,19 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
 
+# Seconds one remote busy observation may take inside a poll tick. Fixed rather
+# than configurable: it exists to keep a single phase inside the watcher's beat
+# cadence, which is not a knob an operator should be able to widen.
+FM_PENDING_REPLY_OBSERVE_TIMEOUT=20
+
+# bin/fm-timeout-lib.sh is the single owner of bounded execution. Load it only
+# for the remote path that needs it, and only once per process.
+_fm_pending_reply_require_timeout() {
+  command -v fm_run_timed >/dev/null 2>&1 && return 0
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-timeout-lib.sh"
+}
+
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
@@ -263,11 +276,7 @@ fm_pending_reply_set() {  # <record-path> <key> <value>
   [ -f "$rec" ] || return 1
   dir=$(dirname "$rec")
   base=$(basename "$rec")
-  # BASHPID, not $$: concurrent resolvers of one correlation run as subshells of
-  # the same shell, so a $$-named staging file is SHARED between them - one
-  # writer's rename then leaves the other renaming a path that is already gone,
-  # and that resolver reports a write failure for work that actually succeeded.
-  tmp="$dir/.${base}.tmp.${BASHPID:-$$}.$RANDOM"
+  tmp="$dir/.${base}.tmp.$$"
   : > "$tmp" || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -276,7 +285,23 @@ fm_pending_reply_set() {  # <record-path> <key> <value>
     printf '%s\n' "$line" >> "$tmp" || return 1
   done < "$rec"
   printf '%s=%s\n' "$key" "$value" >> "$tmp" || return 1
-  mv -f "$tmp" "$rec"
+  mv -f "$tmp" "$rec" || return 1
+  # Atomic publication, not check-then-act: the rename above CREATES the record
+  # if archival moved it out from under this write, resurrecting a settled record
+  # into the hot set the poll tick rescans. Not every mutator holds the
+  # correlation lock (fm_pending_reply_mark_delivered,
+  # fm_pending_reply_mark_delivery_unknown and fm_pending_reply_detect_wrong_home
+  # do not), so the race cannot be closed by locking this path without adding
+  # another wake-lib re-source. Instead the ARCHIVE is authoritative: a hot entry
+  # that duplicates an archived record can only be such a resurrection, because
+  # archival is itself a rename, and it is withdrawn here.
+  case "${dir##*/}" in
+    archive) return 0 ;;
+  esac
+  if [ -f "$dir/archive/$base" ] && [ ! -L "$dir/archive/$base" ]; then
+    rm -f -- "$rec" 2>/dev/null || true
+    return 1
+  fi
 }
 
 # Embed or replace a correlation token after the from-firstmate marker.
@@ -703,6 +728,10 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   # The record is resolved either way; a failed close stays retryable from the
   # watcher tick rather than turning a settled request back into a failure.
   _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
+  # Same hold: a record that settles here leaves the hot set NOW rather than
+  # waiting for a later tick to notice it, so the poll's working set is the OPEN
+  # records at all times instead of converging to them one poll behind.
+  _fm_pending_reply_archive_locked "$state" "$corr" || true
   return 0
 }
 
@@ -1613,11 +1642,16 @@ fm_pending_reply_tick() {  # <state-dir>
         done
         if [ "$found" = 0 ]; then
           if [ -n "$remote_host" ]; then
-            # A remote observation is a round trip bounded only by the SSH
-            # keepalive product, which is long enough to sit between two of the
-            # caller's liveness beats on its own.
+            # A remote observation is a round trip bounded only by SSH keepalive
+            # behavior, which can outlast the caller's whole liveness grace on its
+            # own - and beats around it do not help while the call itself is
+            # stalled, so the watcher could cross the wedge bound and be reclaimed
+            # while still inside this authorized phase. Bound it through the
+            # shared owner and read a timeout as no observation.
             _fm_pending_reply_tick_beat
-            observation=$("$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
+            _fm_pending_reply_require_timeout
+            observation=$(fm_run_timed "$FM_PENDING_REPLY_OBSERVE_TIMEOUT" \
+              "$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
               fm-remote-secondmate-control.sh observe "$task_id" < /dev/null 2>/dev/null || printf 'unknown')
             _fm_pending_reply_tick_beat
             case "$observation" in busy|idle|fallback-idle|unknown) ;; *) observation=unknown ;; esac

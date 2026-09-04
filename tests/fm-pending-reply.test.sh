@@ -431,7 +431,9 @@ test_legacy_escalation_closes_default_decision() {
     || fail "legacy escalation did not append one guarded default-key resolution"
   open=$(status_open_decisions "$state/hibit.status")
   [ -z "$open" ] || fail "resolved legacy escalation remained open: $open"
-  [ -n "$(fm_pending_reply_get "$rec" escalation_closed_epoch)" ] \
+  # The record archives out of the hot set as it resolves, so read it back
+  # through the correlation id rather than the path captured before the resolve.
+  [ -n "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$corr")" escalation_closed_epoch)" ] \
     || fail "legacy escalation closure was not recorded"
   pass "legacy escalation closes under the shared default key"
 }
@@ -486,6 +488,9 @@ test_foreign_blocker_is_not_selected_as_escalation() {
     "genuine keyed escalation remained open"
   assert_no_grep 'resolved [key=release]: pending-reply-resolved:' "$state/hibit.status" \
     "foreign release decision was selected as the pending-reply escalation"
+  # A settled record archives out of the hot set inside the resolve itself, so
+  # re-resolve it by correlation id rather than reading the pre-resolve path.
+  rec=$(fm_pending_reply_path "$state" "$corr")
   [ -n "$(fm_pending_reply_get "$rec" escalation_closed_epoch)" ] \
     || fail "genuine keyed escalation closure was not recorded"
   pass "foreign correlated blocker cannot impersonate a pending-reply escalation"
@@ -514,7 +519,7 @@ test_concurrent_resolution_closes_escalation_once() {
     || fail "concurrent resolvers left the expectation unresolved"
   [ "$(grep -Fc "pending-reply-resolved: task=hibit pending-reply-id=$corr" "$state/hibit.status")" -eq 1 ] \
     || fail "concurrent resolvers did not append exactly one decision close"
-  [ -n "$(fm_pending_reply_get "$rec" escalation_closed_epoch)" ] \
+  [ -n "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$corr")" escalation_closed_epoch)" ] \
     || fail "concurrent resolution did not record the closed escalation"
   pass "concurrent resolution closes one keyed escalation exactly once"
 }
@@ -541,6 +546,9 @@ test_concurrent_escalation_yields_to_late_reply() {
     || fail "concurrent escalation overwrote a resolved expectation"
   assert_no_grep "pending-reply-id=$corr" "$state/hibit.status" \
     "concurrent escalation published a false missed-reply blocker"
+  # A settled record archives out of the hot set inside the resolve itself, so
+  # re-resolve it by correlation id rather than reading the pre-resolve path.
+  rec=$(fm_pending_reply_path "$state" "$corr")
   [ -z "$(fm_pending_reply_get "$rec" escalated_epoch)" ] \
     || fail "concurrent escalation committed after the reply resolved"
   pass "concurrent escalation yields to a late correlated reply"
@@ -601,7 +609,7 @@ test_undelivered_records_are_scan_immutable() {
 test_delivery_confirmation_fallback_reconciles() {
   (
     local home state corr rec marker rc prepared_corr prepared_rec prepared_marker escalations
-    local reported_corr reported_rec reported_marker
+    local reported_corr reported_marker
     home=$(setup_parent delivery-confirmation)
     state="$home/state"
     # This fixture clock is intentionally scoped to the isolated subshell.
@@ -623,7 +631,7 @@ test_delivery_confirmation_fallback_reconciles() {
     . "$ROOT/bin/fm-pending-reply-lib.sh"
     fm_pending_reply_tick_one "$state" "$corr" unknown \
       || fail "watcher should reconcile the delivery marker"
-    [ "$(fm_pending_reply_get "$rec" delivered_epoch)" = 5750 ] \
+    [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$corr")" delivered_epoch)" = 5750 ] \
       || fail "watcher should restore the confirmed delivery epoch"
     [ ! -e "$marker" ] || fail "reconciled delivery marker should be removed"
     prepared_corr=$(fm_pending_reply_create "$home" "$state" hibit "prepared delivery")
@@ -662,7 +670,7 @@ test_delivery_confirmation_fallback_reconciles() {
     fm_pending_reply_tick "$state" || fail "watcher should accept a late delivery report"
     [ "$(phase_of "$state" "$prepared_corr")" = resolved ] \
       || fail "late report should resolve escalated delivery-unknown"
-    [ "$(fm_pending_reply_get "$prepared_rec" delivered_epoch)" = 5760 ] \
+    [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$prepared_corr")" delivered_epoch)" = 5760 ] \
       || fail "late report should provide delivery evidence"
     escalations=$(grep -Fc "blocked [key=pending-reply-$prepared_corr]:" "$state/hibit.status")
     [ "$escalations" = 1 ] || fail "late report must not re-escalate delivery-unknown"
@@ -671,7 +679,6 @@ test_delivery_confirmation_fallback_reconciles() {
       || fail "late report resolution should remain durable"
     export FM_PENDING_REPLY_NOW=5800
     reported_corr=$(fm_pending_reply_create "$home" "$state" hibit "reported delivery")
-    reported_rec=$(fm_pending_reply_path "$state" "$reported_corr")
     fm_pending_reply_prepare_delivery "$state" "$reported_corr" \
       || fail "reported delivery attempt should persist"
     reported_marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$reported_corr")
@@ -680,7 +687,7 @@ test_delivery_confirmation_fallback_reconciles() {
       || fail "attempted delivery with a report should resolve directly"
     [ "$(phase_of "$state" "$reported_corr")" = resolved ] \
       || fail "correlated report should resolve attempted delivery"
-    [ "$(fm_pending_reply_get "$reported_rec" delivered_epoch)" = 5800 ] \
+    [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$reported_corr")" delivered_epoch)" = 5800 ] \
       || fail "correlated report should provide delivery evidence"
     [ ! -e "$reported_marker" ] || fail "resolved delivery marker should be removed"
     fm_pending_reply_tick_one "$state" "$reported_corr" unknown \
@@ -736,7 +743,7 @@ test_delivery_confirmation_serializes_with_reconciliation() {
     count=$(wc -l < "$calls" | tr -d ' ')
     [ "$count" = 1 ] \
       || fail "confirmation and reconciliation raced through $count delivery commits"
-    [ "$(fm_pending_reply_get "$rec" delivered_epoch)" = 5900 ] \
+    [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$corr")" delivered_epoch)" = 5900 ] \
       || fail "serialized confirmation should retain delivered_epoch"
     [ "$(phase_of "$state" "$corr")" = awaiting_report ] \
       || fail "serialized confirmation should retain awaiting_report phase"
@@ -1106,7 +1113,10 @@ test_settled_records_leave_the_hot_set_and_stay_addressable() {
 
   hot=$(fm_pending_reply_dir "$state")
   archive=$(fm_pending_reply_archive_dir "$state")
-  [ -f "$hot/$settled" ] || fail "the settled record should start in the hot set"
+  # Archival happens inside the resolve's own lock hold, so the record is gone
+  # from the hot set the moment it settles - not one tick later.
+  [ ! -e "$hot/$settled" ] \
+    || fail "resolving left the settled record in the hot set the tick rescans"
 
   fm_pending_reply_tick "$state" || fail "tick failed"
 
@@ -1125,45 +1135,44 @@ test_settled_records_leave_the_hot_set_and_stay_addressable() {
   pass "a settled pending-reply record leaves the hot set and stays addressable by correlation id"
 }
 
-# The exception that must NOT be archived early: a resolved record whose
-# escalation is still open. The tick's convergence retry for that close is the
-# one reason a resolved record stays hot.
-test_a_resolved_record_with_an_open_escalation_stays_hot_until_closed() {
-  local home state corr hot archive rec
-  home=$(setup_parent retention-open-escalation)
+# The migration case, and the one production actually starts from: records that
+# settled BEFORE this retention existed are already sitting in the hot set - 1,883
+# of them on 2026-09-04, all resolved, costing about 103s of every poll. The tick
+# must move those out, and a record whose escalation is still open must not be
+# moved while its close has yet to converge.
+test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
+  local home state settled open_escalation hot archive
+  home=$(setup_parent retention-legacy-migration)
   state="$home/state"
-  export FM_PENDING_REPLY_NOW=21000
-  # Invoked indirectly through FM_PENDING_REPLY_SEND_HOOK.
-  # shellcheck disable=SC2329
-  retention_recovery_hook() { return 0; }
-  export -f retention_recovery_hook
   # shellcheck disable=SC2031
-  export FM_PENDING_REPLY_SEND_HOOK=retention_recovery_hook
-  corr=$(fm_pending_reply_create "$home" "$state" hibit "escalated then answered")
-  fm_pending_reply_mark_delivered "$state" "$corr"
-  fm_pending_reply_mark_turn_completed "$state" "$corr" request
-  fm_pending_reply_send_recovery "$state" "$corr" || fail "fixture recovery send failed"
-  fm_pending_reply_mark_turn_completed "$state" "$corr" recovery
-  fm_pending_reply_maybe_escalate "$state" "$corr" || fail "fixture should escalate"
-  unset FM_PENDING_REPLY_SEND_HOOK
-  printf 'done [corr=%s]: answered at last\n' "$corr" >> "$state/hibit.status"
-  fm_pending_reply_try_resolve "$state" "$corr" || fail "fixture should resolve"
-  rec=$(fm_pending_reply_path "$state" "$corr")
-  fm_pending_reply_set "$rec" escalation_closed_epoch "" || fail "could not reopen the escalation"
-
+  export FM_PENDING_REPLY_NOW=21000
   hot=$(fm_pending_reply_dir "$state")
   archive=$(fm_pending_reply_archive_dir "$state")
-  # The record is NOT settled while its escalation is open, so the tick must take
-  # the full close path for it rather than the settled fast path.
-  _fm_pending_reply_settled "$hot/$corr" \
-    && fail "a resolved record with an open escalation was treated as settled"
+
+  # A settled record placed directly in the hot set, exactly as a home upgraded
+  # into this retention finds it.
+  settled=$(fm_pending_reply_create "$home" "$state" hibit "legacy settled request")
+  fm_pending_reply_mark_delivered "$state" "$settled"
+  fm_pending_reply_set "$hot/$settled" phase resolved || fail "legacy fixture should settle"
+  [ -f "$hot/$settled" ] || fail "legacy fixture should start hot"
+
+  # A resolved record whose escalation is still open is NOT settled, so the tick
+  # must converge its close instead of archiving it away unclosed.
+  open_escalation=$(fm_pending_reply_create "$home" "$state" hibit "legacy open escalation")
+  fm_pending_reply_mark_delivered "$state" "$open_escalation"
+  fm_pending_reply_set "$hot/$open_escalation" phase resolved || fail "fixture should resolve"
+  fm_pending_reply_set "$hot/$open_escalation" escalated_epoch 20900 \
+    || fail "fixture should record an escalation"
+  _fm_pending_reply_settled "$hot/$open_escalation" \
+    && fail "a resolved record with an open escalation must not read as settled"
+
   fm_pending_reply_tick "$state" || fail "tick failed"
-  [ ! -f "$hot/$corr" ] \
-    || fail "the record stayed in the hot set after its close landed"
-  [ -f "$archive/$corr" ] || fail "the closed record was not archived"
-  [ -n "$(fm_pending_reply_get "$archive/$corr" escalation_closed_epoch)" ] \
-    || fail "the tick archived the record without converging the escalation close"
-  pass "a resolved record with an open escalation converges its close and leaves the hot set in one tick"
+
+  [ ! -e "$hot/$settled" ] || fail "the legacy settled record was left in the hot set"
+  [ -f "$archive/$settled" ] || fail "the legacy settled record was not archived"
+  [ -n "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$open_escalation")" escalation_closed_epoch)" ] \
+    || fail "the tick did not converge the open escalation's close"
+  pass "legacy settled records are migrated out of the hot set while an open escalation converges first"
 }
 
 # An operator may already have moved records out of the hot path by hand into
@@ -1400,6 +1409,9 @@ test_same_basename_self_home_corr_resolves_on_tick() {
   fm_pending_reply_tick_one "$state" "$corr" idle "$sm_home"
   [ "$(phase_of "$state" "$corr")" = resolved ] \
     || fail "same-basename self-home corr must resolve, got $(phase_of "$state" "$corr")"
+  # A settled record archives out of the hot set inside the resolve itself, so
+  # re-resolve it by correlation id rather than reading the pre-resolve path.
+  rec=$(fm_pending_reply_path "$state" "$corr")
   [ -n "$(fm_pending_reply_get "$rec" resolved_epoch)" ] \
     || fail "resolved_epoch must be set after the restatement copy"
   grep -Fq "corr=$corr" "$parent_status" \
@@ -1644,7 +1656,7 @@ test_kimi_capture_fallback_uses_recorded_harness
 test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_settled_records_leave_the_hot_set_and_stay_addressable
-test_a_resolved_record_with_an_open_escalation_stays_hot_until_closed
+test_legacy_settled_records_are_migrated_out_of_the_hot_set
 test_a_preexisting_archive_is_adopted
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation

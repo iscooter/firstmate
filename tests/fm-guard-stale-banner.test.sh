@@ -409,14 +409,40 @@ test_autoarm_stale_ledger_self_heals_silently() {
   pass "fm-guard: a stale auto-arm ledger is self-healed silently while work is in flight"
 }
 
+# The case the self-heal exists for, and the one a seeded-watcher fixture cannot
+# reach: a WATCHER-LESS home with a stale ledger. The guard must actually
+# establish a watcher and stay silent, rather than reporting that it could not
+# re-arm - and the watcher it started must still be running when the guard
+# returns, since a self-heal that kills its own successor leaves supervision off.
+test_autoarm_stale_ledger_rearms_from_a_watcherless_home() {
+  local dir home out watcher_pid
+  dir=$(make_guard_case autoarm-rearm-watcherless)
+  home=$(case_home "$dir")
+  # No watcher, no lock, no beacon, no ledger: supervision is genuinely absent.
+  [ ! -e "$home/state/.watch.lock" ] || fail "fixture started with a watcher lock"
+  out=$(run_guard_case_autoarm "$dir")
+  watcher_pid=$(cat "$home/state/.watch.lock/pid" 2>/dev/null || true)
+  if [ -n "$watcher_pid" ]; then
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+  fi
+  [ -n "$watcher_pid" ] \
+    || fail "the self-heal did not establish a watcher from a watcher-less home: $out"
+  [ -z "$out" ] \
+    || fail "a successful re-arm from a watcher-less home was not silent: $out"
+  pass "fm-guard: a stale ledger with no watcher at all is re-armed, silently"
+}
+
 # Only a self-heal that cannot take is surfaced, once per episode.
 test_autoarm_self_heal_failure_surfaces_once() {
   local dir home out1 out2 marker
   dir=$(make_guard_case autoarm-self-heal-failure)
   home=$(case_home "$dir")
-  marker="$home/state/.claude-autoarm-failure-notified"
-  # A dangling symlink into a missing directory: rm removes the link itself, so
-  # make the marker a path the guard cannot clear - a non-empty directory.
+  # The attended-alarm marker is the obstruction the self-heal must clear BEFORE
+  # it can arm, because it suppresses the next Stop-owned continuation. Make it a
+  # path the guard cannot remove - a non-empty directory - so the repair provably
+  # cannot take.
+  marker="$home/state/.claude-autoarm-failure-alarmed"
   mkdir -p "$marker/unremovable"
   out1=$(run_guard_case_autoarm "$dir")
   out2=$(run_guard_case_autoarm "$dir")
@@ -793,6 +819,7 @@ test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_prints_no_passive_banner
 test_autoarm_stale_ledger_self_heals_silently
+test_autoarm_stale_ledger_rearms_from_a_watcherless_home
 test_autoarm_self_heal_failure_surfaces_once
 test_autoarm_quiet_but_working_fleet_stays_silent
 test_persistent_no_watcher_banner_names_missing_process

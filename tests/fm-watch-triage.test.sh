@@ -69,17 +69,18 @@ wait_live() {
 # machine a short fixed budget can reap a round before the cycle it asserts on
 # ever ran - and then every "no wake, no marker" assertion passes vacuously
 # while every "marker written" assertion fails spuriously.
-# state/.last-poll-cycle is touched at the TOP of every poll and nowhere else, so
-# this drops any marker left by an earlier round, waits for THIS watcher to write
-# a fresh one (some poll's top), then waits for that one to advance (the next
-# poll's top) - and the whole cycle in between is what the caller's assertions
-# describe. It must NOT read the liveness beacon: since the 2026-09-04
-# stale-beacon hardening the watcher beats at every phase boundary, so an
-# advancing beacon proves the watcher is moving, not that a poll has elapsed.
+# Since the 2026-09-04 stale-beacon hardening the watcher beats at EVERY phase
+# boundary, so a single beacon advance proves the watcher is moving, not that a
+# poll has elapsed - and the watcher deliberately publishes no separate
+# per-iteration marker. So this waits for TWO advances rather than one: every
+# iteration ends in a bounded wait of at least FM_POLL before the next iteration
+# beats again, so two distinct beacon seconds cannot both fall inside one
+# sub-second fixture iteration, and a completed cycle is what the caller's
+# assertions describe.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
-  local state=$1 pid=$2 limit=${3:-300} beat first now i=0
-  beat="$state/.last-poll-cycle"
+  local state=$1 pid=$2 limit=${3:-300} beat first now advances=0 i=0
+  beat="$state/.last-watcher-beat"
   rm -f "$beat"
   first=""
   while [ "$i" -lt "$limit" ]; do
@@ -93,7 +94,9 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
     kill -0 "$pid" 2>/dev/null || return 1
     now=$(file_mtime "$beat")
     if [ -n "$now" ] && [ "$now" != "$first" ]; then
-      return 0
+      advances=$((advances + 1))
+      [ "$advances" -ge 2 ] && return 0
+      first=$now
     fi
     sleep 0.1
     i=$((i + 1))

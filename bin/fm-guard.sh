@@ -153,19 +153,35 @@ fm_guard_clear_stale_banner() {
 # while supervision is needed, so its age - not the beacon's - is the evidence
 # that the Stop hook has stopped arming. The bound is deliberately generous: a
 # single long working turn advances nothing, and that must stay silent.
-AUTOARM_LEDGER_GRACE=${FM_GUARD_AUTOARM_LEDGER_GRACE:-7200}
-case "$AUTOARM_LEDGER_GRACE" in ''|*[!0-9]*|0) AUTOARM_LEDGER_GRACE=7200 ;; esac
+# Fixed, not configurable: this bound exists to stay far clear of any single
+# working turn, which is a property of the model rather than a local preference.
+AUTOARM_LEDGER_GRACE=7200
 
-# Repair the two states that stop the Stop-owned owner path from arming at the
-# next turn end, and that this guard can safely clear mid-turn:
-#   - a generation claim whose owner is gone, which every later firing defers to;
-#   - a spent failure episode whose markers suppress the next continuation.
-# Both are bounded, home-scoped writes; the guard never starts a watcher itself,
-# because backgrounding an arm is exactly the mistake that silently takes
-# supervision down (bin/fm-watch-arm.sh header, bin/fm-arm-command-policy.mjs).
-# Prints the reason on failure; silent and 0 when the mechanism is unobstructed.
+# How long the self-heal waits for its successor's FIRST BEAT before reporting
+# failure. This bounds only the WAIT - never the arm process itself.
+AUTOARM_REARM_CONFIRM=10
+
+# Re-arm supervision through the home-scoped owner path, then verify it.
+#
+# Two constraints shape this, and missing either one is what makes a self-heal
+# worse than the banner it replaces:
+#   - The arm must OUTLIVE this guard. bin/fm-watch-arm.sh stays alive for its
+#     watcher's whole life, so a foreground call would hold every guarded command
+#     open for a full cycle, and bounding the call with fm_run_timed would kill
+#     the process GROUP - taking the newly started watcher with it and then
+#     reporting the re-arm as failed. So the arm is started detached, exactly as
+#     bin/fm-startup-network.sh starts its own bounded worker, and is left
+#     running when this function returns.
+#   - Detaching must not become fire-and-forget. bin/fm-watch-arm.sh's header
+#     bans an unverified `&` because a dying child leaves NO watcher behind a
+#     false "already running". So this waits, bounded, for the successor's own
+#     first beat and reports success only on that proof.
+# The obstruction repair below stays first: a stalled claim or a spent failure
+# episode would make the fresh arm stand down again immediately.
+#
+# Prints the reason on failure; silent and 0 once a watcher is verified.
 fm_guard_autoarm_self_heal() {
-  local marker
+  local deadline
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     # A live, healthy claim IS the mechanism working; nothing to repair.
     return 0
@@ -176,15 +192,34 @@ fm_guard_autoarm_self_heal() {
       return 1
     }
   fi
-  for marker in "$FAILURE_NOTICE" "$FAILURE_ALARM"; do
-    [ -e "$marker" ] || [ -L "$marker" ] || continue
-    rm -f "$marker" 2>/dev/null || true
-    if [ -e "$marker" ] || [ -L "$marker" ]; then
+  # A spent failure episode suppresses the next Stop-owned continuation, so it
+  # has to go for the arm below to stick. The once-per-episode notice has already
+  # been delivered by the time its marker is spent, so clearing it here reopens
+  # the next genuine episode rather than swallowing one.
+  if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
+    rm -f "$FAILURE_ALARM" 2>/dev/null || true
+    if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
       printf 'a spent supervision failure episode could not be cleared'
       return 1
     fi
+  fi
+  if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+    return 0
+  fi
+  nohup "$SCRIPT_DIR/fm-watch-arm.sh" >/dev/null 2>&1 </dev/null &
+  deadline=$(( $(date +%s) + AUTOARM_REARM_CONFIRM + 1 ))
+  while :; do
+    if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+      # The successor beat: it owns the singleton from here, and the failure
+      # notice marker is retired only now, on proof rather than on hope.
+      rm -f "$FAILURE_NOTICE" 2>/dev/null || true
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 0.5
   done
-  return 0
+  printf 'the re-armed watcher did not report in within %ss' "$AUTOARM_REARM_CONFIRM"
+  return 1
 }
 
 # Worktree-tangle alarm, checked FIRST and independent of in-flight tasks: the
@@ -246,7 +281,10 @@ if [ "$watcher_healthy" = false ] && [ "$supervision_model" = autoarm ]; then
   # guard says nothing at all. Only a ledger that has gone quiet past its
   # generous bound, with supervision still needed, is evidence the mechanism has
   # stopped - and even then the guard repairs first and speaks only if it cannot.
-  if [ "$READ_ONLY" -ne 1 ] \
+  # in_flight, not the broader supervision need: a process-event source or an
+  # X-mode relay poll with no task in flight must not let a stale ledger mutate
+  # auto-arm state or surface a failure outside the authorized gate.
+  if [ "$READ_ONLY" -ne 1 ] && [ "$in_flight" -gt 0 ] \
     && [ "$(fm_path_age "$STATE/.claude-autoarm-epoch")" -ge "$AUTOARM_LEDGER_GRACE" ]; then
     self_heal_rc=0
     self_heal_reason=$(fm_guard_autoarm_self_heal) || self_heal_rc=$?

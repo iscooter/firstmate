@@ -159,12 +159,19 @@ FM_WATCH_BUSY_HOLDER_EXIT=3
 # whole liveness grace is stuck inside one phase, not merely running a long one.
 # Single owner, shared by the watcher's typed refusal, the arm's reclaim, and the
 # Stop auto-arm's wait-versus-report split, so all three agree on where slow ends
-# and wedged begins. FM_WATCHER_WEDGE_GRACE overrides it.
+# and wedged begins.
+# FM_WATCHER_WEDGE_GRACE may only LENGTHEN the proof: it is floored at twice the
+# grace, because reclaiming a live holder is a kill, and the approved evidence
+# for that kill is a beacon that has been silent for two whole grace windows.
+# A smaller override would let a reclaim fire the moment a beacon first goes
+# stale - exactly the false wedge this work exists to remove.
 fm_watcher_wedge_bound() {  # [grace]
-  local grace=${1:-${FM_GUARD_GRACE:-300}} bound
+  local grace=${1:-${FM_GUARD_GRACE:-300}} floor bound
   case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
-  bound=${FM_WATCHER_WEDGE_GRACE:-$((grace * 2))}
-  case "$bound" in ''|*[!0-9]*|0) bound=$((grace * 2)) ;; esac
+  floor=$((grace * 2))
+  bound=${FM_WATCHER_WEDGE_GRACE:-$floor}
+  case "$bound" in ''|*[!0-9]*) bound=$floor ;; esac
+  [ "$bound" -ge "$floor" ] || bound=$floor
   printf '%s\n' "$bound"
 }
 

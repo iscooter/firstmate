@@ -86,10 +86,10 @@ case "$AUTOARM_ATTEMPTS" in
   *) AUTOARM_ATTEMPTS=2 ;;
 esac
 # How long one attempt waits for a live holder to prove itself before the next
-# attempt. Half the liveness grace, so two attempts still close well inside one
-# grace window while never re-running the same predicate a second later.
-AUTOARM_BUSY_WAIT=${FM_CLAUDE_AUTOARM_BUSY_WAIT:-$((GRACE / 2))}
-case "$AUTOARM_BUSY_WAIT" in ''|*[!0-9]*) AUTOARM_BUSY_WAIT=$((GRACE / 2)) ;; esac
+# attempt. Derived from the grace, not configurable: half a grace window keeps
+# two attempts well inside one grace while never re-running the same predicate a
+# second later.
+AUTOARM_BUSY_WAIT=$((GRACE / 2))
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
