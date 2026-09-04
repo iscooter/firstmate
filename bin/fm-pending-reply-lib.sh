@@ -866,7 +866,7 @@ fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] 
         | fm_busy_lines_match "$harness"; then
         result=busy
       else
-        result=fallback-idle
+        result='fallback-idle'
       fi
       ;;
   esac

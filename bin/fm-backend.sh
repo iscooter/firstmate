@@ -51,6 +51,7 @@ FM_BACKEND_LIB_DIR="$(cd "$(dirname "$FM_BACKEND_SCRIPT")" && pwd)"
 
 _fm_backend_require_timeout() {
   command -v fm_run_timed >/dev/null 2>&1 && return 0
+  # shellcheck source=bin/fm-timeout-lib.sh
   . "$FM_BACKEND_LIB_DIR/fm-timeout-lib.sh"
 }
 
@@ -759,6 +760,8 @@ _fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
 }
 
 fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
+  # The positional parameters in the literal script expand in the child shell.
+  # shellcheck disable=SC2016
   fm_backend_run_read_timed env \
     FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
     FM_CONFIG_OVERRIDE="$FM_BACKEND_CONFIG_DIR" \
@@ -858,6 +861,8 @@ _fm_backend_busy_state() {  # <backend> <target>
 
 fm_backend_busy_state() {  # <backend> <target>
   local result
+  # The positional parameters in the literal script expand in the child shell.
+  # shellcheck disable=SC2016
   result=$(fm_backend_run_read_timed env \
     FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
     FM_CONFIG_OVERRIDE="$FM_BACKEND_CONFIG_DIR" \

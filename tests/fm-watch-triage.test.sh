@@ -670,9 +670,14 @@ sleep "${FM_FAKE_CREW_DELAY:-0}"
 printf 'state: working · source: pane · busy\n'
 SH
   chmod +x "$fakebin/slow-crew-state"
-  FM_CREW_STATE_BIN="$fakebin/slow-crew-state"
-  FM_WATCHER_STALE_GRACE=2
+  # These child-facing overrides are intentionally scoped to this subshell.
+  # shellcheck disable=SC2030,SC2031
+  export FM_CREW_STATE_BIN="$fakebin/slow-crew-state"
+  export FM_WATCHER_STALE_GRACE=2
   beat() { beats=$((beats + 1)); }
+  beat
+  [ "$beats" -eq 1 ] || fail "beat counter fixture did not run"
+  beats=0
   export FM_FAKE_CREW_DELAY=0.6
   signal_crew_provably_working "$state/a.status" "$state/b.status" \
     || fail "two bounded working task observations were not absorbable"
@@ -690,6 +695,8 @@ SH
 test_secondmate_status_signal_never_absorbed_classifier() {
   local dir fakebin state
   dir=$(make_case secondmate-signal-classify); fakebin="$dir/fakebin"; state="$dir/state"
+  # Reset the fixture path after the isolated deadline test above.
+  # shellcheck disable=SC2031
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
   # Even PROVABLY working, a secondmate's .status signal is its routed-reply
   # channel and must surface; its bare turn-ended keeps the ordinary absorb.

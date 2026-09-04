@@ -195,9 +195,8 @@ fm_guard_autoarm_self_heal() {
   gen=$FM_AUTOARM_MY_GEN
   beacon_before=$(fm_path_mtime "$STATE/.last-watcher-beat" 2>/dev/null || true)
   delivery_before=$(tail -n 1 "$STATE/.watch-deliveries.log" 2>/dev/null || true)
-  launch_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-afk-launch.sh" start-watcher 2>&1)
-  if [ "$?" -ne 0 ]; then
+  if ! launch_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-afk-launch.sh" start-watcher 2>&1); then
     fm_autoarm_write_owned "$STATE" "$gen" failed >/dev/null 2>&1 || true
     launch_out=$(printf '%s\n' "$launch_out" | tail -n 1)
     printf '%s' "${launch_out:-the tracked watcher owner could not launch}"

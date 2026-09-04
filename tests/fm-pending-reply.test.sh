@@ -613,7 +613,10 @@ test_undelivered_records_are_scan_immutable() {
       || fail "undelivered wrong-home check should be inert"
     fm_pending_reply_tick_one "$state" "$corr" busy "$sm_home" \
       || fail "undelivered direct tick should be inert"
+    # These override library functions that the tick must not invoke.
+    # shellcheck disable=SC2329
     fm_backend_busy_state() { fail "undelivered watcher tick must not probe the backend"; }
+    # shellcheck disable=SC2329
     fm_backend_capture() { fail "undelivered watcher tick must not capture the backend"; }
     fm_pending_reply_tick "$state" || fail "undelivered watcher tick should succeed"
     after=$(cat "$rec")
@@ -636,6 +639,8 @@ test_pending_reply_tick_beats_each_record_below_the_old_batch_size() {
   local home state beats=0 i
   home=$(setup_parent beat-each-record)
   state="$home/state"
+  # Reset the fixture clock after an earlier isolated subshell changed it.
+  # shellcheck disable=SC2031
   export FM_PENDING_REPLY_NOW=5550
   for ((i = 1; i <= 21; i++)); do
     fm_pending_reply_create "$home" "$state" "task-$i" "pending request $i" >/dev/null \
@@ -660,12 +665,18 @@ test_pending_reply_observation_beats_stay_in_tick_process() {
     state="$home/state"
     beat_log="$home/beats"
     owner_pid=${BASHPID:-$$}
+    # This fixture clock is intentionally scoped to the isolated subshell.
+    # shellcheck disable=SC2030,SC2031
     export FM_PENDING_REPLY_NOW=5575
     corr=$(fm_pending_reply_create "$home" "$state" hibit "observe owner")
     fm_pending_reply_mark_delivered "$state" "$corr" \
       || fail "could not mark observation fixture delivered"
     fm_write_secondmate_meta "$state/hibit.meta" "$home/sm" "sess:fm-hibit"
+    # Overrides the library function invoked indirectly by the tick.
+    # shellcheck disable=SC2329
     fm_backend_busy_state() { printf 'busy'; }
+    # Invoked indirectly through FM_PENDING_REPLY_TICK_BEAT.
+    # shellcheck disable=SC2329
     pending_reply_owner_beat() { printf '%s\n' "${BASHPID:-$$}" >> "$beat_log"; }
     FM_PENDING_REPLY_TICK_BEAT=pending_reply_owner_beat fm_pending_reply_tick "$state" \
       || fail "pending-reply observation tick failed"
@@ -685,11 +696,10 @@ test_external_phase_deadlines_precede_the_wedge_bound() {
     local home state pending_timeout wedge backend_timeout classify_timeout skipped rc
     home=$(setup_parent phase-deadline)
     state="$home/state"
-    FM_HOME="$home"
-    FM_ROOT_OVERRIDE="$home"
-    FM_STATE_OVERRIDE="$state"
-    FM_WATCHER_STALE_GRACE=3
-    export FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_WATCHER_STALE_GRACE
+    # These child-facing overrides are intentionally scoped to this subshell.
+    # shellcheck disable=SC2030,SC2031
+    export FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_STATE_OVERRIDE="$state" \
+      FM_WATCHER_STALE_GRACE=3
     # shellcheck source=bin/fm-watch.sh
     . "$ROOT/bin/fm-watch.sh"
     wedge=$(fm_watcher_wedge_bound "$FM_WATCHER_STALE_GRACE")
@@ -709,6 +719,8 @@ test_external_phase_deadlines_precede_the_wedge_bound() {
       || fail "one-second grace forced an observation into the 2s wedge window"
     skipped="$home/unsafe-observation-ran"
     rc=0
+    # The positional parameter expands in the child shell.
+    # shellcheck disable=SC2016
     fm_backend_run_read_timed bash -c 'touch "$1"' _ "$skipped" || rc=$?
     [ "$rc" -eq 124 ] || fail "unsafe minimum-grace observation returned $rc"
     [ ! -e "$skipped" ] || fail "minimum-grace observation ran without a safe timeout"
@@ -1271,6 +1283,8 @@ test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
   [ -f "$hot/$settled" ] || fail "legacy fixture should start hot"
 
   (
+    # Overrides the library function invoked indirectly by the tick.
+    # shellcheck disable=SC2329
     fm_pending_reply_close_escalation() {
       fail "proven-settled migration entered the escalation lock path"
     }
