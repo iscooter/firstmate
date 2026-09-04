@@ -902,13 +902,13 @@ EOF
   status=$?
   expect_code 0 "$status" "a needs-decision signal trigger must stay on main: $out"
   [ -z "$out" ] || fail "Pi needs-decision test printed output: $out"
-  pass "a needs-decision signal trigger reaches main, never the supervision branch, without vetoing an unrelated eligible row"
+  pass "a needs-decision signal trigger reaches main even with an unrelated eligible row"
 }
 
 # A routine row can remain unread when the same status file raises a decision.
-# The routine row still reaches the branch, then main is woken to drain the
-# decision row left behind.
-test_pi_same_key_mixed_signal_splits_branch_and_main_delivery() {
+# The complete triggering batch goes directly to main without waiting for a
+# supervision turn.
+test_pi_same_key_mixed_signal_routes_whole_batch_to_main() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-mixed-signal-root"
   home="$TMP_ROOT/pi-mixed-signal-home"
@@ -981,23 +981,20 @@ for (let i = 0; i < 250 && offers.length === 0; i += 1) {
 for (let i = 0; i < 250 && !prompt; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-if (offers.length !== 1 || offers[0].eligible !== true) {
-  throw new Error(`a needs-decision file vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
-}
-if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
-  throw new Error(`the routine signal lost its project scope: ${JSON.stringify(offers)}`);
+if (offers.length !== 1 || offers[0].eligible !== false) {
+  throw new Error(`a mixed needs-decision batch was offered to the branch: ${JSON.stringify(offers)}`);
 }
 if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
-  throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompt}`);
+  throw new Error(`the mixed needs-decision batch did not wake main: ${prompt}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
   )
   status=$?
-  expect_code 0 "$status" "a mixed signal batch must split routine and decision delivery: $out"
+  expect_code 0 "$status" "a mixed needs-decision batch must route wholly to main: $out"
   [ -z "$out" ] || fail "Pi mixed-signal test printed output: $out"
-  pass "a mixed signal sends routine work to branch and decision work to main"
+  pass "a mixed needs-decision batch routes wholly to main"
 }
 
 test_pi_heartbeat_restoration_failure_stays_on_main() {
@@ -3803,7 +3800,7 @@ test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
 test_pi_needs_decision_signal_stays_on_main
-test_pi_same_key_mixed_signal_splits_branch_and_main_delivery
+test_pi_same_key_mixed_signal_routes_whole_batch_to_main
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch
 test_pi_handling_delivery_failure_is_typed_once
