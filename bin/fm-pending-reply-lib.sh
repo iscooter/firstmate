@@ -737,7 +737,7 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   # Same hold: a record that settles here leaves the hot set NOW rather than
   # waiting for a later tick to notice it, so the poll's working set is the OPEN
   # records at all times instead of converging to them one poll behind.
-  _fm_pending_reply_archive_locked "$state" "$corr" || true
+  _fm_pending_reply_archive_settled "$state" "$corr" || true
   return 0
 }
 
@@ -1181,7 +1181,7 @@ fm_pending_reply_close_escalation() {  # <state-dir> <corr_id>
   _fm_pending_reply_close_escalation_locked "$@" || rc=$?
   # Same hold: a record whose close has landed leaves the hot set here, so the
   # poll tick's working set converges to the OPEN records.
-  [ "$rc" -ne 0 ] || _fm_pending_reply_archive_locked "$state" "$corr" || true
+  [ "$rc" -ne 0 ] || _fm_pending_reply_archive_settled "$state" "$corr" || true
   fm_lock_release "$lock"
   return "$rc"
 }
@@ -1504,17 +1504,11 @@ _fm_pending_reply_settled() {  # <record-path>
   [ -z "$escalated" ] || [ -n "$closed" ]
 }
 
-# Move a fully settled record out of the hot set into the archive. Called only
-# with the record's own per-correlation lock already held (see
-# fm_pending_reply_close_escalation), so a concurrent resolve cannot recreate the
-# record at the hot path after the move. Idempotent and best-effort: a record
-# that cannot be archived stays hot and is retried on the next tick.
-# It deliberately has no lock wrapper of its own. Every such wrapper re-sources
-# fm-wake-lib.sh inside a function body, which makes ShellCheck's extended
-# analysis re-inline that whole library at one more point; adding a seventh copy
-# took bin/fm-teardown.sh and bin/fm-watch.sh from about two minutes of lint to
-# an out-of-memory kill.
-_fm_pending_reply_archive_locked() {  # <state-dir> <corr_id>
+# Move a fully settled record out of the hot set into the archive. Idempotent
+# and best-effort: a record that cannot be archived stays hot and is retried on
+# the next tick. Concurrent unlocked mutators cannot resurrect it because
+# fm_pending_reply_set withdraws a hot duplicate whenever the archive exists.
+_fm_pending_reply_archive_settled() {  # <state-dir> <corr_id>
   local state=$1 corr=$2 dir archive live
   dir=$(fm_pending_reply_dir "$state")
   archive=$(fm_pending_reply_archive_dir "$state")
@@ -1556,7 +1550,7 @@ fm_pending_reply_tick() {  # <state-dir>
     if _fm_pending_reply_settled "$rec"; then
       corr=$(fm_pending_reply_get "$rec" corr_id)
       [ -n "$corr" ] || corr=$base
-      fm_pending_reply_close_escalation "$state" "$corr" || true
+      _fm_pending_reply_archive_settled "$state" "$corr" || true
       continue
     fi
     corr=$(fm_pending_reply_get "$rec" corr_id)

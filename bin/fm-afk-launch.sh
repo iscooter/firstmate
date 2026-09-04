@@ -527,6 +527,38 @@ fm_afk_launch_start() {
   return "$result"
 }
 
+fm_afk_launch_start_watcher() {
+  local captain_target captain_backend read_result result
+  FM_AFK_LAUNCH_RECORD="$FM_AFK_LAUNCH_STATE/.watch-arm-terminal"
+  FM_AFK_LAUNCH_WS_LABEL="firstmate-watch-arm"
+  FM_AFK_LAUNCH_ENTRY="$FM_ROOT/bin/fm-watch-arm.sh"
+  captain_target=$(discover_supervisor_target) || {
+    fm_afk_launch_log "could not resolve the captain supervisor pane (set FM_SUPERVISOR_TARGET)"
+    return 1
+  }
+  captain_backend=$(discover_supervisor_backend) || {
+    fm_afk_launch_log "could not resolve the captain supervisor backend (set FM_SUPERVISOR_BACKEND)"
+    return 1
+  }
+  mkdir -p "$FM_AFK_LAUNCH_STATE" || return 1
+  fm_afk_launch_record_read
+  read_result=$?
+  if [ "$read_result" -eq 0 ]; then
+    fm_afk_launch_close_recorded || return 1
+  elif [ "$read_result" -eq 2 ]; then
+    return 1
+  fi
+  case "$captain_backend" in
+    herdr) fm_afk_launch_create_herdr "$captain_target" "$captain_backend"; result=$? ;;
+    tmux) fm_afk_launch_create_tmux "$captain_target" "$captain_backend"; result=$? ;;
+    *)
+      fm_afk_launch_log "no non-visible watcher-launch primitive for backend '$captain_backend' yet (supported: herdr, tmux)"
+      result=1
+      ;;
+  esac
+  return "$result"
+}
+
 fm_afk_launch_start_native() {
   local backup artifact had_afk=0 result=0
   mkdir -p "$FM_AFK_LAUNCH_STATE" || return 1
@@ -637,6 +669,7 @@ fm_afk_launch_main() {
   fm_afk_launch_lock_acquire || return 1
   case "${1:-start}" in
     start) fm_afk_launch_start ;;
+    start-watcher) fm_afk_launch_start_watcher ;;
     start-native) fm_afk_launch_start_native ;;
     stop) fm_afk_launch_stop ;;
     reconcile) fm_afk_launch_reconcile ;;

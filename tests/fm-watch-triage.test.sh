@@ -69,38 +69,28 @@ wait_live() {
 # machine a short fixed budget can reap a round before the cycle it asserts on
 # ever ran - and then every "no wake, no marker" assertion passes vacuously
 # while every "marker written" assertion fails spuriously.
-# Since the 2026-09-04 stale-beacon hardening the watcher beats at EVERY phase
-# boundary, so a single beacon advance proves it is moving, not that a poll has
-# elapsed, and it publishes no separate per-iteration marker. Two advances are
-# the strongest signal available today: an iteration ends by beating and then
-# blocking in event_wait_or_sleep, so a fixture whose iterations are sub-second
-# cannot produce two distinct beacon seconds inside one of them.
-# This is deliberately NOT the terminal wait's quiet stretch, which looks like
-# the obvious end-of-cycle signature but is not usable: the in-phase beat step is
-# a quarter of the liveness grace capped at 5s, so on a home with the default
-# 300s grace the gaps BETWEEN in-iteration beats are longer than FM_POLL and a
-# quiet window cannot be attributed to the terminal wait.
+# The check sweep already writes .last-check once whenever it is due. Force it
+# due twice and wait for both writes: the interval between them necessarily
+# contains the remainder of one poll and the beginning of the next, without
+# treating the per-phase liveness beacon as an iteration marker.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
-  local state=$1 pid=$2 limit=${3:-300} beat first now advances=0 i=0
-  beat="$state/.last-watcher-beat"
-  rm -f "$beat"
-  first=""
+  local state=$1 pid=$2 limit=${3:-300} marker first now i=0
+  marker="$state/.last-check"
+  rm -f "$marker"
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    first=$(file_mtime "$beat")
-    [ -n "$first" ] && break
+    [ -e "$marker" ] && break
     sleep 0.1
     i=$((i + 1))
   done
+  [ -e "$marker" ] || return 1
+  touch -t 200001010000 "$marker" || return 1
+  first=$(file_mtime "$marker")
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    now=$(file_mtime "$beat")
-    if [ -n "$now" ] && [ "$now" != "$first" ]; then
-      advances=$((advances + 1))
-      [ "$advances" -ge 2 ] && return 0
-      first=$now
-    fi
+    now=$(file_mtime "$marker")
+    [ -n "$now" ] && [ "$now" != "$first" ] && return 0
     sleep 0.1
     i=$((i + 1))
   done

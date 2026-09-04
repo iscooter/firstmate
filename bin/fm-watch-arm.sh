@@ -289,17 +289,36 @@ report_attached() {
 # path. Without --escalate the sequence is TERM plus one bounded wait, unchanged.
 # 0 = the recorded holder is gone, was never live, or its stale lock was cleared;
 # 1 = it survived the bound; 2 = its stale lock could not be cleared.
-stop_recorded_watcher() {  # [--escalate]
-  local escalate=0 lock_pid i
-  [ "${1:-}" != --escalate ] || escalate=1
+stop_recorded_watcher() {  # [--escalate] [expected-pid] [expected-identity]
+  local escalate=0 lock_pid lock_identity expected_pid expected_identity i
+  if [ "${1:-}" = --escalate ]; then
+    escalate=1
+    shift
+  fi
+  expected_pid=${1:-}
+  expected_identity=${2:-}
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
-  fm_pid_alive "$lock_pid" || return 0
+  lock_identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
+  if [ -n "$expected_pid" ] \
+    && { [ "$lock_pid" != "$expected_pid" ] || [ "$lock_identity" != "$expected_identity" ]; }; then
+    return 3
+  fi
+  if ! fm_pid_alive "$lock_pid"; then
+    [ -z "$expected_pid" ] || return 3
+    return 0
+  fi
   if ! fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$lock_pid" "$FM_HOME"; then
+    [ -z "$expected_pid" ] || return 3
     clear_stale_recorded_watcher_lock || return 2
     return 0
   fi
+  if [ -n "$expected_pid" ]; then
+    [ "$(fm_pid_identity "$expected_pid" 2>/dev/null || true)" = "$expected_identity" ] || return 3
+  fi
   [ "$escalate" -eq 0 ] || kill -CONT "$lock_pid" 2>/dev/null || true
-  kill -TERM "$lock_pid" 2>/dev/null || true
+  if ! kill -TERM "$lock_pid" 2>/dev/null; then
+    [ -z "$expected_pid" ] || return 3
+  fi
   i=0
   while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
     sleep 0.1
@@ -323,9 +342,14 @@ stop_recorded_watcher() {  # [--escalate]
 # a check: wake naming the reaped pid so the operator learns about the reclaim
 # through the ordinary wake path instead of a failure notice. Only a reap that
 # does not take is a failure.
-reclaim_wedged_holder() {  # <pid> <beacon-age>
-  local pid=$1 age=$2
-  if ! stop_recorded_watcher --escalate; then
+reclaim_wedged_holder() {  # <pid> <beacon-age> <identity>
+  local pid=$1 age=$2 identity=$3 stop_rc=0
+  stop_recorded_watcher --escalate "$pid" "$identity" || stop_rc=$?
+  if [ "$stop_rc" -eq 3 ]; then
+    echo "watcher: wedge holder changed before reclaim pid=$pid"
+    return 2
+  fi
+  if [ "$stop_rc" -ne 0 ]; then
     echo "watcher: FAILED - wedged holder pid=$pid (beacon ${age}s) did not stop" >&2
     return 1
   fi
@@ -350,7 +374,7 @@ reclaim_wedged_holder() {  # <pid> <beacon-age>
 #      failure
 #   1  a proven wedge could not be reclaimed
 settle_busy_holder() {
-  local deadline pid age
+  local deadline pid age identity reclaim_rc
   fm_watcher_busy_holder "$STATE" "$WATCH" "$GRACE" "$FM_HOME" || return 0
   deadline=$(( $(date +%s) + BUSY_HOLDER_WAIT + 1 ))
   while :; do
@@ -359,7 +383,10 @@ settle_busy_holder() {
     pid=$FM_WATCHER_BUSY_PID
     age=$FM_WATCHER_BUSY_BEACON_AGE
     if [ "$age" -ge "$WEDGE_BOUND" ]; then
-      reclaim_wedged_holder "$pid" "$age" || return 1
+      identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
+      reclaim_rc=0
+      reclaim_wedged_holder "$pid" "$age" "$identity" || reclaim_rc=$?
+      [ "$reclaim_rc" -ne 1 ] || return 1
       return 0
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then

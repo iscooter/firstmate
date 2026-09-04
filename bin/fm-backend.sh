@@ -48,6 +48,25 @@
 
 FM_BACKEND_SCRIPT=${BASH_SOURCE[0]:-$0}
 FM_BACKEND_LIB_DIR="$(cd "$(dirname "$FM_BACKEND_SCRIPT")" && pwd)"
+
+_fm_backend_require_timeout() {
+  command -v fm_run_timed >/dev/null 2>&1 && return 0
+  . "$FM_BACKEND_LIB_DIR/fm-timeout-lib.sh"
+}
+
+fm_backend_read_timeout() {
+  local preferred=${1:-30} grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}} maximum
+  case "$preferred" in ''|*[!0-9]*|0) preferred=30 ;; esac
+  case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
+  maximum=$((grace * 2 - 1))
+  [ "$preferred" -le "$maximum" ] || preferred=$maximum
+  printf '%s\n' "$preferred"
+}
+
+fm_backend_run_read_timed() {
+  _fm_backend_require_timeout
+  fm_run_timed "$(fm_backend_read_timeout)" "$@"
+}
 unset FM_BACKEND_SCRIPT
 FM_BACKEND_DEFAULT_ROOT="$(cd "$FM_BACKEND_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_DEFAULT_ROOT}}"

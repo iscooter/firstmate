@@ -156,33 +156,12 @@ fm_guard_clear_stale_banner() {
 # working turn, which is a property of the model rather than a local preference.
 AUTOARM_LEDGER_GRACE=7200
 
-# Restore the Stop-owned owner path so the next turn end arms, and say so only
-# when that cannot be done.
-#
-# WHY THIS REPAIRS RATHER THAN LAUNCHES. For a Claude primary the owner path IS
-# the Stop hook, and it is already proven, home-scoped, and single-flighted by
-# the auto-arm generation claim and the failure-episode markers this function
-# works on. Reusing it beats giving a synchronous guard a watcher lifecycle of
-# its own, because every way to hold one is worse: a foreground arm blocks the
-# guarded command for a whole watcher cycle; bounding that arm with fm_run_timed
-# kills the process GROUP and takes the newly started watcher with it, then
-# reports the re-arm as failed; and a detached start is the unverified
-# fire-and-forget bin/fm-watch-arm.sh's header bans, because a reaped child
-# leaves NO watcher behind a false "already running". A terminal-owning launcher
-# would additionally need its own record, reconcile and single flight - this
-# guard runs on nearly every guarded command, so without them a home whose Stop
-# hook is genuinely dead would create one terminal per command.
-# So the repair targets exactly what BLOCKS the next Stop-owned arm:
-#   - a generation claim whose owner is gone, which every later firing defers to;
-#   - a spent failure episode whose alarm marker suppresses the next continuation.
-# Both are bounded, home-scoped writes. The once-per-episode failure NOTICE is
-# deliberately left alone: retiring it without a verified watcher would swallow
-# the one notice the operator still needs.
-#
-# Prints the reason on failure; silent and 0 when the mechanism is unobstructed.
+# Claim one auto-arm generation, launch its arm in the backend-owned non-visible
+# terminal lifecycle, and bound only the wait for the watcher's first beat.
+# Prints the reason on failure; silent and 0 once a watcher is verified.
 fm_guard_autoarm_self_heal() {
+  local claim_rc gen launcher launch_out wait_secs attempts=0
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
-    # A live, healthy claim IS the mechanism working; nothing to repair.
     return 0
   fi
   if fm_lock_role "$OWNER_LOCK" >/dev/null 2>&1; then
@@ -191,21 +170,42 @@ fm_guard_autoarm_self_heal() {
       return 1
     }
   fi
-  # A spent failure episode suppresses the next Stop-owned continuation, so it
-  # has to go for the next Stop firing to arm at all. The once-per-episode notice
-  # has already been delivered by the time this marker is spent, so clearing it
-  # reopens the next genuine episode rather than swallowing one.
-  if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
-    rm -f "$FAILURE_ALARM" 2>/dev/null || true
-    if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
-      printf 'a spent supervision failure episode could not be cleared'
-      return 1
-    fi
+  fm_autoarm_claim_next "$STATE" "$GRACE"
+  claim_rc=$?
+  [ "$claim_rc" -ne 2 ] || return 0
+  if [ "$claim_rc" -ne 0 ]; then
+    printf 'a supervision generation could not be claimed'
+    return 1
   fi
-  # The failure NOTICE is retired only alongside a verified watcher, so it is
-  # left in place here: clearing it without proof would swallow the once-per-
-  # episode notice the operator still needs.
-  return 0
+  gen=$FM_AUTOARM_MY_GEN
+  launcher=${FM_GUARD_REARM_LAUNCHER:-$SCRIPT_DIR/fm-afk-launch.sh}
+  launch_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$launcher" start-watcher 2>&1)
+  if [ "$?" -ne 0 ]; then
+    fm_autoarm_write_owned "$STATE" "$gen" failed >/dev/null 2>&1 || true
+    launch_out=$(printf '%s\n' "$launch_out" | tail -n 1)
+    printf '%s' "${launch_out:-the tracked watcher owner could not launch}"
+    return 1
+  fi
+  wait_secs=$(fm_watcher_phase_timeout 10 "$GRACE")
+  while [ "$attempts" -lt $((wait_secs * 10)) ]; do
+    if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+      fm_autoarm_write_owned "$STATE" "$gen" healthy >/dev/null 2>&1 || true
+      if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
+        rm -f "$FAILURE_ALARM" 2>/dev/null || true
+        if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
+          printf 'a spent supervision failure episode could not be cleared'
+          return 1
+        fi
+      fi
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  fm_autoarm_write_owned "$STATE" "$gen" failed >/dev/null 2>&1 || true
+  printf 'the tracked watcher owner produced no first beat'
+  return 1
 }
 
 # Worktree-tangle alarm, checked FIRST and independent of in-flight tasks: the

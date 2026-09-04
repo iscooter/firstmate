@@ -1203,6 +1203,15 @@ test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
   fm_pending_reply_set "$hot/$settled" phase resolved || fail "legacy fixture should settle"
   [ -f "$hot/$settled" ] || fail "legacy fixture should start hot"
 
+  (
+    fm_pending_reply_close_escalation() {
+      fail "proven-settled migration entered the escalation lock path"
+    }
+    fm_pending_reply_tick "$state"
+  ) || fail "tick failed"
+  [ ! -e "$hot/$settled" ] || fail "the legacy settled record was left in the hot set"
+  [ -f "$archive/$settled" ] || fail "the legacy settled record was not archived"
+
   # A resolved record whose escalation is still open is NOT settled, so the tick
   # must converge its close instead of archiving it away unclosed.
   open_escalation=$(fm_pending_reply_create "$home" "$state" hibit "legacy open escalation")
@@ -1212,11 +1221,7 @@ test_legacy_settled_records_are_migrated_out_of_the_hot_set() {
     || fail "fixture should record an escalation"
   _fm_pending_reply_settled "$hot/$open_escalation" \
     && fail "a resolved record with an open escalation must not read as settled"
-
-  fm_pending_reply_tick "$state" || fail "tick failed"
-
-  [ ! -e "$hot/$settled" ] || fail "the legacy settled record was left in the hot set"
-  [ -f "$archive/$settled" ] || fail "the legacy settled record was not archived"
+  fm_pending_reply_tick "$state" || fail "open escalation retry failed"
   [ -n "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$open_escalation")" escalation_closed_epoch)" ] \
     || fail "the tick did not converge the open escalation's close"
   pass "legacy settled records are migrated out of the hot set while an open escalation converges first"

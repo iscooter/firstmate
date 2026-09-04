@@ -132,6 +132,33 @@ record_pi_extension_session() {
   return 0
 }
 
+install_rearm_stub() {
+  local dir=$1 pid=$2 home stub
+  home=$(case_home "$dir")
+  stub="$dir/rearm-launcher"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = start-watcher ] || exit 2
+identity=$(FM_STATE_OVERRIDE="$FM_HOME/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$FM_TEST_REARM_ROOT/bin/fm-wake-lib.sh" "$FM_TEST_REARM_PID") || exit 1
+mkdir -p "$FM_HOME/state/.watch.lock"
+printf '%s\n' "$FM_TEST_REARM_PID" > "$FM_HOME/state/.watch.lock/pid"
+printf '%s\n' "$FM_HOME" > "$FM_HOME/state/.watch.lock/fm-home"
+printf '%s\n' "$FM_TEST_REARM_ROOT/bin/fm-watch.sh" > "$FM_HOME/state/.watch.lock/watcher-path"
+printf '%s\n' "$identity" > "$FM_HOME/state/.watch.lock/pid-identity"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf 'launched\n' >> "$FM_HOME/state/.test-rearm-launches"
+SH
+  chmod +x "$stub"
+  export FM_GUARD_REARM_LAUNCHER="$stub"
+  export FM_TEST_REARM_PID="$pid"
+  export FM_TEST_REARM_ROOT="$ROOT"
+}
+
+clear_rearm_stub() {
+  unset FM_GUARD_REARM_LAUNCHER FM_TEST_REARM_PID FM_TEST_REARM_ROOT
+}
+
 count_text() {
   local haystack=$1 needle=$2
   awk -v needle="$needle" 'index($0, needle) { c++ } END { print c + 0 }' <<EOF
@@ -393,29 +420,36 @@ test_autoarm_stale_beacon_prints_no_passive_banner() {
 # arming. The guard repairs what it can reach and stays SILENT when the repair
 # takes, so a long working turn can never produce a false alarm.
 test_autoarm_stale_ledger_self_heals_silently() {
-  local dir home out
+  local dir home out holder
   dir=$(make_guard_case autoarm-self-heal)
   home=$(case_home "$dir")
-  # A spent failure episode is exactly what suppresses the next Stop-owned
-  # continuation, and it is the state this guard can clear on its own.
+  sleep 60 &
+  holder=$!
+  install_rearm_stub "$dir" "$holder"
   : > "$home/state/.claude-autoarm-failure-notified"
   : > "$home/state/.claude-autoarm-failure-alarmed"
   out=$(run_guard_case_autoarm "$dir")
+  clear_rearm_stub
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
   [ -z "$out" ] || fail "a successful self-heal was not silent: $out"
+  [ -s "$home/state/.test-rearm-launches" ] \
+    || fail "the stale-ledger guard did not launch a tracked watcher owner"
   [ ! -e "$home/state/.claude-autoarm-failure-alarmed" ] \
     || fail "the self-heal left the attended-alarm marker in place"
-  # The once-per-episode notice is NOT cleared here: retiring it without a
-  # verified watcher would swallow the one notice the operator still needs.
   [ -e "$home/state/.claude-autoarm-failure-notified" ] \
-    || fail "the self-heal retired the failure notice without proof of a watcher"
-  pass "fm-guard: a stale auto-arm ledger is self-healed silently while work is in flight"
+    || fail "the self-heal retired the failure notice"
+  pass "fm-guard: a watcher-less stale ledger silently launches and verifies supervision"
 }
 
 # Only a self-heal that cannot take is surfaced, once per episode.
 test_autoarm_self_heal_failure_surfaces_once() {
-  local dir home out1 out2 marker
+  local dir home out1 out2 marker holder
   dir=$(make_guard_case autoarm-self-heal-failure)
   home=$(case_home "$dir")
+  sleep 60 &
+  holder=$!
+  install_rearm_stub "$dir" "$holder"
   # The attended-alarm marker is the obstruction the self-heal must clear BEFORE
   # it can arm, because it suppresses the next Stop-owned continuation. Make it a
   # path the guard cannot remove - a non-empty directory - so the repair provably
@@ -424,6 +458,9 @@ test_autoarm_self_heal_failure_surfaces_once() {
   mkdir -p "$marker/unremovable"
   out1=$(run_guard_case_autoarm "$dir")
   out2=$(run_guard_case_autoarm "$dir")
+  clear_rearm_stub
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
   assert_contains "$out1" "supervision could not re-arm" \
     "a failed self-heal did not surface"
   [ "$(count_text "$out1" "supervision could not re-arm")" -eq 1 ] \
