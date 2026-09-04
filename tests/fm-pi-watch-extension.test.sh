@@ -951,9 +951,11 @@ const bus = {
     for (const handler of handlers.get(channel) ?? []) handler(data);
   },
 };
+let releaseBranch;
+const branchSettlement = new Promise((resolve) => { releaseBranch = resolve; });
 bus.on("fm-branch-supervision:dispatch", (offer) => {
   offers.push({ message: offer.message, eligible: offer.eligible, projects: [...offer.projects] });
-  if (offer.eligible) offer.accept();
+  if (offer.eligible) offer.accept(branchSettlement);
 });
 const pi = {
   on() {},
@@ -974,13 +976,16 @@ writeFileSync(
 );
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
-await tool.execute("tool-call-mixed-signal", {}, undefined, undefined, {});
+const execution = tool.execute("tool-call-mixed-signal", {}, undefined, undefined, {});
 for (let i = 0; i < 250 && offers.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-for (let i = 0; i < 250 && !prompt; i += 1) {
+for (let i = 0; i < 25 && !prompt; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
+const decisionWokeBeforeBranchSettled = Boolean(prompt);
+releaseBranch();
+await execution;
 if (offers.length !== 1 || offers[0].eligible !== true) {
   throw new Error(`a needs-decision row vetoed its coalesced routine signal: ${JSON.stringify(offers)}`);
 }
@@ -989,6 +994,9 @@ if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
 }
 if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
   throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompt}`);
+}
+if (!decisionWokeBeforeBranchSettled) {
+  throw new Error("the needs-decision wake waited for the routine branch turn to settle");
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);

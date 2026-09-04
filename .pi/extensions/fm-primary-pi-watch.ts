@@ -652,11 +652,19 @@ export default function (pi: ExtensionAPI) {
     if (!repairFailed) {
       const branchDelivery = offerWakeToBranch(message);
       if (branchDelivery) {
+        if (branchDelivery.wakeMainAfterward) {
+          // The branch owns only the routine rows in this mixed signal. Queue
+          // the decision wake on main now; waiting for the branch model turn
+          // would delay both the captain's decision and every later watcher
+          // delivery. If branch handling fails, wake main once more after its
+          // row grant is released so the routine rows cannot be stranded.
+          void branchDelivery.settlement.catch(() => {
+            void sendWake(owner, message).catch(() => {});
+          });
+          return await sendWake(owner, message, pending);
+        }
         try {
           await branchDelivery.settlement;
-          if (branchDelivery.wakeMainAfterward) {
-            return await sendWake(owner, message, pending);
-          }
           return true;
         } catch {}
       }
