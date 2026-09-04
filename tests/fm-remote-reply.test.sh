@@ -237,7 +237,7 @@ pass "the remote status and decision model mirrors and the cursor advances"
 OPEN=$(status_open_decisions "$PARENT/state/ios.status")
 printf '%s' "$OPEN" | grep -q '^rough-cut-version	needs-decision	' \
   || fail "the remote mate's new decision did not surface as open to the parent: $OPEN"
-[ "$(fm_pending_reply_get "$PARENT/state/pending-replies/$PENDING_CORR" phase)" = resolved ] \
+[ "$(fm_pending_reply_get "$(fm_pending_reply_path "$PARENT/state" "$PENDING_CORR")" phase)" = resolved ] \
   || fail "the correlated answer in the same delta did not settle its pending-reply record"
 pass "a remote mate's new decision folds open exactly as a local mate's does"
 
@@ -392,7 +392,7 @@ printf 'done [corr=%s]: notarization confirmed\n' "$ESCALATED_CORR" \
   >> "$REMOTE/state/parent-replies.status"
 remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null 2>&1 \
   || fail "the correlated reply was not captured"
-[ "$(fm_pending_reply_get "$PARENT/state/pending-replies/$ESCALATED_CORR" phase)" = resolved ] \
+[ "$(fm_pending_reply_get "$(fm_pending_reply_path "$PARENT/state" "$ESCALATED_CORR")" phase)" = resolved ] \
   || fail "the correlated reply left its escalated request unresolved"
 fm_pending_reply_tick "$PARENT/state" || fail "supervision tick failed"
 assert_not_contains "$(status_open_decisions "$PARENT/state/ios.status")" \

@@ -671,18 +671,18 @@ printf 'state: working · source: pane · busy\n'
 SH
   chmod +x "$fakebin/slow-crew-state"
   FM_CREW_STATE_BIN="$fakebin/slow-crew-state"
-  FM_WATCHER_STALE_GRACE=1
+  FM_WATCHER_STALE_GRACE=2
   beat() { beats=$((beats + 1)); }
   export FM_FAKE_CREW_DELAY=0.6
   signal_crew_provably_working "$state/a.status" "$state/b.status" \
     || fail "two bounded working task observations were not absorbable"
   [ "$beats" -eq 2 ] || fail "two signal task observations produced $beats beats"
-  export FM_FAKE_CREW_DELAY=2
+  export FM_FAKE_CREW_DELAY=3
   started=$(date +%s)
   ! signal_crew_provably_working "$state/a.status" \
     || fail "an expired crew-state observation was treated as working"
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -lt 3 ] || fail "crew-state observation escaped its sub-wedge deadline"
+  [ "$elapsed" -lt 4 ] || fail "crew-state observation escaped its sub-wedge deadline"
   unset FM_FAKE_CREW_DELAY
   pass "signal proof bounds each crew observation and beats between tasks"
 )

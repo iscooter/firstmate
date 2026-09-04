@@ -576,6 +576,10 @@ test_live_busy_holder_never_reports_a_broken_mechanism() {
   # 15s wait. Aged directly rather than slept, so the margin costs no wall clock.
   export FM_GUARD_GRACE=30
   age_path "$dir/state/.last-watcher-beat" 40 || fail "could not age the beacon"
+  # The holder must predate its stale beacon. A beacon older than the current
+  # lock claim is correctly treated as pre-holder evidence, not this holder's
+  # missed beat, so age the ownership record with the same fixture timeline.
+  age_path "$dir/state/.watch.lock/pid" 40 || fail "could not age the holder lock"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   unset FM_GUARD_GRACE
   kill "$pid" 2>/dev/null || true
@@ -606,6 +610,7 @@ test_retry_waits_for_the_holder_to_beat_again() {
   touch "$dir/state/.last-watcher-beat"
   export FM_GUARD_GRACE=30
   age_path "$dir/state/.last-watcher-beat" 40 || fail "could not age the beacon"
+  age_path "$dir/state/.watch.lock/pid" 40 || fail "could not age the holder lock"
   ( sleep 2; touch "$dir/state/.last-watcher-beat" ) &
   toucher=$!
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?

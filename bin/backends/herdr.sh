@@ -383,13 +383,6 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   HERDR_SESSION="$session" herdr "$@" --session "$session"
 }
 
-fm_backend_herdr_read_cli() {  # <session> <herdr-subcommand-and-args...>
-  local session=$1
-  shift
-  fm_backend_run_read_timed env HERDR_SESSION="$session" \
-    herdr "$@" --session "$session"
-}
-
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
 fm_backend_herdr_tool_check() {
   command -v herdr >/dev/null 2>&1 || { echo "error: backend=herdr selected but the 'herdr' CLI is not installed (https://herdr.dev) (dual-licensed AGPL-3.0-or-later/commercial)" >&2; return 1; }
@@ -1836,7 +1829,7 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace> [<launcher-
 # as dead|present|unknown from its JSON body, never from process exit status.
 fm_backend_herdr_pane_presence_state() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out code pid
-  out=$(fm_backend_herdr_read_cli "$session" pane get "$pane_id" 2>&1)
+  out=$(fm_backend_herdr_cli "$session" pane get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
     [ "$code" = "pane_not_found" ] && printf 'dead' || printf 'unknown'
@@ -1910,7 +1903,7 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     esac
     return 0
   fi
-  out=$(fm_backend_herdr_read_cli "$session" agent get "$pane_id" 2>&1)
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
@@ -2620,7 +2613,7 @@ fm_backend_herdr_capture() {  # <target> <lines>
   case "$lines" in ''|*[!0-9]*) lines=200 ;; esac
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
-  out=$(fm_backend_herdr_read_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" 2>/dev/null) || return 1
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -2630,7 +2623,7 @@ fm_backend_herdr_capture_ansi() {  # <target> <lines>
   case "$lines" in ''|*[!0-9]*) lines=200 ;; esac
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
-  out=$(fm_backend_herdr_read_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" --format ansi 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" --format ansi 2>/dev/null) || return 1
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -2648,7 +2641,7 @@ fm_backend_herdr_capture_ansi() {  # <target> <lines>
 
 fm_backend_herdr_agent_identity_raw() {  # <session> <pane> -> <agent>\t<status>
   local out
-  out=$(fm_backend_herdr_read_cli "$1" agent get "$2" 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$1" agent get "$2" 2>/dev/null) || return 1
   printf '%s' "$out" | jq -r '[.result.agent.agent // "", .result.agent.agent_status // ""] | @tsv' 2>/dev/null
 }
 
@@ -3012,7 +3005,7 @@ fm_backend_herdr_classify_submit_agent_status() {  # <raw-agent_status>
 # only add latency without adding safety.
 fm_backend_herdr_agent_status_raw() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out
-  out=$(fm_backend_herdr_read_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf ''; return 0; }
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf ''; return 0; }
   printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null
 }
 

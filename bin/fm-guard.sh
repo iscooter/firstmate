@@ -281,7 +281,7 @@ fi
 # bordered banner FIRST so it reads as an alarm, not a buried stderr line. Later
 # calls in the same episode get a one-line reminder only.
 supervision_model=$(fm_supervision_model)
-if [ "$watcher_healthy" = false ] && [ "$supervision_model" = autoarm ]; then
+if [ "$watcher_healthy" = false ] && [ "$supervision_model" = autoarm ] && [ "$READ_ONLY" -ne 1 ]; then
   # No passive banner for this model: see fm_guard_autoarm_self_heal above.
   # A ledger that is still advancing means the Stop-owned mechanism is arming at
   # every turn end, so the aged beacon is the expected mid-turn state and this
@@ -291,7 +291,7 @@ if [ "$watcher_healthy" = false ] && [ "$supervision_model" = autoarm ]; then
   # in_flight, not the broader supervision need: a process-event source or an
   # X-mode relay poll with no task in flight must not let a stale ledger mutate
   # auto-arm state or surface a failure outside the authorized gate.
-  if [ "$READ_ONLY" -ne 1 ] && [ "$in_flight" -gt 0 ] \
+  if [ "$in_flight" -gt 0 ] \
     && [ "$(fm_path_age "$STATE/.claude-autoarm-epoch")" -ge "$AUTOARM_LEDGER_GRACE" ]; then
     self_heal_rc=0
     self_heal_reason=$(fm_guard_autoarm_self_heal) || self_heal_rc=$?
