@@ -984,7 +984,7 @@ clear_pause_tracking() {  # <window-key>
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
 # endpoint liveness this function deliberately never reads.
-pause_state_class() {  # <window> <task>
+_pause_state_class() {  # <window> <task>
   local win=$1 task=$2 key last recheck_file class agent_alive kind
   key=$(window_key "$win")
   last=$(last_status_line "$STATE/$task.status")
@@ -1038,6 +1038,25 @@ pause_state_class() {  # <window> <task>
     *) rm -f "$recheck_file" ;;
   esac
   printf '%s' "$class"
+}
+
+pause_state_class() {  # <window> <task>
+  local previous=${FM_BACKEND_READ_DEADLINE_EPOCH-} deadline timeout result rc=0
+  case "$previous" in *[!0-9]*) previous= ;; esac
+  timeout=$(fm_backend_read_timeout)
+  deadline=$(( $(date +%s) + timeout ))
+  if [ -n "$previous" ] && [ "$previous" -lt "$deadline" ]; then
+    deadline=$previous
+  fi
+  FM_BACKEND_READ_DEADLINE_EPOCH=$deadline
+  result=$(_pause_state_class "$@") || rc=$?
+  if [ -n "$previous" ]; then
+    FM_BACKEND_READ_DEADLINE_EPOCH=$previous
+  else
+    unset FM_BACKEND_READ_DEADLINE_EPOCH
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$result"
 }
 
 # Surface a stale pane no classifier could resolve, so firstmate inspects it: it
@@ -1461,17 +1480,11 @@ if ! fm_lock_try_acquire "$WATCH_LOCK"; then
     # operator four recovery turns on 2026-09-04.
     # An unidentified squatter keeps the original loud refusal: nothing here can
     # vouch for it, so there is nothing to wait for.
-    if fm_watcher_lock_matches_pid "$STATE" "$WATCH_PATH" "$FM_LOCK_HELD_PID" "$FM_HOME"; then
-      if [ -e "$BEAT" ]; then
-        beat_age=$(fm_path_age "$BEAT")
-        if [ "$beat_age" -ge "$WATCHER_STALE_GRACE" ]; then
-          echo "watcher: busy holder pid=$FM_LOCK_HELD_PID beacon=${beat_age}s (grace ${WATCHER_STALE_GRACE}s, wedge $(fm_watcher_wedge_bound "$WATCHER_STALE_GRACE")s)"
-          exit "$FM_WATCH_BUSY_HOLDER_EXIT"
-        fi
-      elif [ "$(fm_path_age "$WATCH_LOCK")" -ge "$WATCHER_STALE_GRACE" ]; then
-        echo "watcher: busy holder pid=$FM_LOCK_HELD_PID beacon=none (grace ${WATCHER_STALE_GRACE}s)"
-        exit "$FM_WATCH_BUSY_HOLDER_EXIT"
-      fi
+    if fm_watcher_busy_holder "$STATE" "$WATCH_PATH" "$WATCHER_STALE_GRACE" "$FM_HOME"; then
+      echo "watcher: busy holder pid=$FM_WATCHER_BUSY_PID beacon=${FM_WATCHER_BUSY_BEACON_AGE}s (grace ${WATCHER_STALE_GRACE}s, wedge $(fm_watcher_wedge_bound "$WATCHER_STALE_GRACE")s)"
+      exit "$FM_WATCH_BUSY_HOLDER_EXIT"
+    elif fm_watcher_lock_matches_pid "$STATE" "$WATCH_PATH" "$FM_LOCK_HELD_PID" "$FM_HOME"; then
+      :
     elif [ -e "$BEAT" ]; then
       beat_age=$(fm_path_age "$BEAT")
       if [ "$beat_age" -ge "$WATCHER_STALE_GRACE" ]; then
@@ -1937,6 +1950,7 @@ EOF
     # Steering-inbox loss detection runs before the secondmate stale
     # exemption below, because a mate's steers land in an inbox too.
     [ -z "$task" ] || inbox_steer_check "$w" "$task"
+    beat
     key=$(window_key "$w")
     last=$(last_status_line "$STATE/$task.status")
     if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
@@ -1971,6 +1985,7 @@ EOF
     # content cannot suppress stale detection. Read once per window per poll and
     # reused below so a busy verdict is consistent within one cycle.
     if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
+    beat
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"

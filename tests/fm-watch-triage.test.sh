@@ -661,6 +661,32 @@ test_signal_crew_provably_working_classifier() {
   pass "signal_crew_provably_working: benign only when every referenced crew is provably working"
 }
 
+test_signal_proof_tasks_are_bounded_and_beaten() (
+  local dir fakebin state started elapsed beats=0
+  dir=$(make_case signal-proof-deadline); fakebin="$dir/fakebin"; state="$dir/state"
+  cat > "$fakebin/slow-crew-state" <<'SH'
+#!/usr/bin/env bash
+sleep "${FM_FAKE_CREW_DELAY:-0}"
+printf 'state: working · source: pane · busy\n'
+SH
+  chmod +x "$fakebin/slow-crew-state"
+  FM_CREW_STATE_BIN="$fakebin/slow-crew-state"
+  FM_WATCHER_STALE_GRACE=1
+  beat() { beats=$((beats + 1)); }
+  export FM_FAKE_CREW_DELAY=0.6
+  signal_crew_provably_working "$state/a.status" "$state/b.status" \
+    || fail "two bounded working task observations were not absorbable"
+  [ "$beats" -eq 2 ] || fail "two signal task observations produced $beats beats"
+  export FM_FAKE_CREW_DELAY=2
+  started=$(date +%s)
+  ! signal_crew_provably_working "$state/a.status" \
+    || fail "an expired crew-state observation was treated as working"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 3 ] || fail "crew-state observation escaped its sub-wedge deadline"
+  unset FM_FAKE_CREW_DELAY
+  pass "signal proof bounds each crew observation and beats between tasks"
+)
+
 test_secondmate_status_signal_never_absorbed_classifier() {
   local dir fakebin state
   dir=$(make_case secondmate-signal-classify); fakebin="$dir/fakebin"; state="$dir/state"
@@ -4057,6 +4083,7 @@ test_empty_write_prune_widens_the_probe
 test_empty_write_prune_from_the_environment_widens_the_probe
 test_worktree_write_probe_is_wall_clock_bounded
 test_signal_crew_provably_working_classifier
+test_signal_proof_tasks_are_bounded_and_beaten
 test_secondmate_status_signal_never_absorbed_classifier
 test_provably_working_signal_absorbed
 test_turn_ended_provably_working_absorbed

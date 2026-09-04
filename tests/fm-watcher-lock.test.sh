@@ -131,7 +131,7 @@ test_live_stale_watch_lock_is_typed_not_failed() {
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
-  touch -t 200001010000 "$state/.last-watcher-beat"
+  touch -t 200001010000 "$state/.last-watcher-beat" "$state/.watch.lock/pid"
   status=0
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2> "$err" || status=$?
   [ "$status" -ne 0 ] || fail "watcher silently no-opped behind a live stale holder"
@@ -186,6 +186,13 @@ test_fresh_watcher_lock_ignores_the_previous_holders_beacon() {
   ' _ "$LIB" "$state" "$WATCH" "$dir")
   [ "$result" = starting ] \
     || { reap "$holder"; fail "fresh holder inherited the previous beacon age ($result)"; }
+  result=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_WATCHER_STALE_GRACE=1 "$WATCH" 2>&1) \
+    || { reap "$holder"; fail "fresh holder was rejected before its first beat: $result"; }
+  case "$result" in
+    *'busy holder'*) reap "$holder"; fail "old beacon produced a typed stale-holder refusal: $result" ;;
+    *'already running'*) ;;
+    *) reap "$holder"; fail "fresh holder did not produce the ordinary attach outcome: $result" ;;
+  esac
 
   touch -t 200001010000 "$state/.watch.lock/pid"
   result=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir" bash -c '
