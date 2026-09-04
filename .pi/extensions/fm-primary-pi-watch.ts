@@ -593,7 +593,7 @@ export default function (pi: ExtensionAPI) {
     return confirmHandlingDelivery(snapshot());
   }
 
-  function offerWakeToBranch(message: string): Promise<void> | null {
+  function offerWakeToBranch(message: string): { settlement: Promise<void>; wakeMainAfterward: boolean } | null {
     const heartbeat = /^heartbeat($|:)/.test(message);
     // A check-kind close (merge-confirmation polls, Relay mentions,
     // credential/auth failures, and every other legitimately main-only
@@ -620,13 +620,15 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean)
         .map((path) => path.split("/").pop() ?? path)
       : [];
-    const isNeedsDecisionTrigger =
-      signalKeys.length > 0 &&
-      signalKeys.every((key) => scope.needsDecisionKeys.includes(key));
-    const eligible = !isCheckTrigger && !isNeedsDecisionTrigger && scope.eligible;
+    const needsDecisionTriggerKeys = signalKeys.filter((key) => scope.needsDecisionKeys.includes(key));
+    const isNeedsDecisionOnlyTrigger =
+      signalKeys.length > 0 && needsDecisionTriggerKeys.length === signalKeys.length;
+    const eligible = !isCheckTrigger && !isNeedsDecisionOnlyTrigger && scope.eligible;
     const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);
-    return offer.accepted ? offer.settlement : null;
+    return offer.accepted
+      ? { settlement: offer.settlement, wakeMainAfterward: needsDecisionTriggerKeys.length > 0 }
+      : null;
   }
 
   async function deliverActionableWake(
@@ -651,7 +653,10 @@ export default function (pi: ExtensionAPI) {
       const branchDelivery = offerWakeToBranch(message);
       if (branchDelivery) {
         try {
-          await branchDelivery;
+          await branchDelivery.settlement;
+          if (branchDelivery.wakeMainAfterward) {
+            return await sendWake(owner, message, pending);
+          }
           return true;
         } catch {}
       }

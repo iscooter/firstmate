@@ -907,8 +907,9 @@ EOF
 
 # A watcher cycle can coalesce more than one changed status file. A
 # needs-decision file in that batch remains excluded from the branch's row
-# scope, but must not turn the routine file's accepted signal into a main wake.
-test_pi_mixed_signal_keeps_routine_rows_branch_eligible() {
+# scope while the routine file reaches the branch, then main is woken to drain
+# the decision row left behind.
+test_pi_mixed_signal_splits_branch_and_main_delivery() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-mixed-signal-root"
   home="$TMP_ROOT/pi-mixed-signal-home"
@@ -979,7 +980,7 @@ await tool.execute("tool-call-mixed-signal", {}, undefined, undefined, {});
 for (let i = 0; i < 250 && offers.length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-for (let i = 0; i < 25 && !prompt; i += 1) {
+for (let i = 0; i < 250 && !prompt; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 if (offers.length !== 1 || offers[0].eligible !== true) {
@@ -988,15 +989,17 @@ if (offers.length !== 1 || offers[0].eligible !== true) {
 if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
   throw new Error(`the routine signal lost its project scope: ${JSON.stringify(offers)}`);
 }
-if (prompt) throw new Error(`the accepted routine signal fell through to main: ${prompt}`);
+if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status task-b.status")) {
+  throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompt}`);
+}
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
   )
   status=$?
-  expect_code 0 "$status" "a mixed signal batch must keep its routine rows branch-eligible: $out"
+  expect_code 0 "$status" "a mixed signal batch must split routine and decision delivery: $out"
   [ -z "$out" ] || fail "Pi mixed-signal test printed output: $out"
-  pass "a needs-decision file does not veto routine branch delivery in the same signal batch"
+  pass "a mixed signal sends routine work to branch and decision work to main"
 }
 
 test_pi_heartbeat_restoration_failure_stays_on_main() {
@@ -3802,7 +3805,7 @@ test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
 test_pi_needs_decision_signal_stays_on_main
-test_pi_mixed_signal_keeps_routine_rows_branch_eligible
+test_pi_mixed_signal_splits_branch_and_main_delivery
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch
 test_pi_handling_delivery_failure_is_typed_once
