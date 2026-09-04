@@ -905,11 +905,10 @@ EOF
   pass "a needs-decision signal trigger reaches main, never the supervision branch, without vetoing an unrelated eligible row"
 }
 
-# A watcher cycle can coalesce more than one changed status file. A
-# needs-decision file in that batch remains excluded from the branch's row
-# scope while the routine file reaches the branch, then main is woken to drain
-# the decision row left behind.
-test_pi_mixed_signal_splits_branch_and_main_delivery() {
+# A routine row can remain unread when the same status file raises a decision.
+# The routine row still reaches the branch, then main is woken to drain the
+# decision row left behind.
+test_pi_same_key_mixed_signal_splits_branch_and_main_delivery() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-mixed-signal-root"
   home="$TMP_ROOT/pi-mixed-signal-home"
@@ -919,7 +918,6 @@ test_pi_mixed_signal_splits_branch_and_main_delivery() {
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   printf 'project=%s/projects/approved\nwindow=fm-a\n' "$home" > "$home/state/task-a.meta"
-  printf 'project=%s/projects/approved\nwindow=fm-b\n' "$home" > "$home/state/task-b.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
@@ -927,7 +925,7 @@ printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 count=$(grep -c '^arm=' "$FM_ARM_LOG")
 if [ "$count" -eq 1 ]; then
   printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
-  printf 'signal: task-a.status task-b.status\n'
+  printf 'signal: task-a.status\n'
   exit 0
 fi
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
@@ -971,8 +969,8 @@ const pi = {
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 writeFileSync(
   `${process.env.FM_HOME}/state/.wake-queue`,
-  "1\t1\tsignal\ttask-a.status\tneeds-decision: task-a.status task-b.status\n" +
-    "2\t2\tsignal\ttask-b.status\tsignal: task-a.status task-b.status\n",
+  "1\t1\tsignal\ttask-a.status\tsignal: task-a.status\n" +
+    "2\t2\tsignal\ttask-a.status\tneeds-decision: task-a.status\n",
 );
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
@@ -989,7 +987,7 @@ if (offers.length !== 1 || offers[0].eligible !== true) {
 if (!offers[0].projects.includes(`${process.env.FM_HOME}/projects/approved`)) {
   throw new Error(`the routine signal lost its project scope: ${JSON.stringify(offers)}`);
 }
-if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status task-b.status")) {
+if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
   throw new Error(`the needs-decision row left by branch delivery did not wake main: ${prompt}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
@@ -3805,7 +3803,7 @@ test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
 test_pi_needs_decision_signal_stays_on_main
-test_pi_mixed_signal_splits_branch_and_main_delivery
+test_pi_same_key_mixed_signal_splits_branch_and_main_delivery
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch
 test_pi_handling_delivery_failure_is_typed_once

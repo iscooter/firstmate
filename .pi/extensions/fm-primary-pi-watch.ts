@@ -621,8 +621,9 @@ export default function (pi: ExtensionAPI) {
         .map((path) => path.split("/").pop() ?? path)
       : [];
     const needsDecisionTriggerKeys = signalKeys.filter((key) => scope.needsDecisionKeys.includes(key));
+    const hasRoutineSignalTrigger = signalKeys.some((key) => scope.routineSignalKeys.includes(key));
     const isNeedsDecisionOnlyTrigger =
-      signalKeys.length > 0 && needsDecisionTriggerKeys.length === signalKeys.length;
+      needsDecisionTriggerKeys.length > 0 && !hasRoutineSignalTrigger;
     const eligible = !isCheckTrigger && !isNeedsDecisionOnlyTrigger && scope.eligible;
     const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);

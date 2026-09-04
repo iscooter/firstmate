@@ -63,6 +63,7 @@ export interface UnreadWakeScope {
    * check-kind trigger, without the wake message text itself ever changing.
    */
   needsDecisionKeys: string[];
+  routineSignalKeys: string[];
 }
 
 const EMPTY_SCOPE: UnreadWakeScope = {
@@ -73,6 +74,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  routineSignalKeys: [],
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
   status: "unsafe",
@@ -82,6 +84,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  routineSignalKeys: [],
 };
 
 // scopeForUnreadWake is the single owner of branch-eligibility classification
@@ -160,6 +163,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
   const eligibleSeqs: string[] = [];
   const eligibleTasks = new Set<string>();
   const needsDecisionKeys: string[] = [];
+  const routineSignalKeys: string[] = [];
   for (const line of rows) {
     const fields = line.split("\t");
     if (fields.length < 5 || !/^[0-9]+$/.test(fields[1])) return UNSAFE_SCOPE;
@@ -188,6 +192,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
         needsDecisionKeys.push(key);
         continue;
       }
+      routineSignalKeys.push(key);
       task = key.replace(/\.(?:status|turn-ended)$/, "");
       project = metadata.get(task) ?? "";
     } else if (kind === "stale") {
@@ -219,6 +224,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    routineSignalKeys,
   };
 }
 
