@@ -1692,8 +1692,8 @@ while :; do
   # whose owner is gone. It is a no-op with nothing registered.
   if [ -d "$STATE/procevent" ]; then
     # Bounded: reconcile restarts source runners, so an unbounded call here puts
-    # an unknown deadline between two beats. FM_PROCEVENT_RECONCILE_TIMEOUT
-    # tunes it; on the bound the next poll reconciles again.
+    # an unknown deadline between two beats. On the bound the next poll
+    # reconciles again.
     FM_HOME="$FM_HOME" fm_run_timed "$PROCEVENT_RECONCILE_TIMEOUT" \
       "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1 || true
   fi

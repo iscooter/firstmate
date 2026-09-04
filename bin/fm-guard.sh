@@ -46,7 +46,6 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 GRACE=${FM_GUARD_GRACE:-300}
 OWNER_LOCK="$STATE/.claude-autoarm.lock"
-FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
 FAILURE_ALARM="$STATE/.claude-autoarm-failure-alarmed"
 queue_pending=false
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
@@ -157,10 +156,6 @@ fm_guard_clear_stale_banner() {
 # working turn, which is a property of the model rather than a local preference.
 AUTOARM_LEDGER_GRACE=7200
 
-# How long the self-heal waits for its successor's FIRST BEAT before reporting
-# failure. This bounds only the WAIT - never the arm process itself.
-AUTOARM_REARM_CONFIRM=10
-
 # Re-arm supervision through the home-scoped owner path, then verify it.
 #
 # Two constraints shape this, and missing either one is what makes a self-heal
@@ -181,7 +176,6 @@ AUTOARM_REARM_CONFIRM=10
 #
 # Prints the reason on failure; silent and 0 once a watcher is verified.
 fm_guard_autoarm_self_heal() {
-  local deadline
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     # A live, healthy claim IS the mechanism working; nothing to repair.
     return 0
@@ -193,9 +187,9 @@ fm_guard_autoarm_self_heal() {
     }
   fi
   # A spent failure episode suppresses the next Stop-owned continuation, so it
-  # has to go for the arm below to stick. The once-per-episode notice has already
-  # been delivered by the time its marker is spent, so clearing it here reopens
-  # the next genuine episode rather than swallowing one.
+  # has to go for the next Stop firing to arm at all. The once-per-episode notice
+  # has already been delivered by the time this marker is spent, so clearing it
+  # reopens the next genuine episode rather than swallowing one.
   if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
     rm -f "$FAILURE_ALARM" 2>/dev/null || true
     if [ -e "$FAILURE_ALARM" ] || [ -L "$FAILURE_ALARM" ]; then
@@ -203,23 +197,10 @@ fm_guard_autoarm_self_heal() {
       return 1
     fi
   fi
-  if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
-    return 0
-  fi
-  nohup "$SCRIPT_DIR/fm-watch-arm.sh" >/dev/null 2>&1 </dev/null &
-  deadline=$(( $(date +%s) + AUTOARM_REARM_CONFIRM + 1 ))
-  while :; do
-    if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
-      # The successor beat: it owns the singleton from here, and the failure
-      # notice marker is retired only now, on proof rather than on hope.
-      rm -f "$FAILURE_NOTICE" 2>/dev/null || true
-      return 0
-    fi
-    [ "$(date +%s)" -lt "$deadline" ] || break
-    sleep 0.5
-  done
-  printf 'the re-armed watcher did not report in within %ss' "$AUTOARM_REARM_CONFIRM"
-  return 1
+  # The failure NOTICE is retired only alongside a verified watcher, so it is
+  # left in place here: clearing it without proof would swallow the once-per-
+  # episode notice the operator still needs.
+  return 0
 }
 
 # Worktree-tangle alarm, checked FIRST and independent of in-flight tasks: the

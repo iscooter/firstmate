@@ -160,19 +160,15 @@ FM_WATCH_BUSY_HOLDER_EXIT=3
 # Single owner, shared by the watcher's typed refusal, the arm's reclaim, and the
 # Stop auto-arm's wait-versus-report split, so all three agree on where slow ends
 # and wedged begins.
-# FM_WATCHER_WEDGE_GRACE may only LENGTHEN the proof: it is floored at twice the
-# grace, because reclaiming a live holder is a kill, and the approved evidence
-# for that kill is a beacon that has been silent for two whole grace windows.
-# A smaller override would let a reclaim fire the moment a beacon first goes
-# stale - exactly the false wedge this work exists to remove.
+# Fixed at twice the grace, with no override: reclaiming a live holder is a kill,
+# and the approved evidence for that kill is a beacon silent for two whole grace
+# windows. A configurable bound could only weaken that proof, and the bound is
+# derived from FM_GUARD_GRACE anyway, so a home that wants a different one moves
+# the grace.
 fm_watcher_wedge_bound() {  # [grace]
-  local grace=${1:-${FM_GUARD_GRACE:-300}} floor bound
+  local grace=${1:-${FM_GUARD_GRACE:-300}}
   case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
-  floor=$((grace * 2))
-  bound=${FM_WATCHER_WEDGE_GRACE:-$floor}
-  case "$bound" in ''|*[!0-9]*) bound=$floor ;; esac
-  [ "$bound" -ge "$floor" ] || bound=$floor
-  printf '%s\n' "$bound"
+  printf '%s\n' "$((grace * 2))"
 }
 
 # The one lock state that is neither healthy nor free: a LIVE, identity-matched

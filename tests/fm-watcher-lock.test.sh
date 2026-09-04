@@ -252,7 +252,7 @@ test_arm_reclaims_a_proven_wedge_and_publishes_the_reaped_pid() {
   # A second arm, with the wedge bound low enough that this holder is past it.
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    FM_GUARD_GRACE=2 FM_WATCHER_WEDGE_GRACE=3 FM_ARM_BUSY_HOLDER_WAIT=1 \
+    FM_GUARD_GRACE=2 \
     FM_ARM_CONFIRM_TIMEOUT=5 "$WATCH_ARM" > "$reclaimout" 2>&1 &
   reclaimpid=$!
   i=0

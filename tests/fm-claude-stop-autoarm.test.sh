@@ -65,6 +65,20 @@ make_crewmate_worktree_dir() {
   printf '%s\n' "$dir"
 }
 
+# Age a path to exactly <seconds> old. touch -t takes a local-time stamp rather
+# than an epoch on both platforms, so convert through BSD `date -r` or GNU
+# `date -d @`.
+age_path() {  # <path> <seconds>
+  local path=$1 secs=$2 stamp epoch
+  epoch=$(( $(date +%s) - secs ))
+  if stamp=$(date -r "$epoch" '+%Y%m%d%H%M.%S' 2>/dev/null); then
+    :
+  else
+    stamp=$(date -d "@$epoch" '+%Y%m%d%H%M.%S') || return 1
+  fi
+  touch -t "$stamp" "$path"
+}
+
 # Run the hook as a child of the fake harness holding the fixture home's
 # session lock. $1 = fixture dir. Any extra env assignments must be exported
 # before invocation. Captures stdout+stderr; exit code on stdout of the caller.
@@ -556,10 +570,14 @@ test_live_busy_holder_never_reports_a_broken_mechanism() {
   identity=$(watcher_identity "$dir" "$pid") || fail "could not identify the busy holder"
   record_watcher_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
-  export FM_GUARD_GRACE=1 FM_WATCHER_WEDGE_GRACE=3600
-  sleep 2   # beacon now past the grace, far inside the wedge bound
+  # The wedge bound is twice the grace and the hook waits half a grace, so the
+  # beacon must stay sub-wedge for the whole wait: 40s stale against a 30s grace
+  # is past the grace and still far inside the 60s wedge bound even after the
+  # 15s wait. Aged directly rather than slept, so the margin costs no wall clock.
+  export FM_GUARD_GRACE=30
+  age_path "$dir/state/.last-watcher-beat" 40 || fail "could not age the beacon"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  unset FM_GUARD_GRACE FM_WATCHER_WEDGE_GRACE
+  unset FM_GUARD_GRACE
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 0 "$status" "a live sub-wedge holder must close quietly, not alarm"
@@ -586,12 +604,12 @@ test_retry_waits_for_the_holder_to_beat_again() {
   identity=$(watcher_identity "$dir" "$pid") || fail "could not identify the busy holder"
   record_watcher_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
-  export FM_GUARD_GRACE=4 FM_WATCHER_WEDGE_GRACE=3600 FM_CLAUDE_AUTOARM_BUSY_WAIT=8
-  sleep 5   # beacon past the 4s grace when the hook starts
+  export FM_GUARD_GRACE=30
+  age_path "$dir/state/.last-watcher-beat" 40 || fail "could not age the beacon"
   ( sleep 2; touch "$dir/state/.last-watcher-beat" ) &
   toucher=$!
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  unset FM_GUARD_GRACE FM_WATCHER_WEDGE_GRACE FM_CLAUDE_AUTOARM_BUSY_WAIT
+  unset FM_GUARD_GRACE
   wait "$toucher" 2>/dev/null || true
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
