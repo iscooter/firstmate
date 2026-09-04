@@ -196,7 +196,7 @@ FM_WATCHER_BUSY_PID=
 FM_WATCHER_BUSY_BEACON_AGE=
 fm_watcher_busy_holder() {  # <state-dir> <watch-path> [grace] [home]
   local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME}
-  local beat pid age
+  local beat pid age beat_age lock_age
   FM_WATCHER_BUSY_PID=
   FM_WATCHER_BUSY_BEACON_AGE=
   case "$grace" in ''|*[!0-9]*) grace=300 ;; esac
@@ -204,14 +204,23 @@ fm_watcher_busy_holder() {  # <state-dir> <watch-path> [grace] [home]
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   # A holder that has taken the lock but not yet reached its first beat is
-  # STARTING, not stalling, so with no beacon at all the lock's own age is the
-  # honest measure of how long it has been silent. Treating a missing beacon as
-  # ancient would make every freshly claimed lock look wedged.
+  # STARTING, not stalling, so the lock's own age is the honest measure until
+  # this holder publishes a beacon. A missing beacon and one older than the
+  # current ownership claim are both pre-holder evidence.
   beat="$state/.last-watcher-beat"
+  lock_age=$(fm_path_age "$state/.watch.lock/pid")
   if [ -e "$beat" ]; then
-    age=$(fm_path_age "$beat")
+    beat_age=$(fm_path_age "$beat")
+    case "$beat_age:$lock_age" in
+      *[!0-9:]*|:*) return 1 ;;
+    esac
+    if [ "$beat_age" -gt "$lock_age" ]; then
+      age=$lock_age
+    else
+      age=$beat_age
+    fi
   else
-    age=$(fm_path_age "$state/.watch.lock")
+    age=$lock_age
   fi
   case "$age" in ''|*[!0-9]*) return 1 ;; esac
   [ "$age" -ge "$grace" ] || return 1

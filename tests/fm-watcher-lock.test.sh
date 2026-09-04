@@ -157,6 +157,48 @@ test_live_stale_watch_lock_is_typed_not_failed() {
   pass "an identity-matched live holder with an aged beacon is typed, while an unidentified squatter still refuses loudly"
 }
 
+# 2026-09-04 stale-beacon investigation: bin/fm-watch.sh:1562 left an old
+# beacon behind when a watcher cycle ended. A successor can own a fresh lock
+# before its first beat, and that previous beacon must not make the successor
+# look older than the twice-grace wedge bound.
+test_fresh_watcher_lock_ignores_the_previous_holders_beacon() {
+  local dir state holder identity result
+  dir=$(make_case fresh-lock-old-beacon)
+  state="$dir/state"
+  sleep 300 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$holder") \
+    || fail "could not identify fresh holder"
+  touch -t 200001010000 "$state/.last-watcher-beat"
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$holder" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+
+  result=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir" bash -c '
+    . "$1"
+    if fm_watcher_busy_holder "$2" "$3" 1 "$4"; then
+      printf "wedged:%s\n" "$FM_WATCHER_BUSY_BEACON_AGE"
+    else
+      printf "starting\n"
+    fi
+  ' _ "$LIB" "$state" "$WATCH" "$dir")
+  [ "$result" = starting ] \
+    || { reap "$holder"; fail "fresh holder inherited the previous beacon age ($result)"; }
+
+  touch -t 200001010000 "$state/.watch.lock/pid"
+  result=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir" bash -c '
+    . "$1"
+    fm_watcher_busy_holder "$2" "$3" 1 "$4" || exit 1
+    printf "%s\n" "$FM_WATCHER_BUSY_PID"
+  ' _ "$LIB" "$state" "$WATCH" "$dir") \
+    || { reap "$holder"; fail "aged holder was not recognized after startup grace"; }
+  reap "$holder"
+  [ "$result" = "$holder" ] || fail "busy-holder identity changed after startup"
+  pass "a fresh watcher lock does not inherit an older holder's beacon age"
+}
+
 # 2026-09-04 stale-beacon investigation, section 6 (the smallest counterfactual).
 # A HEALTHY watcher whose single poll iteration outlives FM_GUARD_GRACE used to
 # make the arm refuse behind it and print
@@ -247,7 +289,8 @@ test_arm_reclaims_a_proven_wedge_and_publishes_the_reaped_pid() {
     || { reap "$armpid"; fail "wedge fixture watcher did not start"; }
 
   kill -STOP "$watcher_pid" 2>/dev/null || { reap "$armpid"; fail "could not SIGSTOP the watcher"; }
-  touch -t 200001010000 "$state/.last-watcher-beat"
+  touch -t 200001010000 "$state/.watch.lock/pid"
+  touch -t 200001010001 "$state/.last-watcher-beat"
 
   # A second arm, with the wedge bound low enough that this holder is past it.
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
@@ -1285,6 +1328,7 @@ test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear
 test_live_stale_watch_lock_is_typed_not_failed
+test_fresh_watcher_lock_ignores_the_previous_holders_beacon
 test_arm_waits_for_a_working_watcher_whose_iteration_outlives_the_grace
 test_arm_reclaims_a_proven_wedge_and_publishes_the_reaped_pid
 test_guard_warnings
