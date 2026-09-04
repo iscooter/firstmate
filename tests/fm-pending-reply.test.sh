@@ -649,12 +649,40 @@ test_pending_reply_tick_beats_each_record_below_the_old_batch_size() {
   pass "pending-reply tick beats each record before a slow observation can accumulate"
 }
 
+# 2026-09-04 stale-beacon investigation: wedge reclaim trusts the watcher beacon
+# only because its singleton-lock owner is the sole writer. A backend observation
+# captured through command substitution previously ran its between-read beat in
+# that substitution's process instead of the watcher process.
+test_pending_reply_observation_beats_stay_in_tick_process() {
+  (
+    local home state corr beat_log owner_pid
+    home=$(setup_parent observation-beat-owner)
+    state="$home/state"
+    beat_log="$home/beats"
+    owner_pid=${BASHPID:-$$}
+    export FM_PENDING_REPLY_NOW=5575
+    corr=$(fm_pending_reply_create "$home" "$state" hibit "observe owner")
+    fm_pending_reply_mark_delivered "$state" "$corr" \
+      || fail "could not mark observation fixture delivered"
+    fm_write_secondmate_meta "$state/hibit.meta" "$home/sm" "sess:fm-hibit"
+    fm_backend_busy_state() { printf 'busy'; }
+    pending_reply_owner_beat() { printf '%s\n' "${BASHPID:-$$}" >> "$beat_log"; }
+    FM_PENDING_REPLY_TICK_BEAT=pending_reply_owner_beat fm_pending_reply_tick "$state" \
+      || fail "pending-reply observation tick failed"
+    [ -s "$beat_log" ] || fail "pending-reply observation produced no beats"
+    if grep -Fvx "$owner_pid" "$beat_log" >/dev/null; then
+      fail "pending-reply observation refreshed the beacon outside its tick process"
+    fi
+  ) || fail "pending-reply observation beat ownership regression failed"
+  pass "pending-reply observation beats remain in the watcher process"
+}
+
 # 2026-09-04 stale-beacon investigation: the external calls inside the
 # bin/fm-pending-reply-lib.sh:1287 tick and bin/fm-watch.sh poll phases must end
 # before the twice-grace wedge verdict can reclaim their still-working owner.
 test_external_phase_deadlines_precede_the_wedge_bound() {
   (
-    local home state pending_timeout wedge
+    local home state pending_timeout wedge backend_timeout classify_timeout started elapsed i rc
     home=$(setup_parent phase-deadline)
     state="$home/state"
     FM_HOME="$home"
@@ -670,6 +698,23 @@ test_external_phase_deadlines_precede_the_wedge_bound() {
       || fail "pending observation timeout $pending_timeout reached ${wedge}s wedge bound"
     [ "$PROCEVENT_RECONCILE_TIMEOUT" -lt "$wedge" ] \
       || fail "procevent timeout $PROCEVENT_RECONCILE_TIMEOUT reached ${wedge}s wedge bound"
+    backend_timeout=$(fm_backend_read_timeout)
+    classify_timeout=$(_fm_classify_observation_timeout)
+    [ "$backend_timeout" = "$pending_timeout" ] \
+      || fail "backend and pending observations derived different bounds"
+    [ "$classify_timeout" = "$pending_timeout" ] \
+      || fail "classifier and pending observations derived different bounds"
+    FM_WATCHER_STALE_GRACE=1
+    started=$(date +%s)
+    for ((i = 0; i < 2; i++)); do
+      rc=0
+      fm_run_timed "$(fm_backend_read_timeout)" bash -c \
+        'trap "" TERM; sleep 10' || rc=$?
+      [ "$rc" -eq 124 ] || fail "resistant observation returned $rc instead of timing out"
+    done
+    elapsed=$(( $(date +%s) - started ))
+    [ "$elapsed" -lt 4 ] \
+      || fail "timeout shutdown margin consumed the 2s watcher wedge bound"
   ) || fail "external phase deadline regression failed"
   pass "external phase deadlines remain inside the shared wedge bound"
 }
@@ -1720,6 +1765,7 @@ test_concurrent_escalation_yields_to_late_reply
 test_transport_success_is_not_reply_success
 test_undelivered_records_are_scan_immutable
 test_pending_reply_tick_beats_each_record_below_the_old_batch_size
+test_pending_reply_observation_beats_stay_in_tick_process
 test_external_phase_deadlines_precede_the_wedge_bound
 test_delivery_confirmation_fallback_reconciles
 test_delivery_confirmation_serializes_with_reconciliation

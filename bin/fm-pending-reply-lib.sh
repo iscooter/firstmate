@@ -843,8 +843,8 @@ fm_pending_reply_fallback_idle_eligible() {  # <record-path>
 # global OR of every vendor signature), so one harness's output cannot make
 # another read busy, and a weak rendered idle degrades to `fallback-idle`,
 # which the caller accepts as idle only after its grace window.
-fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] [harness]
-  local backend=$1 target=$2 expected_label=${3-} harness=${4-} native tail40 result capture_rc=0
+fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] [harness] [result-var]
+  local backend=$1 target=$2 expected_label=${3-} harness=${4-} output_var=${5-} native tail40 result capture_rc=0
   local previous=${FM_BACKEND_READ_DEADLINE_EPOCH-} deadline timeout
   timeout=$(fm_backend_read_timeout)
   deadline=$(( $(date +%s) + timeout ))
@@ -871,7 +871,11 @@ fm_pending_reply_backend_observation() {  # <backend> <target> [expected-label] 
   else
     unset FM_BACKEND_READ_DEADLINE_EPOCH
   fi
-  printf '%s' "$result"
+  if [ -n "$output_var" ]; then
+    printf -v "$output_var" '%s' "$result"
+  else
+    printf '%s' "$result"
+  fi
 }
 
 fm_pending_reply_busy_state_from_observation() {  # <record-path> <observation>
@@ -1683,7 +1687,7 @@ fm_pending_reply_tick() {  # <state-dir>
             case "$observation" in busy|idle|fallback-idle|unknown) ;; *) observation=unknown ;; esac
           else
             _fm_pending_reply_tick_beat
-            observation=$(fm_pending_reply_backend_observation "$backend" "$target" "$label" "$harness")
+            fm_pending_reply_backend_observation "$backend" "$target" "$label" "$harness" observation
             _fm_pending_reply_tick_beat
           fi
           observation_tasks+=("$task_id")

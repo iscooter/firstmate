@@ -55,12 +55,9 @@ _fm_backend_require_timeout() {
 }
 
 fm_backend_read_timeout() {
-  local preferred=${1:-30} grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}} maximum
-  case "$preferred" in ''|*[!0-9]*|0) preferred=30 ;; esac
-  case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
-  maximum=$((grace * 2 - 1))
-  [ "$preferred" -le "$maximum" ] || preferred=$maximum
-  printf '%s\n' "$preferred"
+  local preferred=${1:-30} grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
+  _fm_backend_require_timeout
+  fm_timeout_with_wedge_margin "$preferred" "$grace"
 }
 
 fm_backend_run_read_timed() {

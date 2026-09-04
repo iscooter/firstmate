@@ -1721,10 +1721,8 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 # run it only on no-verb signal and first-sighting stale paths, never every wake.
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 _fm_classify_observation_timeout() {
-  local grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}} timeout=30 maximum
-  case "$grace" in ''|*[!0-9]*|0) grace=300 ;; esac
-  maximum=$((grace * 2 - 1))
-  [ "$timeout" -le "$maximum" ] || timeout=$maximum
+  local grace=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}} timeout maximum
+  timeout=$(fm_timeout_with_wedge_margin 30 "$grace")
   case "${FM_BACKEND_READ_DEADLINE_EPOCH:-}" in
     ''|*[!0-9]*) ;;
     *)
