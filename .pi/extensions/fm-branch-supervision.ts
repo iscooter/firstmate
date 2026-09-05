@@ -1292,7 +1292,9 @@ ${context.command}
           String(acceptedGeneration),
         );
         if (recoveryProbe) finishProviderProbe(acceptedGeneration, acceptedSelectionRevision);
-        if (!reservationReleased) throw new Error("could not release the branch's queued wake-row reservation");
+        if (!reservationReleased && actingAsOwner(acceptedGeneration)) {
+          throw new Error("could not release the branch's queued wake-row reservation");
+        }
       });
     branchChain = delivery.catch(() => {});
     return { settlement: delivery, grantReady };
