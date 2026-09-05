@@ -809,25 +809,20 @@ CLASSES
   pass "every main-only check class still reaches main, never the supervision branch"
 }
 
-# A needs-decision status append surfaced through an actionable signal must
-# reach main directly, exactly like a check-kind trigger, never taking the
-# supervision-branch hop first
-# (docs/pi-supervision-branch.md "Autonomy"). Unlike a check row it shares the
-# ordinary "signal:" kind and wake-message shape, so the dispatcher tells it
-# apart by payload (fm-branch-dispatch.ts's needsDecisionKeys) instead of by
-# message prefix - this exercises that cross-reference end to end. An unrelated
-# eligible stale row sits in the same queue to prove it is only the
-# needs-decision TRIGGER itself that stays on main, not the whole scan.
-test_pi_needs_decision_signal_stays_on_main() {
+# A captain-held task's bounded stale reminder is a decision trigger and must
+# wake main directly. A co-present routine signal remains independently
+# branch-ownable but cannot take this stale close away from main.
+test_pi_captain_held_stale_stays_on_main() {
   local repo home plugin log stop out status
-  repo="$TMP_ROOT/pi-needs-decision-root"
-  home="$TMP_ROOT/pi-needs-decision-home"
-  log="$TMP_ROOT/pi-needs-decision.log"
-  stop="$TMP_ROOT/pi-needs-decision.stop"
+  repo="$TMP_ROOT/pi-captain-held-root"
+  home="$TMP_ROOT/pi-captain-held-home"
+  log="$TMP_ROOT/pi-captain-held.log"
+  stop="$TMP_ROOT/pi-captain-held.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config" "$home/projects/approved"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   printf 'project=%s/projects/approved\nwindow=fm-window\n' "$home" > "$home/state/task-a.meta"
+  printf 'captain-held [key=route]: awaiting the captain\n' > "$home/state/task-a.status"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
@@ -835,7 +830,7 @@ printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 count=$(grep -c '^arm=' "$FM_ARM_LOG")
 if [ "$count" -eq 1 ]; then
   printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
-  printf 'signal: task-a.status\n'
+  printf 'stale: fm-window (captain-held, awaiting the captain)\n'
   exit 0
 fi
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
@@ -877,32 +872,31 @@ const pi = {
   },
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
-// the task-a.status row (the needs-decision trigger) sits alongside an
-// unrelated eligible stale row for the same project.
 writeFileSync(
   `${process.env.FM_HOME}/state/.wake-queue`,
-  "1\t1\tstale\tfm-window\tstale: fm-window\n2\t2\tsignal\ttask-a.status\tneeds-decision: task-a.status\n",
+  "1\t1\tstale\tfm-window\tstale: fm-window (captain-held)\n" +
+    "1\t2\tsignal\ttask-a.status\tsignal: routine follow-up\n",
 );
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
-await tool.execute("tool-call-needs-decision", {}, undefined, undefined, {});
+await tool.execute("tool-call-captain-held", {}, undefined, undefined, {});
 for (let i = 0; i < 250 && !prompt; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 if (offers.length !== 1 || offers[0].eligible !== false) {
-  throw new Error(`a needs-decision trigger was offered to the branch: ${JSON.stringify(offers)}`);
+  throw new Error(`a captain-held stale trigger was offered to the branch: ${JSON.stringify(offers)}`);
 }
-if (!prompt.includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
-  throw new Error(`a needs-decision trigger did not reach main: ${prompt}`);
+if (!prompt.includes("FIRSTMATE WATCHER WAKE: stale: fm-window")) {
+  throw new Error(`a captain-held stale trigger did not reach main: ${prompt}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
   )
   status=$?
-  expect_code 0 "$status" "a needs-decision signal trigger must stay on main: $out"
-  [ -z "$out" ] || fail "Pi needs-decision test printed output: $out"
-  pass "a needs-decision signal trigger reaches main even with an unrelated eligible row"
+  expect_code 0 "$status" "a captain-held stale trigger must stay on main: $out"
+  [ -z "$out" ] || fail "Pi captain-held test printed output: $out"
+  pass "a captain-held stale trigger reaches main even with an unrelated eligible row"
 }
 
 # A routine row can remain unread when the same status file raises a decision.
@@ -3987,7 +3981,7 @@ test_pi_branch_offer_owns_actionable_wake
 test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
-test_pi_needs_decision_signal_stays_on_main
+test_pi_captain_held_stale_stays_on_main
 test_pi_same_key_mixed_signal_routes_whole_batch_to_main
 test_pi_distinct_files_mixed_batch_routes_whole_batch_to_main
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_needs_decision

@@ -3734,6 +3734,25 @@ if (needsDecisionOnly.eligible || needsDecisionOnly.eligibleSeqs.length !== 0 ||
   throw new Error(`a needs-decision-only queue must be ordinary main-only absence: ${JSON.stringify(needsDecisionOnly)}`);
 }
 
+// A captain-held task's bounded stale recheck is itself a decision wake. It is
+// excluded while an unrelated routine row remains independently branch-owned.
+writeFileSync(`${state}/task-a.status`, "captain-held [key=route]: awaiting the captain\n");
+writeFileSync(
+  `${state}/.wake-queue`,
+  [
+    "1\t1\tstale\tfm-window\tstale: fm-window (awaiting the captain)",
+    "1\t2\tsignal\ttask-a.status\tsignal: routine follow-up",
+  ].join("\n"),
+);
+const captainHeldMixed = scopeForUnreadWake(state, false);
+if (!captainHeldMixed.eligible || captainHeldMixed.eligibleSeqs.join(",") !== "2") {
+  throw new Error(`a captain-held stale row was offered to the branch: ${JSON.stringify(captainHeldMixed)}`);
+}
+if (captainHeldMixed.needsDecisionKeys.join(",") !== "fm-window") {
+  throw new Error(`the captain-held stale key was not marked main-owned: ${JSON.stringify(captainHeldMixed)}`);
+}
+writeFileSync(`${state}/task-a.status`, "working: routine work\n");
+
 writeFileSync(
   `${state}/.wake-queue`,
   [

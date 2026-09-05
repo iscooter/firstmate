@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 // Shared wake-dispatch handshake between the Pi watcher extension (the
 // dispatcher) and the supervision-branch extension (the handler), carried over
@@ -55,12 +55,11 @@ export interface UnreadWakeScope {
    */
   corrupted: boolean;
   /**
-   * The exact "key" field (status-file basename) of every signal row this scan
-   * excluded because its payload is "needs-decision:"-prefixed
-   * (bin/fm-watch.sh's signal_files_actionable). fm-primary-pi-watch.ts's
-   * offerWakeToBranch cross-references this against the current trigger's own
-   * file list so a needs-decision trigger is forced to main exactly like a
-   * check-kind trigger, without the wake message text itself ever changing.
+   * The exact "key" field of every decision-owned signal or stale row this
+   * scan excluded. Signal rows are marked by bin/fm-watch.sh; stale rows are
+   * decision-owned when their task's current declaration is captain-held.
+   * fm-primary-pi-watch.ts cross-references these keys against the current
+   * trigger so its entire coalesced batch is forced to main.
    */
   needsDecisionKeys: string[];
 }
@@ -97,13 +96,11 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // (fm-primary-pi-watch.ts forces every check-kind TRIGGER to main), so nothing
 // starves by being left behind.
 //
-// A signal-kind row whose payload is "needs-decision:"-prefixed - a task-local
-// needs-decision status append surfaced by bin/fm-watch.sh's
-// signal_files_actionable - gets the identical treatment: excluded from
-// eligibleSeqs, never a scan veto, and forced to main on its own triggering
-// close (fm-primary-pi-watch.ts's offerWakeToBranch). This classification is
-// intentionally limited to marked signal rows; stale and heartbeat rows keep
-// their existing eligibility rules.
+// A signal row whose payload is "needs-decision:"-prefixed, or a stale row
+// for a task whose current declaration is captain-held, gets the identical
+// treatment: excluded from eligibleSeqs, never a scan veto, and forced to main
+// on its own triggering close (fm-primary-pi-watch.ts's offerWakeToBranch).
+// Heartbeat handling remains independent.
 //
 // That applies to a heartbeat review too, and it is the whole point: a
 // heartbeat used to be deferred to main merely because some unrelated check
@@ -193,6 +190,21 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     } else if (kind === "stale") {
       task = taskByKey.get(key) ?? taskByKey.get(key.replace(/^fm-/, "")) ?? "";
       project = metadata.get(key) ?? metadata.get(key.replace(/^fm-/, "")) ?? "";
+      if (task) {
+        const statusPath = `${state}/${task}.status`;
+        if (existsSync(statusPath)) {
+          let statusLines: string[];
+          try {
+            statusLines = readFileSync(statusPath, "utf8").split(/\r?\n/).filter(Boolean);
+          } catch {
+            return UNSAFE_SCOPE;
+          }
+          if (/^captain-held(?:\s|\[|:)/.test(statusLines.at(-1) ?? "")) {
+            needsDecisionKeys.push(key);
+            continue;
+          }
+        }
+      }
     } else {
       // A kind fm_wake_append never emits: structural corruption, not an
       // ordinary main-only row.
