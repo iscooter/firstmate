@@ -54,6 +54,15 @@ export interface UnreadWakeScope {
    * either mode.
    */
   corrupted: boolean;
+  /**
+   * The exact "key" field (status-file basename) of every signal row this scan
+   * excluded because its payload is "needs-decision:"-prefixed
+   * (bin/fm-watch.sh's signal_files_actionable). fm-primary-pi-watch.ts's
+   * offerWakeToBranch cross-references this against the current trigger's own
+   * file list so a needs-decision trigger is forced to main exactly like a
+   * check-kind trigger, without the wake message text itself ever changing.
+   */
+  needsDecisionKeys: string[];
 }
 
 const EMPTY_SCOPE: UnreadWakeScope = {
@@ -63,6 +72,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleSeqs: [],
   eligibleTasks: [],
   corrupted: false,
+  needsDecisionKeys: [],
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
   status: "unsafe",
@@ -71,6 +81,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleSeqs: [],
   eligibleTasks: [],
   corrupted: true,
+  needsDecisionKeys: [],
 };
 
 // scopeForUnreadWake is the single owner of branch-eligibility classification
@@ -85,6 +96,14 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // main, which is woken for it on that check's own watcher cycle
 // (fm-primary-pi-watch.ts forces every check-kind TRIGGER to main), so nothing
 // starves by being left behind.
+//
+// A signal-kind row whose payload is "needs-decision:"-prefixed - a task-local
+// needs-decision status append surfaced by bin/fm-watch.sh's
+// signal_files_actionable - gets the identical treatment: excluded from
+// eligibleSeqs, never a scan veto, and forced to main on its own triggering
+// close (fm-primary-pi-watch.ts's offerWakeToBranch). This classification is
+// intentionally limited to marked signal rows; stale and heartbeat rows keep
+// their existing eligibility rules.
 //
 // That applies to a heartbeat review too, and it is the whole point: a
 // heartbeat used to be deferred to main merely because some unrelated check
@@ -140,6 +159,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
 
   const eligibleSeqs: string[] = [];
   const eligibleTasks = new Set<string>();
+  const needsDecisionKeys: string[] = [];
   for (const line of rows) {
     const fields = line.split("\t");
     if (fields.length < 5 || !/^[0-9]+$/.test(fields[1])) return UNSAFE_SCOPE;
@@ -159,6 +179,15 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     let project = "";
     let task = "";
     if (kind === "signal") {
+      const payload = fields[4] ?? "";
+      if (/^needs-decision:/.test(payload)) {
+        // Main-owned exactly like a check-kind row above: a needs-decision
+        // status append surfaced through the actionable signal path is
+        // excluded from what the branch may claim without vetoing the scan
+        // (docs/pi-supervision-branch.md "Autonomy").
+        needsDecisionKeys.push(key);
+        continue;
+      }
       task = key.replace(/\.(?:status|turn-ended)$/, "");
       project = metadata.get(task) ?? "";
     } else if (kind === "stale") {
@@ -189,6 +218,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     eligibleSeqs,
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
+    needsDecisionKeys,
   };
 }
 
