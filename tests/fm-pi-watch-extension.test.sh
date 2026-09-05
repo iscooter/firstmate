@@ -1040,6 +1040,121 @@ EOF
   pass "a mixed signal sends routine work to branch and decision work to main"
 }
 
+test_pi_replacement_persists_mixed_signal_main_only_fallback() {
+  local repo home plugin log out status
+  repo="$TMP_ROOT/pi-mixed-signal-replacement-root"
+  home="$TMP_ROOT/pi-mixed-signal-replacement-home"
+  log="$TMP_ROOT/pi-mixed-signal-replacement.log"
+  mkdir -p "$repo/bin" "$home/state" "$home/config" "$home/projects/approved"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  printf 'project=%s/projects/approved\nwindow=fm-a\n' "$home" > "$home/state/task-a.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+if [ "$count" -eq 1 ]; then
+  printf 'signal: task-a.status\n'
+  exit 0
+fi
+trap 'sleep 0.3; exit 0' TERM INT
+while :; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" \
+    node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+let tool = null;
+let rejectBranch;
+let releaseMain;
+let promptStarted = false;
+const branchSettlement = new Promise((_, reject) => { rejectBranch = reject; });
+const mainDelivery = new Promise((resolve) => { releaseMain = resolve; });
+const bus = {
+  on() { return () => {}; },
+  emit(channel, offer) {
+    if (channel === "fm-branch-supervision:dispatch" && offer.eligible) {
+      offer.accept(branchSettlement, Promise.resolve(true));
+    }
+  },
+};
+const pi = {
+  on(event, handler) { handlers.set(event, handler); },
+  events: bus,
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async () => {
+    promptStarted = true;
+    await mainDelivery;
+  },
+};
+const waitFor = async (predicate, label) => {
+  for (let i = 0; i < 500; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for ${label}`);
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+writeFileSync(
+  `${process.env.FM_HOME}/state/.wake-queue`,
+  "1\t1\tsignal\ttask-a.status\tsignal: task-a.status\n" +
+    "2\t2\tsignal\ttask-a.status\tneeds-decision: task-a.status\n",
+);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+const execution = tool.execute("mixed-replacement", {}, undefined, undefined, {});
+await waitFor(() => promptStarted, "mixed-signal main delivery");
+const shutdown = handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
+const handoffPath = `${process.env.FM_HOME}/state/extensions/pi-primary-watch/session-replacement-actionable.json`;
+await waitFor(() => existsSync(handoffPath), "initial replacement handoff");
+rejectBranch(new Error("synthetic branch failure during replacement"));
+releaseMain();
+await shutdown;
+await execution;
+const handoff = JSON.parse(readFileSync(handoffPath, "utf8"));
+if (handoff.pending?.length !== 1 || handoff.pending[0].mainOnly !== true) {
+  throw new Error(`replacement handoff lost mixed-signal main-only routing: ${JSON.stringify(handoff)}`);
+}
+const replacementHandlers = new Map();
+const replacementPrompts = [];
+let replacementOffers = 0;
+const replacementPi = {
+  on(event, handler) { replacementHandlers.set(event, handler); },
+  events: {
+    on() { return () => {}; },
+    emit(channel) {
+      if (channel === "fm-branch-supervision:dispatch") replacementOffers += 1;
+    },
+  },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage: async (message) => { replacementPrompts.push(message); },
+};
+const replacementMod = await import(`${pathToFileURL(process.env.PLUGIN).href}?replacement=mixed-main-only`);
+replacementMod.default(replacementPi);
+await replacementHandlers.get("session_start")?.({ type: "session_start", reason: "new" }, {});
+await waitFor(() => replacementPrompts.length > 0, "replacement main-only replay");
+if (replacementOffers !== 0 || !replacementPrompts[0].includes("FIRSTMATE WATCHER WAKE: signal: task-a.status")) {
+  throw new Error(`replacement re-offered the mixed decision to supervision: offers=${replacementOffers} prompts=${replacementPrompts.join(" | ")}`);
+}
+await replacementHandlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {});
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "replacement must persist mixed-signal main-only fallback routing: $out"
+  [ -z "$out" ] || fail "Pi mixed-signal replacement test printed output: $out"
+  pass "Pi replacement persists mixed-signal main-only fallback routing"
+}
+
 test_pi_heartbeat_restoration_failure_stays_on_main() {
   local repo home plugin log out status
   repo="$TMP_ROOT/pi-heartbeat-restoration-failure-root"
@@ -3844,6 +3959,7 @@ test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
 test_pi_needs_decision_signal_stays_on_main
 test_pi_same_key_mixed_signal_splits_branch_and_main_delivery
+test_pi_replacement_persists_mixed_signal_main_only_fallback
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch
 test_pi_handling_delivery_failure_is_typed_once

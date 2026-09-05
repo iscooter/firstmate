@@ -469,11 +469,11 @@ async function waitForGenerationChildClose(armChild: ChildProcess | null): Promi
 
 async function stopSessionGeneration(generation: SessionGeneration, replacement: boolean): Promise<void> {
   generation.replacement = replacement;
-  let persistedTokens = "";
+  let persistedPending = "";
   try {
     if (replacement && generation.pendingActionables.length > 0) {
       persistReplacementHandoff(generation.pendingActionables);
-      persistedTokens = generation.pendingActionables.map((pending) => pending.token).join("\n");
+      persistedPending = JSON.stringify(generation.pendingActionables);
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -489,8 +489,8 @@ async function stopSessionGeneration(generation: SessionGeneration, replacement:
     const child = stopGeneration(generation);
     await waitForGenerationChildClose(child);
   }
-  const currentTokens = generation.pendingActionables.map((pending) => pending.token).join("\n");
-  if (replacement && currentTokens && currentTokens !== persistedTokens) {
+  const currentPending = JSON.stringify(generation.pendingActionables);
+  if (replacement && generation.pendingActionables.length > 0 && currentPending !== persistedPending) {
     persistReplacementHandoff(generation.pendingActionables);
   }
 }
