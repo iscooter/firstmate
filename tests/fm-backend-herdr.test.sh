@@ -411,6 +411,307 @@ test_recovery_grade_read_widens_only_at_its_own_boundary() {
   pass "herdr recovery-grade read: a stopped server means missing there, and nowhere else"
 }
 
+# --- stale Pi registration (issue #4115) ------------------------------------
+#
+# The husk classifier treats any registered agent_status as live. Recovery
+# must not: an idle/done/blocked Pi whose pane holds only the worktree shell
+# chain is a stale hook, and a real idle Pi must never be released. These
+# cases drive the real recovery function with real descendant processes and a
+# canned Herdr registry, so they pin behavior rather than source text.
+# shellcheck disable=SC2016
+
+make_stale_pi_herdr() {  # <dir> -> fakebin
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb" "$dir/state"
+  : > "$dir/log"
+  printf '0\n' > "$dir/state/agent-gets"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+DIR=${FM_STALE_PI_DIR:?}
+{
+  printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
+  for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\n'
+} >> "$DIR/log"
+if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
+  printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true}}\n'
+  exit 0
+fi
+case "${1:-} ${2:-}" in
+  "pane get")
+    cat "$DIR/pane-get.json"
+    exit 0
+    ;;
+  "agent get")
+    n=$(( $(cat "$DIR/state/agent-gets" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$DIR/state/agent-gets"
+    if [ -f "$DIR/agent-reread.json" ] && [ "$n" -ge 3 ]; then
+      cat "$DIR/agent-reread.json"
+    else
+      cat "$DIR/agent.json"
+    fi
+    exit 0
+    ;;
+  "pane process-info")
+    if [ -f "$DIR/process-info.fail" ]; then
+      echo 'Error: process-info unavailable' >&2
+      exit 1
+    fi
+    cat "$DIR/process-info.json"
+    exit 0
+    ;;
+  "pane release-agent")
+    source_id= agent_label=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --source) source_id=${2:-}; shift 2 ;;
+        --agent) agent_label=${2:-}; shift 2 ;;
+        --seq) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    printf '%s\t%s\n' "$source_id" "$agent_label" >> "$DIR/state/releases"
+    if [ "$source_id" = herdr:pi ] && [ "$agent_label" = pi ]; then
+      printf '{"error":{"code":"agent_not_found","message":"agent target released"}}\n' > "$DIR/agent.json"
+      rm -f "$DIR/agent-reread.json"
+      exit 0
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+write_present_pane() {  # <dir> <pane>
+  printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "$2" > "$1/pane-get.json"
+}
+
+write_pi_agent() {  # <dir> <pane> <status> [revision] [seq]
+  printf '{"result":{"agent":{"agent":"pi","agent_status":"%s","pane_id":"%s","revision":%s,"state_change_seq":%s},"type":"agent_info"}}\n' \
+    "$3" "$2" "${4:-3}" "${5:-1}" > "$1/agent.json"
+}
+
+write_process_info() {  # <file> <pane> <shell_pid> <fg_pid> <fg_name>
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"%s","argv0":"%s","argv":["%s"]}]}}}\n' \
+    "$2" "$3" "$3" "$4" "$5" "$5" "$5" > "$1"
+}
+
+start_treehouse_bash_chain() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/bin"
+  ln -sf "$(command -v bash)" "$dir/bin/treehouse"
+  mkfifo "$dir/outer.fifo" "$dir/inner.fifo"
+  # shellcheck disable=SC2016
+  "$dir/bin/treehouse" --noprofile --norc -c '
+    printf "%s\n" "$$" > "$1/shell.pid"
+    bash --noprofile --norc -c "printf \"%s\\n\" \"\$\$\" > \"\$0/child.pid\"; exec 3<>\"\$0/inner.fifo\"; read -u 3" "$1" &
+    exec 3<>"$1/outer.fifo"
+    read -u 3
+  ' bash "$dir" &
+  printf '%s\n' "$!" > "$dir/outer.pid"
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    if [ -s "$dir/shell.pid" ] && [ -s "$dir/child.pid" ]; then
+      return 0
+    fi
+    sleep 0.02
+    i=$((i + 1))
+  done
+  return 1
+}
+
+start_bash_with_pi_child() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/pi" <<'SH'
+#!/usr/bin/env bash
+sleep 3600
+SH
+  chmod +x "$dir/bin/pi"
+  mkfifo "$dir/outer.fifo"
+  bash --noprofile --norc -c '
+    printf "%s\n" "$$" > "$1/shell.pid"
+    "$1/bin/pi" 3600 &
+    printf "%s\n" "$!" > "$1/pi.pid"
+    exec 3<>"$1/outer.fifo"
+    read -u 3
+  ' bash "$dir" &
+  printf '%s\n' "$!" > "$dir/outer.pid"
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    if [ -s "$dir/shell.pid" ] && [ -s "$dir/pi.pid" ]; then
+      kill -0 "$(cat "$dir/pi.pid")" 2>/dev/null && return 0
+    fi
+    sleep 0.02
+    i=$((i + 1))
+  done
+  return 1
+}
+
+stop_chain() {  # <dir>
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+  done < <(cat "$1/outer.pid" "$1/pi.pid" "$1/child.pid" "$1/shell.pid" 2>/dev/null)
+}
+
+run_stale_pi_state() {  # <dir> <body>
+  local dir=$1 body=$2 fb
+  fb=$(make_stale_pi_herdr "$dir")
+  # shellcheck disable=SC2016
+  FM_STALE_PI_DIR="$dir" PATH="$fb:$PATH" \
+    FM_BACKEND_HERDR_STALE_PI_PROOF_POLLS=1 \
+    FM_STALE_PI_LOCK="$dir/control.lock" \
+    FM_STALE_PI_BODY="$body" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      if [ "${FM_STALE_PI_NO_LOCK:-}" != 1 ]; then
+        mkdir -p "$FM_STALE_PI_LOCK"
+        printf "%s\n" "${BASHPID:-$$}" > "$FM_STALE_PI_LOCK/pid"
+        FM_BACKEND_HERDR_CONTROL_LOCK=$FM_STALE_PI_LOCK
+        FM_BACKEND_HERDR_RECONCILE_STALE_PI=1
+        export FM_BACKEND_HERDR_CONTROL_LOCK FM_BACKEND_HERDR_RECONCILE_STALE_PI
+      fi
+      eval "$FM_STALE_PI_BODY"
+    ' "$ROOT"
+}
+
+test_stale_idle_pi_over_treehouse_bash_reconciles_to_dead() {
+  local dir log out husk
+  dir="$TMP_ROOT/stale-pi-shell-chain"
+  mkdir -p "$dir"
+  log="$dir/log"
+  start_treehouse_bash_chain "$dir" \
+    || fail "could not start a treehouse->bash descendant chain"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle
+  write_process_info "$dir/process-info.json" w1:p2 "$(cat "$dir/shell.pid")" "$(cat "$dir/child.pid")" bash
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  stop_chain "$dir"
+  [ "$out" = dead ] || fail "a stale idle Pi over a treehouse->bash chain must reconcile to dead, got '$out'"
+  [ -f "$dir/state/releases" ] || fail "the stale chain must release the matching herdr:pi / pi authority"
+  [ "$(cat "$dir/state/releases")" = $'herdr:pi\tpi' ] \
+    || fail "release must name source=herdr:pi and agent=pi, got '$(cat "$dir/state/releases")'"
+  assert_contains "$(cat "$log")" $'\x1f''release-agent' "the stale chain never called pane release-agent"
+  husk=$(
+    # Husk classifier must still see live and refuse to close.
+    printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$dir/pane-get.json"
+    write_pi_agent "$dir" w1:p2 idle
+    run_stale_pi_state "$dir" 'fm_backend_herdr_pane_agent_state fmtest w1:p2; printf " "; fm_backend_herdr_tab_is_husk fmtest w1:p2 && printf husk || printf refused'
+  )
+  [ "$husk" = "live refused" ] \
+    || fail "the husk classifier must still refuse to close a registered idle Pi, got '$husk'"
+  pass "herdr recovery-grade read: stale idle Pi over a treehouse->bash chain reconciles to dead"
+}
+
+test_real_idle_pi_stays_alive_without_release() {
+  local dir out
+  dir="$TMP_ROOT/stale-pi-live"
+  mkdir -p "$dir"
+  start_bash_with_pi_child "$dir" \
+    || fail "could not start a real Pi-named descendant"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle
+  write_process_info "$dir/process-info.json" w1:p2 "$(cat "$dir/shell.pid")" "$(cat "$dir/pi.pid")" pi
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  stop_chain "$dir"
+  [ "$out" = alive ] || fail "a real idle Pi descendant must stay alive, got '$out'"
+  [ ! -f "$dir/state/releases" ] || fail "a real idle Pi must never be released"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''release-agent' "a real idle Pi called pane release-agent"
+  pass "herdr recovery-grade read: a real idle Pi stays alive and is not released"
+}
+
+test_stale_pi_process_info_failure_stays_unreadable() {
+  local dir out
+  dir="$TMP_ROOT/stale-pi-procfail"
+  mkdir -p "$dir"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle
+  : > "$dir/process-info.fail"
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  [ "$out" = unreadable ] || fail "a process-info failure must stay unreadable, got '$out'"
+  [ ! -f "$dir/state/releases" ] || fail "a process-info failure must never release"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''release-agent' "a process-info failure called pane release-agent"
+  pass "herdr recovery-grade read: process-info failure stays unreadable and does not release"
+}
+
+test_stale_pi_identity_change_refuses_release() {
+  local dir out
+  dir="$TMP_ROOT/stale-pi-identity"
+  mkdir -p "$dir"
+  start_treehouse_bash_chain "$dir" \
+    || fail "could not start a treehouse->bash descendant chain"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle 3 1
+  write_process_info "$dir/process-info.json" w1:p2 "$(cat "$dir/shell.pid")" "$(cat "$dir/child.pid")" bash
+  printf '{"result":{"agent":{"agent":"pi","agent_status":"idle","pane_id":"w1:p2","revision":4,"state_change_seq":2},"type":"agent_info"}}\n' \
+    > "$dir/agent-reread.json"
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  stop_chain "$dir"
+  [ "$out" = unreadable ] || fail "an identity change between proof and release must stay unreadable, got '$out'"
+  [ ! -f "$dir/state/releases" ] || fail "an identity change must never release"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''release-agent' "an identity change called pane release-agent"
+  pass "herdr recovery-grade read: identity change between proof and release refuses"
+}
+
+test_stale_pi_reconciliation_preserves_uncommitted_work() {
+  local dir out repo wt
+  dir="$TMP_ROOT/stale-pi-uncommitted"
+  mkdir -p "$dir"
+  repo="$dir/repo"
+  wt="$dir/wt"
+  fm_git_worktree "$repo" "$wt" stale-pi-branch
+  printf 'keep me\n' > "$wt/uncommitted.txt"
+  start_treehouse_bash_chain "$dir" \
+    || fail "could not start a treehouse->bash descendant chain"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle
+  write_process_info "$dir/process-info.json" w1:p2 "$(cat "$dir/shell.pid")" "$(cat "$dir/child.pid")" bash
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  stop_chain "$dir"
+  [ "$out" = dead ] || fail "reconciliation that precedes relaunch must report dead, got '$out'"
+  [ -f "$wt/uncommitted.txt" ] || fail "uncommitted work must survive the reconciliation that unblocks relaunch"
+  [ "$(cat "$wt/uncommitted.txt")" = "keep me" ] \
+    || fail "uncommitted work content must be unchanged by reconciliation"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''pane'$'\x1f''close' "reconciliation closed the pane that holds the work"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''tab'$'\x1f''close' "reconciliation closed the tab that holds the work"
+  pass "herdr recovery-grade read: uncommitted work survives the reconciliation that unblocks relaunch"
+}
+
+test_stale_pi_without_control_lock_does_not_release() {
+  local dir out
+  dir="$TMP_ROOT/stale-pi-nolock"
+  mkdir -p "$dir"
+  start_treehouse_bash_chain "$dir" \
+    || fail "could not start a treehouse->bash descendant chain"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 idle
+  write_process_info "$dir/process-info.json" w1:p2 "$(cat "$dir/shell.pid")" "$(cat "$dir/child.pid")" bash
+  out=$(FM_STALE_PI_NO_LOCK=1 run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  stop_chain "$dir"
+  [ "$out" = unreadable ] || fail "a proven-stale Pi without the control lock must stay unreadable, got '$out'"
+  [ ! -f "$dir/state/releases" ] || fail "a read without the control lock must never release"
+  pass "herdr recovery-grade read: without the control lock a stale Pi is unreadable and not released"
+}
+
+test_working_pi_is_not_a_stale_candidate() {
+  local dir out
+  dir="$TMP_ROOT/stale-pi-working"
+  mkdir -p "$dir"
+  write_present_pane "$dir" w1:p2
+  write_pi_agent "$dir" w1:p2 working
+  out=$(run_stale_pi_state "$dir" 'fm_backend_herdr_agent_state fmtest:w1:p2')
+  [ "$out" = alive ] || fail "a working Pi must stay alive without a stale-registration proof, got '$out'"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''process-info' "a working Pi consulted process-info"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''release-agent' "a working Pi called pane release-agent"
+  pass "herdr recovery-grade read: working Pi is never a stale-registration candidate"
+}
+
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one() {
   local dir out err
   dir="$TMP_ROOT/client-pair-bypass"; make_herdr_client_pair "$dir"
@@ -4726,6 +5027,13 @@ test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
+test_stale_idle_pi_over_treehouse_bash_reconciles_to_dead
+test_real_idle_pi_stays_alive_without_release
+test_stale_pi_process_info_failure_stays_unreadable
+test_stale_pi_identity_change_refuses_release
+test_stale_pi_reconciliation_preserves_uncommitted_work
+test_stale_pi_without_control_lock_does_not_release
+test_working_pi_is_not_a_stale_candidate
 test_cli_caches_the_selected_client_within_a_process
 test_cli_scopes_the_selected_client_to_its_session
 test_cli_unrelated_failure_never_triggers_reselection

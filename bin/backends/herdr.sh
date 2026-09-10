@@ -142,6 +142,17 @@ FM_BACKEND_HERDR_SECONDMATE_MARKER=".fm-secondmate-home"
 # No send, capture, Treehouse, or general task-ownership path reads it.
 FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX=".herdr-presentation"
 
+# Recovery-grade stale-Pi reconciliation (issue #4115) is owned by
+# fm_backend_herdr_recovery_live_state. Callers that hold the per-task
+# control lock (fm-control exit, fm-spawn --relaunch) export
+# FM_BACKEND_HERDR_CONTROL_LOCK to that lock directory and
+# FM_BACKEND_HERDR_RECONCILE_STALE_PI=1 so a proven worktree shell chain
+# may release only source=herdr:pi / agent=pi. Interrupt, husk detection,
+# and every other reader leave those unset, so a stale registration stays
+# unreadable rather than released. FM_BACKEND_HERDR_STALE_PI_PROOF_POLLS
+# bounds the process-tree settle (default 10). FM_HERDR_PS_BIN overrides
+# the process-list binary in tests.
+
 # The config item a home writes to opt out of, or explicitly in to, the
 # projection.
 FM_BACKEND_HERDR_PRESENTATION_CONFIG="herdr-presentation-spaces"
@@ -2070,6 +2081,295 @@ fm_backend_herdr_server_running_state() {  # <session>
   ' 2>/dev/null || printf 'unknown'
 }
 
+# fm_backend_herdr_process_basename: the executable basename of a comm, argv0,
+# or command string, with a leading login dash stripped.
+fm_backend_herdr_process_basename() {  # <raw>
+  local s=$1
+  s=$(printf '%s' "$s" | tr -d '\n')
+  s=${s#"${s%%[![:space:]]*}"}
+  s=${s%%[[:space:]]*}
+  s=${s#-}
+  s=${s##*/}
+  printf '%s' "$s"
+}
+
+fm_backend_herdr_process_is_pi() {  # <basename>
+  case "$1" in pi|Pi|pi-signed|pi-launcher) return 0 ;; esac
+  return 1
+}
+
+# A crew pane's preserved worktree chain is treehouse (the worktree holder)
+# plus a recognized interactive shell. Anything else is not this chain.
+fm_backend_herdr_process_is_shell_chain() {  # <basename>
+  case "$1" in sh|bash|zsh|dash|ksh|fish|treehouse) return 0 ;; esac
+  return 1
+}
+
+# True only when this process (or an ancestor) owns the control lock named by
+# FM_BACKEND_HERDR_CONTROL_LOCK. Release of a stale Pi registration is gated
+# on that hold so a replacement cannot race a live agent.
+fm_backend_herdr_control_lock_held() {
+  local lock=${FM_BACKEND_HERDR_CONTROL_LOCK:-} owner me hops=0 ppid
+  [ -n "$lock" ] || return 1
+  owner=$(cat "$lock/pid" 2>/dev/null) || return 1
+  case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+  me=${BASHPID:-$$}
+  while [ "$hops" -lt 32 ]; do
+    case "$me" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$me" = "$owner" ] && return 0
+    ppid=$(ps -o ppid= -p "$me" 2>/dev/null | tr -d '[:space:]')
+    case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$ppid" -gt 1 ] || return 1
+    me=$ppid
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+# One process-info + OS-descendant snapshot for a recovery-grade Pi liveness
+# proof. Prints pi-live, shell-chain, or unreadable. Descendant-aware on
+# purpose: a crew pane holds a treehouse get subshell, so the top-shell-only
+# idle-shell proof is not sufficient and is not used here.
+fm_backend_herdr_pane_pi_process_tree_sample() {  # <session> <pane-id>
+  local session=$1 pane=$2 info shell_pid fg_kind tree_kind name argv0 argv_first base
+  local ps_bin rows
+  info=$(fm_backend_herdr_cli "$session" pane process-info --pane "$pane" 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  printf '%s' "$info" | jq -e --arg pane "$pane" '
+    .result.type == "pane_process_info"
+    and .result.process_info.pane_id == $pane
+    and (.result.process_info.foreground_processes | type) == "array"
+  ' >/dev/null 2>&1 || {
+    printf 'unreadable'
+    return 0
+  }
+  shell_pid=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  fg_kind=empty
+  while IFS=$'\t' read -r name argv0 argv_first; do
+    [ -n "$name$argv0$argv_first" ] || continue
+    for raw in "$name" "$argv0" "$argv_first"; do
+      [ -n "$raw" ] || continue
+      base=$(fm_backend_herdr_process_basename "$raw")
+      [ -n "$base" ] || continue
+      if fm_backend_herdr_process_is_pi "$base"; then
+        printf 'pi-live'
+        return 0
+      fi
+      if fm_backend_herdr_process_is_shell_chain "$base"; then
+        [ "$fg_kind" = other ] || fg_kind=shell
+      else
+        fg_kind=other
+      fi
+    done
+  done < <(printf '%s' "$info" | jq -r '
+    .result.process_info.foreground_processes[]?
+    | [(.name // ""), (.argv0 // ""), ((.argv[0] // "") | tostring)] | @tsv
+  ' 2>/dev/null)
+  [ "$fg_kind" = shell ] || {
+    printf 'unreadable'
+    return 0
+  }
+
+  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  command -v "$ps_bin" >/dev/null 2>&1 || {
+    printf 'unreadable'
+    return 0
+  }
+  rows=$("$ps_bin" -axo pid=,ppid=,command= 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  tree_kind=$(printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
+    function base(cmd,    a, n, s) {
+      sub(/^[[:space:]]+/, "", cmd)
+      n = split(cmd, a, /[[:space:]]+/)
+      if (n < 1) return ""
+      s = a[1]
+      sub(/^-/, "", s)
+      sub(/.*\//, "", s)
+      return s
+    }
+    function is_pi(s) {
+      return s == "pi" || s == "Pi" || s == "pi-signed" || s == "pi-launcher"
+    }
+    function is_shell(s) {
+      return s == "sh" || s == "bash" || s == "zsh" || s == "dash" || s == "ksh" || s == "fish" || s == "treehouse"
+    }
+    {
+      pid = $1 + 0
+      ppid = $2 + 0
+      $1 = ""
+      $2 = ""
+      sub(/^ +/, "")
+      pids[pid] = 1
+      parent[pid] = ppid
+      cmd[pid] = $0
+    }
+    END {
+      if (!(shell in pids)) {
+        print "unreadable"
+        exit
+      }
+      nq = 1
+      q[1] = shell
+      seen[shell] = 1
+      for (i = 1; i <= nq; i++) {
+        cur = q[i]
+        b = base(cmd[cur])
+        if (is_pi(b)) {
+          print "pi-live"
+          exit
+        }
+        if (!is_shell(b)) {
+          print "unreadable"
+          exit
+        }
+        for (pid in parent) {
+          if (parent[pid] == cur && !seen[pid]) {
+            nq++
+            q[nq] = pid
+            seen[pid] = 1
+          }
+        }
+      }
+      print "shell-chain"
+    }
+  ') || {
+    printf 'unreadable'
+    return 0
+  }
+  case "$tree_kind" in
+    pi-live|shell-chain|unreadable) printf '%s' "$tree_kind" ;;
+    *) printf 'unreadable' ;;
+  esac
+}
+
+# Bounded settle wrapper around the instantaneous Pi process-tree sample.
+# An idle shell can host a short-lived prompt helper for a few samples; a
+# genuinely busy or ambiguous pane fails every sample and stays unreadable.
+fm_backend_herdr_pane_pi_process_tree_verdict() {  # <session> <pane-id>
+  local attempt=0 max_attempts=${FM_BACKEND_HERDR_STALE_PI_PROOF_POLLS:-10} verdict
+  while :; do
+    verdict=$(fm_backend_herdr_pane_pi_process_tree_sample "$1" "$2")
+    case "$verdict" in
+      pi-live|shell-chain)
+        printf '%s' "$verdict"
+        return 0
+        ;;
+    esac
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt "$max_attempts" ] || break
+    sleep 0.1
+  done
+  printf 'unreadable'
+}
+
+# Print pane_id, agent, status, revision, and state_change_seq from one
+# agent-get body, tab-separated. Missing optional fields stay empty.
+fm_backend_herdr_pi_agent_identity_line() {  # <agent-get-json>
+  printf '%s' "$1" | jq -r '
+    .result.agent as $a
+    | select(($a | type) == "object")
+    | [
+        ($a.pane_id // ""),
+        ($a.agent // ""),
+        ($a.agent_status // ""),
+        (if ($a.revision | type) == "number" then ($a.revision | floor | tostring) else "" end),
+        (if ($a.state_change_seq | type) == "number" then ($a.state_change_seq | floor | tostring) else "" end)
+      ] | @tsv
+  ' 2>/dev/null
+}
+
+# Recovery-grade handling of a husk-classifier `live` pane. A registered Pi
+# that is idle, done, or blocked is checked against the pane's descendant
+# process tree. A real Pi stays alive. A preserved worktree shell chain may
+# be released only under the control lock, and only for source=herdr:pi /
+# agent=pi, and only when agent get then reports agent_not_found. Any
+# ambiguity, identity change, active non-chain process, missing lock, or
+# failed release stays unreadable and never releases. Working Pi is never
+# a stale-registration candidate. fm_backend_herdr_pane_agent_state stays
+# strict: this widening does not license closing the pane.
+fm_backend_herdr_recovery_live_state() {  # <session> <pane-id>
+  local session=$1 pane=$2 out ident pane_id agent status revision seq
+  local ident2 pane_id2 agent2 status2 revision2 seq2 verdict
+  local -a release_args
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane" 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  ident=$(fm_backend_herdr_pi_agent_identity_line "$out") || ident=
+  IFS=$'\t' read -r pane_id agent status revision seq <<< "$ident"
+  if [ "$agent" != pi ] || [ "$pane_id" != "$pane" ]; then
+    printf 'alive'
+    return 0
+  fi
+  case "$status" in
+    idle|done|blocked) ;;
+    *)
+      printf 'alive'
+      return 0
+      ;;
+  esac
+  verdict=$(fm_backend_herdr_pane_pi_process_tree_verdict "$session" "$pane")
+  case "$verdict" in
+    pi-live)
+      printf 'alive'
+      return 0
+      ;;
+    shell-chain) ;;
+    *)
+      printf 'unreadable'
+      return 0
+      ;;
+  esac
+  if [ "${FM_BACKEND_HERDR_RECONCILE_STALE_PI:-}" != 1 ] \
+     || ! fm_backend_herdr_control_lock_held; then
+    printf 'unreadable'
+    return 0
+  fi
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane" 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  ident2=$(fm_backend_herdr_pi_agent_identity_line "$out") || ident2=
+  IFS=$'\t' read -r pane_id2 agent2 status2 revision2 seq2 <<< "$ident2"
+  if [ "$pane_id2" != "$pane_id" ] || [ "$agent2" != "$agent" ] \
+     || [ "$status2" != "$status" ] || [ "$revision2" != "$revision" ] \
+     || [ "$seq2" != "$seq" ]; then
+    printf 'unreadable'
+    return 0
+  fi
+  case "$status2" in
+    idle|done|blocked) ;;
+    *)
+      printf 'unreadable'
+      return 0
+      ;;
+  esac
+  release_args=(pane release-agent --source herdr:pi --agent pi)
+  case "$seq2" in
+    ''|*[!0-9]*) ;;
+    *) release_args+=(--seq "$seq2") ;;
+  esac
+  release_args+=("$pane")
+  if ! fm_backend_herdr_cli "$session" "${release_args[@]}" >/dev/null 2>&1; then
+    printf 'unreadable'
+    return 0
+  fi
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane" 2>&1)
+  if [ "$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)" != agent_not_found ]; then
+    printf 'unreadable'
+    return 0
+  fi
+  printf 'dead'
+}
+
 # fm_backend_herdr_agent_state: recovery-grade state for the same session-start
 # sweep as the tmux classifier. It reuses the husk classifier rather than
 # creating a second Herdr state machine: a structurally gone pane is `missing`,
@@ -2083,6 +2383,13 @@ fm_backend_herdr_server_running_state() {  # <session>
 # `unreadable` stranded tasks with no sanctioned recovery (issue #4091), so a
 # positively stopped server reads `missing` instead.
 #
+# A second recovery-only exception (issue #4115): a registered Pi that is
+# idle, done, or blocked is not taken as alive from the registry alone.
+# fm_backend_herdr_recovery_live_state owns the descendant-aware process proof
+# and the locked, identity-checked herdr:pi / pi release. The husk classifier
+# under this function still reports that pane `live`, so nothing that can
+# close a pane treats a stale registration as a husk.
+#
 # Only this recovery-grade read is widened. fm_backend_herdr_pane_agent_state
 # and the presence classifier under it stay strict, so husk detection, duplicate
 # prevention, rollback, and teardown - which can DESTROY things - keep refusing
@@ -2095,7 +2402,7 @@ fm_backend_herdr_agent_state() {  # <target>
   case "$(fm_backend_herdr_pane_agent_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" in
     dead) printf 'missing' ;;
     no-agent) printf 'dead' ;;
-    live) printf 'alive' ;;
+    live) fm_backend_herdr_recovery_live_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" ;;
     *)
       case "$(fm_backend_herdr_server_running_state "$FM_BACKEND_HERDR_SESSION")" in
         stopped) printf 'missing' ;;

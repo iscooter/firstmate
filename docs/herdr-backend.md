@@ -278,10 +278,17 @@ A restored same-labeled tab with a missing pane or no registered agent is a husk
 Create replaces only a confidently dead or no-agent husk, creates the replacement before closing the old tab, and refuses live or unknown states.
 This prevents closing the workspace's last tab before a replacement exists.
 
-The generic Herdr agent-liveness probe reuses the same pane classifier, then applies one recovery-only exception.
+The generic Herdr agent-liveness probe reuses the same pane classifier, then applies two recovery-only exceptions.
 A structurally gone pane or a pane read from a session positively reported as having no running server becomes `missing`, a restored agent-less shell becomes `dead`, a registered agent becomes `alive`, and every other unexpected read becomes `unreadable`.
 The stopped-server exception does not widen husk detection or any close authority; those paths still refuse an unreadable pane.
 Unlike tmux process-name inspection, native registration can classify Pi without guessing from a generic interpreter name.
+
+A registered Pi that is idle, done, or blocked is not treated as alive from the registry alone.
+The recovery-grade read also consults pane process-info and attributes processes to the pane's descendant tree, because a crew pane holds a `treehouse get` subshell and the top-shell-only idle-shell proof is not sufficient.
+A real Pi descendant stays `alive`.
+A pane that holds only the preserved worktree shell chain may be released, only under the control plane's per-task lock, and only for matching `source=herdr:pi` / `agent=pi` authority, and only after a follow-up `agent get` reports `agent_not_found`.
+Any ambiguity, identity change between the proof and the release, an active non-chain process, a process-info failure, or a failed release stays `unreadable` and does not release.
+Herdr should send `pane.release_agent` on Pi TUI shutdown so this reconciliation is not required; that handler is an upstream Herdr concern.
 
 The session-start sweep uses this probe.
 Mid-session secondmate agent-process liveness is not implemented because idle secondmates are deliberately exempt from stale-pane escalation and need a separate periodic identity signal.

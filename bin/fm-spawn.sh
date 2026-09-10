@@ -40,7 +40,10 @@
 #   ordinary relaunch. It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
-#   the new incarnation. The replacement still never starts outside the copy
+#   the new incarnation. On Herdr that dead-check may reconcile a stale
+#   idle/done/blocked Pi registration under this spawn's per-task lock, as
+#   owned by bin/backends/herdr.sh; there is no general force flag.
+#   The replacement still never starts outside the copy
 #   holding the work: a Herdr shell that has drifted out of the recorded
 #   worktree is told once to return, and only a shell that will not go refuses.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
@@ -1282,6 +1285,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
   }
+  if [ "$BACKEND" = herdr ]; then
+    FM_BACKEND_HERDR_CONTROL_LOCK=$SPAWN_CONTROL_LOCK
+    FM_BACKEND_HERDR_RECONCILE_STALE_PI=1
+    export FM_BACKEND_HERDR_CONTROL_LOCK FM_BACKEND_HERDR_RECONCILE_STALE_PI
+  fi
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
   [ "$RELAUNCH_STATE" = dead ] || {
     echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2

@@ -1072,6 +1072,36 @@ ok - real herdr: a drifted agent-free shell returns to its worktree and reuses t
 `tests/fm-control-relaunch.test.sh` drives a tmux stub and proves that tmux retains its prior refusal without sending `cd` or any other input to the pane.
 The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
 
+### Stale Pi registration
+
+Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) in an isolated `fm-lab-` session.
+
+A live Pi in a pane reports `agent=pi`, `agent_status=idle`, and process-info lists `pi` / `pi-launcher` (argv0 `pi` / `pi-signed`) as descendants of the pane shell.
+`fm_backend_herdr_pane_agent_state` classifies that registry row `live` without consulting processes, and `fm_backend_herdr_agent_state` previously mapped any such row to `alive`.
+A clean `/quit` on this Herdr version dropped the registration (`agent_not_found`) and left the pane shell; `herdr pane report-agent --source herdr:pi` is reserved and does not stick, while `herdr pane release-agent --source herdr:pi --agent pi` against a still-running Pi is a no-op.
+
+The recovery-grade read now proves descendant liveness before trusting an idle, done, or blocked Pi, and may release only that `herdr:pi` / `pi` authority under the control lock.
+Portable coverage is `tests/fm-backend-herdr.test.sh` (stale treehouse-to-bash chain, live Pi descendant, process-info failure, identity change, uncommitted work, missing lock, working Pi).
+The husk classifier is unchanged and still refuses to close a registered idle Pi.
+
+Refresh the portable half with:
+
+```sh
+bin/fm-test-run.sh tests/fm-backend-herdr.test.sh
+```
+
+```
+ok - herdr recovery-grade read: stale idle Pi over a treehouse->bash chain reconciles to dead
+ok - herdr recovery-grade read: a real idle Pi stays alive and is not released
+ok - herdr recovery-grade read: process-info failure stays unreadable and does not release
+ok - herdr recovery-grade read: identity change between proof and release refuses
+ok - herdr recovery-grade read: uncommitted work survives the reconciliation that unblocks relaunch
+ok - herdr recovery-grade read: without the control lock a stale Pi is unreadable and not released
+ok - herdr recovery-grade read: working Pi is never a stale-registration candidate
+```
+
+`tests/fm-control-herdr-smoke.test.sh` on the same date proved an uncommitted worktree file survived a real Herdr relaunch of an agent-free pane in an isolated lab session (Herdr 0.9.0).
+
 ### Away-mode transport
 
 The away daemon is no longer launched on Pi; the away posture there is the record `bin/fm-afk-contract.sh` owns.

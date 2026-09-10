@@ -84,6 +84,11 @@
 #     than reported as successful blind.
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
 #     classified state acts.
+#   - On Herdr, `exit` may reconcile a stale idle/done/blocked Pi registration
+#     under this plane's per-task lock (bin/backends/herdr.sh
+#     fm_backend_herdr_recovery_live_state). Interrupt never does: its
+#     postcondition requires the agent still alive. There is no general force
+#     flag. Ambiguity stays unreadable and does not release.
 #
 # Environment knobs (all bounded waits, seconds):
 #   FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
@@ -449,6 +454,11 @@ retire_busy_incarnation() {
 do_exit() {
   local state cmd verdict cancel interrupt_result=not-needed
   require_state_verified_backend exit
+  if [ "$BACKEND" = herdr ]; then
+    FM_BACKEND_HERDR_CONTROL_LOCK=$CONTROL_LOCK
+    FM_BACKEND_HERDR_RECONCILE_STALE_PI=1
+    export FM_BACKEND_HERDR_CONTROL_LOCK FM_BACKEND_HERDR_RECONCILE_STALE_PI
+  fi
   state=$(agent_state)
   case "$state" in
     dead)

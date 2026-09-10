@@ -101,6 +101,7 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
   Only a positively classified state acts.
 - `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free, so a replacement can never join a live agent.
   It also requires the shell to be in the recorded worktree: tmux refuses immediately when it is not, while Herdr sends one `cd` to the recorded path and refuses unless a subsequent path read confirms the move.
+  On Herdr, `exit` and that spawn dead-check reconcile a stale idle Pi registration only under this plane's per-task lock, as owned by [`docs/herdr-backend.md`](herdr-backend.md) "Restart and liveness behavior".
 
 ## Capability matrix
 
