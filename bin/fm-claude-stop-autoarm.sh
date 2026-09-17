@@ -127,6 +127,11 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # uncertainty rather than stale-owner evidence and remain inert.
 RECOVER_SESSION_LOCK=0
 if ! fm_session_lock_owned_by_self "$STATE"; then
+  # A live owner outside this session's ancestry is intentionally not
+  # recoverable here. The turn-end guard reports this same condition and lets
+  # the non-owner stop safely instead of asking it to repair an impossible
+  # ownership conflict.
+  fm_session_lock_foreign_owner_live "$STATE" && exit 0
   LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
   case "$LOCK_PID" in
     ''|*[!0-9]*) exit 0 ;;
