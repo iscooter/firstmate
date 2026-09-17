@@ -130,7 +130,9 @@ try:
     root, env = make("nonowner")
     owner = start(
         env,
-        '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh"; touch "$FM_HOME/state/owner-ready"; while :; do sleep 1; done',
+        'attempt=0; until "$FM_ROOT_OVERRIDE/bin/fm-lock.sh"; do '
+        'attempt=$((attempt + 1)); [ "$attempt" -lt 50 ] || exit 1; sleep 0.1; done; '
+        'touch "$FM_HOME/state/owner-ready"; while :; do sleep 1; done',
         "owner-idle.txt",
     )
     until(lambda: (root / "state/owner-ready").exists())
