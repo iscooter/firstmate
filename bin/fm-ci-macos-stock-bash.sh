@@ -27,8 +27,7 @@ esac
 /bin/bash --version | head -1
 command -v jq >/dev/null || die "jq is required"
 
-inventory_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-shell_inventory="${inventory_dir}/fm-shell-inventory"
+shell_inventory="$RUNNER_TEMP/fm-shell-inventory"
 bin/fm-lint.sh --list-files > "$shell_inventory"
 parse_fail=0
 while IFS= read -r f; do
