@@ -3,9 +3,10 @@
 #
 # Single owner of the macos-stock-bash CI job body. Asserts stock Bash 3.2.57,
 # parse-sweeps the lint file set with /bin/bash -n, installs this lane's pinned
-# tasks-axi, and runs the fleet-snapshot, Bearings, and public-followup bash-3.2
-# regressions. TAP cardinalities stay out of this script and out of
-# .github/workflows/ci.yml; a failing suite already exits non-zero on `not ok`.
+# tasks-axi, and runs the fleet-snapshot, Bearings, public-followup, and
+# watcher churn-deferral bash-3.2 regressions. TAP cardinalities stay out of
+# this script and out of .github/workflows/ci.yml; a failing suite already
+# exits non-zero on `not ok`.
 #
 # Usage:
 #   fm-ci-macos-stock-bash.sh
@@ -50,3 +51,8 @@ command -v tasks-axi >/dev/null || die "tasks-axi is required for the stock Bash
 # the empty-lock register regression under real /bin/bash 3.2.
 FM_TEST_ONLY=test_first_register_succeeds_with_empty_lock_list_under_bash32 \
   /bin/bash tests/fm-public-followup.test.sh
+# Same shape for the watcher's churn-deferral regression: an already-
+# marked churn window expands an empty array that only stock Bash
+# treats as an unbound variable under set -u.
+FM_TEST_ONLY=test_turn_ended_churn_existing_marker_absorbed \
+  /bin/bash tests/fm-watch-triage.test.sh
